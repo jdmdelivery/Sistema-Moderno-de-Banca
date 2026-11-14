@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sistema de Banca Moderna — Panel del Consorcio</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="login" class="login-overlay">
+  <div class="login-box">
+    <h1>🎰 Sistema de Banca Moderna</h1>
+    <p class="sub">Panel del Consorcio</p>
+    <label>Usuario<input id="login-usuario" autocomplete="username"></label>
+    <label>Clave<input id="login-clave" type="password" autocomplete="current-password"></label>
+    <button id="btn-login" class="btn primario">ENTRAR</button>
+    <p id="login-msg" class="msg"></p>
+  </div>
+</div>
+
+<header>
+  <div class="marca">🎰 <b>Sistema de Banca Moderna</b> <span class="sub">Panel del Consorcio</span></div>
+  <div class="sesion"><span id="yo-nombre"></span> <button id="btn-salir" class="btn chico">Salir</button></div>
+</header>
+
+<nav id="nav">
+  <button class="navbtn activo" data-sec="inicio">Inicio</button>
+  <button class="navbtn" data-sec="sucursales">Sucursales</button>
+  <button class="navbtn" data-sec="terminales">Terminales</button>
+  <button class="navbtn" data-sec="usuarios">Usuarios</button>
+  <button class="navbtn" data-sec="sorteos">Sorteos</button>
+  <button class="navbtn" data-sec="tabla">Tabla de Pagos</button>
+  <button class="navbtn" data-sec="limites">Límites</button>
+  <button class="navbtn" data-sec="resultados">Resultados</button>
+  <button class="navbtn" data-sec="tickets">Tickets</button>
+  <button class="navbtn" data-sec="caja">Caja y Cuadre</button>
+  <button class="navbtn" data-sec="reportes">Reportes</button>
+  <button class="navbtn" data-sec="auditoria">Auditoría</button>
+</nav>
+
+<main>
+<section id="sec-inicio" class="seccion activa">
+  <h2>Resumen de hoy</h2>
+  <div id="inicio-cards" class="cards"></div>
+  <p class="nota">Ventas, premios y comisión del día en curso, calculados por el servidor.</p>
+</section>
+
+<section id="sec-sucursales" class="seccion">
+  <h2>Sucursales (bancas)</h2>
+  <div id="suc-tabla"></div>
+  <h3>Crear / editar sucursal</h3>
+  <div class="form">
+    <input type="hidden" id="suc-id">
+    <label>Código<input id="suc-codigo" placeholder="1301"></label>
+    <label>Nombre<input id="suc-nombre" placeholder="BANCA CASTILLO"></label>
+    <label>Dirección<input id="suc-direccion"></label>
+    <label>Teléfono<input id="suc-telefono"></label>
+    <label>Comisión %<input id="suc-comision" type="number" step="0.01" value="10"></label>
+    <label class="check"><input id="suc-activa" type="checkbox" checked> Activa</label>
+    <button id="btn-suc-guardar" class="btn primario">GUARDAR</button>
+    <button id="btn-suc-limpiar" class="btn">Limpiar</button>
+    <p id="suc-msg" class="msg"></p>
+  </div>
+  <h3>Recargar saldo</h3>
+  <div class="form">
+    <label>Sucursal<select id="rec-sucursal"></select></label>
+    <label>Monto $<input id="rec-monto" type="number" step="0.01"></label>
+    <label>Referencia<input id="rec-referencia" placeholder="Efectivo / transferencia"></label>
+    <button id="btn-recargar" class="btn primario">RECARGAR SALDO</button>
+    <p id="rec-msg" class="msg"></p>
+  </div>
+  <h3>Movimientos de saldo</h3>
+  <div class="form">
+    <label>Sucursal<select id="mov-sucursal"></select></label>
+    <button id="btn-movimientos" class="btn">VER MOVIMIENTOS</button>
+  </div>
+  <div id="mov-tabla"></div>
+</section>
+
+<section id="sec-terminales" class="seccion">
+  <h2>Terminales SUNMI</h2>
+  <div id="ter-tabla"></div>
+  <h3>Crear / editar terminal</h3>
+  <div class="form">
+    <input type="hidden" id="ter-id">
+    <label>Sucursal<select id="ter-sucursal"></select></label>
+    <label>N.º terminal<input id="ter-numero" type="number" value="1"></label>
+    <label>Serial SUNMI (S/N)<input id="ter-serial" placeholder="Ej. 4DBDDAE5C8498"></label>
+    <label>Versión app<input id="ter-version" placeholder="1.0"></label>
+    <label class="check"><input id="ter-activa" type="checkbox" checked> Activa</label>
+    <button id="btn-ter-guardar" class="btn primario">GUARDAR</button>
+    <button id="btn-ter-limpiar" class="btn">Limpiar</button>
+    <p id="ter-msg" class="msg"></p>
+  </div>
+  <div id="ter-token" class="token-box" style="display:none"></div>
+  <p class="nota">El token de una terminal nueva o reactivada se muestra <b>una sola vez</b>: cópielo en la terminal. Revocar = la terminal deja de vender al instante.</p>
+</section>
+
+<section id="sec-usuarios" class="seccion">
+  <h2>Usuarios</h2>
+  <div id="usu-tabla"></div>
+  <h3>Crear / editar usuario</h3>
+  <div class="form">
+    <input type="hidden" id="usu-id">
+    <label>Nombre<input id="usu-nombre"></label>
+    <label>Usuario<input id="usu-usuario"></label>
+    <label>Rol<select id="usu-rol">
+      <option value="operador">Operador (terminal, con PIN)</option>
+      <option value="supervisor">Supervisor (panel)</option>
+      <option value="admin">Administrador (panel)</option>
+    </select></label>
+    <label>Sucursal<select id="usu-sucursal"></select></label>
+    <label>Clave del panel<input id="usu-clave" type="password" placeholder="(sin cambio si se deja vacío)"></label>
+    <label>PIN de terminal (4-6 dígitos)<input id="usu-pin" inputmode="numeric" placeholder="(sin cambio si se deja vacío)"></label>
+    <label class="check"><input id="usu-activo" type="checkbox" checked> Activo</label>
+    <button id="btn-usu-guardar" class="btn primario">GUARDAR</button>
+    <button id="btn-usu-limpiar" class="btn">Limpiar</button>
+    <p id="usu-msg" class="msg"></p>
+  </div>
+</section>
+
+<section id="sec-sorteos" class="seccion">
+  <h2>Sorteos (loterías)</h2>
+  <div id="sor-tabla"></div>
+  <h3>Crear / editar sorteo</h3>
+  <div class="form">
+    <input type="hidden" id="sor-id">
+    <label>Nombre<input id="sor-nombre" placeholder="La Primera 12"></label>
+    <label>Hora del sorteo<input id="sor-hora-sorteo" placeholder="11:55"></label>
+    <label>Hora de cierre<input id="sor-hora-cierre" placeholder="11:50"></label>
+    <label>Orden en la lista<input id="sor-orden" type="number" value="100"></label>
+    <label class="check"><input id="sor-activo" type="checkbox" checked> Activo</label>
+    <div class="dias">Días activos:
+      <label><input type="checkbox" name="sor-dia" value="1" checked> Lu</label>
+      <label><input type="checkbox" name="sor-dia" value="2" checked> Ma</label>
+      <label><input type="checkbox" name="sor-dia" value="3" checked> Mi</label>
+      <label><input type="checkbox" name="sor-dia" value="4" checked> Ju</label>
+      <label><input type="checkbox" name="sor-dia" value="5" checked> Vi</label>
+      <label><input type="checkbox" name="sor-dia" value="6" checked> Sá</label>
+      <label><input type="checkbox" name="sor-dia" value="7" checked> Do</label>
+    </div>
+    <button id="btn-sor-guardar" class="btn primario">GUARDAR</button>
+    <button id="btn-sor-limpiar" class="btn">Limpiar</button>
+    <p id="sor-msg" class="msg"></p>
+  </div>
+</section>
+
+<section id="sec-tabla" class="seccion">
+  <h2>Tabla de pagos (factores por cada $1 apostado)</h2>
+  <div id="tab-tabla"></div>
+  <h3>Fijar un factor nuevo</h3>
+  <div class="form">
+    <label>Tipo de jugada<select id="tab-tipo"></select></label>
+    <label>Posición / combinación<select id="tab-clave"></select></label>
+    <label>Factor (× por $1)<input id="tab-factor" type="number" step="0.01"></label>
+    <label>Vigente desde<input id="tab-desde" type="date"></label>
+    <button id="btn-tab-guardar" class="btn primario">GUARDAR FACTOR</button>
+    <p id="tab-msg" class="msg"></p>
+  </div>
+  <p class="nota">Cambiar un factor NO altera los tickets ya vendidos: cada ticket guarda la tabla vigente al momento de su venta.</p>
+</section>
+
+<section id="sec-limites" class="seccion">
+  <h2>Límites de venta por número</h2>
+  <div id="lim-tabla"></div>
+  <h3>Crear / actualizar límite</h3>
+  <div class="form">
+    <label>Sorteo<select id="lim-sorteo"></select></label>
+    <label>Tipo<select id="lim-tipo"></select></label>
+    <label>Número(s)<input id="lim-numeros" placeholder="26 o 26-58"></label>
+    <label>Monto máximo acumulado $<input id="lim-monto" type="number" step="0.01"></label>
+    <button id="btn-lim-guardar" class="btn primario">GUARDAR LÍMITE</button>
+    <p id="lim-msg" class="msg"></p>
+  </div>
+</section>
+
+<section id="sec-resultados" class="seccion">
+  <h2>Resultados y liquidación</h2>
+  <div class="form">
+    <label>Fecha<input id="res-fecha" type="date"></label>
+    <label>Sorteo<select id="res-sorteo"></select></label>
+    <button id="btn-res-buscar" class="btn">BUSCAR</button>
+    <button id="btn-res-importar" class="btn">IMPORTAR DESDE CONECTATE</button>
+    <p id="res-msg" class="msg"></p>
+  </div>
+  <div id="res-estado" class="estado-box">Seleccione fecha y sorteo y pulse BUSCAR.</div>
+  <h3>Digitar / corregir resultado (queda PROPUESTO)</h3>
+  <div class="form">
+    <label>1.º premio<input id="res-p1" maxlength="2" inputmode="numeric" placeholder="00"></label>
+    <label>2.º premio<input id="res-p2" maxlength="2" inputmode="numeric" placeholder="00"></label>
+    <label>3.º premio<input id="res-p3" maxlength="2" inputmode="numeric" placeholder="00"></label>
+    <button id="btn-res-guardar" class="btn primario">GUARDAR PROPUESTA</button>
+    <button id="btn-res-confirmar" class="btn peligro">CONFIRMAR Y LIQUIDAR</button>
+    <button id="btn-res-revertir" class="btn">REVERTIR LIQUIDACIÓN</button>
+  </div>
+  <p class="nota">Confirmar corre el motor de ganadores y marca los tickets. Revertir (solo admin) deshace la liquidación si ningún ticket afectado fue pagado todavía. La importación de Conectate deja los resultados PROPUESTOS: siempre los confirma una persona.</p>
+  <h3>Resultados del día</h3>
+  <div id="res-dia-tabla"></div>
+  <h3>Intentos de importación</h3>
+  <div id="imp-tabla"></div>
+</section>
+
+<section id="sec-tickets" class="seccion">
+  <h2>Consultar / pagar / anular un ticket</h2>
+  <div class="form">
+    <label>ID del ticket<input id="tic-id" type="number"></label>
+    <label>Serial<input id="tic-serial" placeholder="Código del ticket impreso"></label>
+    <button id="btn-tic-consultar" class="btn primario">CONSULTAR</button>
+    <p id="tic-msg" class="msg"></p>
+  </div>
+  <div id="tic-resultado" class="estado-box">Sin consulta todavía.</div>
+  <div class="form">
+    <label>Sucursal que paga<select id="tic-sucursal"></select></label>
+    <button id="btn-tic-pagar" class="btn peligro">PAGAR TICKET</button>
+    <button id="btn-tic-anular" class="btn">ANULAR TICKET</button>
+  </div>
+  <p class="nota">Pagar es una operación única en todo el consorcio: si el ticket ya se pagó en otra sucursal, el servidor lo rechaza y dice dónde y cuándo se pagó.</p>
+</section>
+
+<section id="sec-caja" class="seccion">
+  <h2>Caja y cuadre</h2>
+  <div class="form">
+    <label>Sucursal<select id="caj-sucursal"></select></label>
+    <label>Terminal<select id="caj-terminal"></select></label>
+    <label>Monto $<input id="caj-monto" type="number" step="0.01"></label>
+    <label>Concepto<input id="caj-concepto" placeholder="Obligatorio para gastos"></label>
+    <button id="btn-caj-recibir" class="btn primario">RECIBIR EFECTIVO</button>
+    <button id="btn-caj-gasto" class="btn">REGISTRAR GASTO</button>
+    <p id="caj-msg" class="msg"></p>
+  </div>
+  <h3>Transacciones de caja</h3>
+  <div class="form">
+    <label>Fecha<input id="caj-fecha" type="date"></label>
+    <button id="btn-caj-listar" class="btn">VER TRANSACCIONES</button>
+  </div>
+  <div id="caj-tabla"></div>
+  <h3>Entregar cuadre</h3>
+  <div class="form">
+    <label>Fecha<input id="cua-fecha" type="date"></label>
+    <label>Efectivo contado $<input id="cua-contado" type="number" step="0.01" placeholder="(opcional)"></label>
+    <button id="btn-caj-cuadre" class="btn peligro">ENTREGAR CUADRE</button>
+  </div>
+  <div id="cua-resultado" class="estado-box">El cuadre usa la sucursal y terminal seleccionadas arriba.</div>
+  <h3>Cuadres entregados</h3>
+  <div id="cua-tabla"></div>
+</section>
+
+<section id="sec-reportes" class="seccion">
+  <h2>Resumen de ventas</h2>
+  <div class="form">
+    <label>Desde<input id="rep-desde" type="date"></label>
+    <label>Hasta<input id="rep-hasta" type="date"></label>
+    <label>Vista<select id="rep-vista">
+      <option value="final">Resumen Final</option>
+      <option value="por_loteria">Resumen Por Lotería</option>
+      <option value="premios">Premios (ganadores y pagados)</option>
+      <option value="ganadores">Ticket Ganadores (sin pagar)</option>
+      <option value="pagados">Ticket Pagados</option>
+      <option value="nulos">Ticket Nulos</option>
+    </select></label>
+    <label>Sucursal<select id="rep-sucursal"></select></label>
+    <button id="btn-rep-ver" class="btn primario">VISUALIZAR</button>
+    <p id="rep-msg" class="msg"></p>
+  </div>
+  <div id="rep-salida"></div>
+  <h2>Tickets pendientes de pago</h2>
+  <div class="form">
+    <label>Desde<input id="pen-desde" type="date"></label>
+    <label>Hasta<input id="pen-hasta" type="date"></label>
+    <label>Sucursal<select id="pen-sucursal"></select></label>
+    <button id="btn-pen-ver" class="btn primario">VISUALIZAR</button>
+    <button id="btn-pen-texto" class="btn">FORMATO IMPRESO</button>
+    <button id="btn-pen-imprimir" class="btn">IMPRIMIR</button>
+    <p id="pen-msg" class="msg"></p>
+  </div>
+  <div id="pen-salida"></div>
+  <pre id="pen-texto" class="texto-impreso" style="display:none"></pre>
+</section>
+
+<section id="sec-auditoria" class="seccion">
+  <h2>Auditoría</h2>
+  <div class="form">
+    <label>Entidad<input id="aud-entidad" placeholder="ticket, resultado, sucursal..."></label>
+    <label>Acción<input id="aud-accion" placeholder="venta, pago, anulacion..."></label>
+    <button id="btn-aud-ver" class="btn primario">VER AUDITORÍA</button>
+  </div>
+  <div id="aud-tabla"></div>
+</section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Bases de datos locales y datos de desarrollo
+*.db
+*.sqlite
+*.sqlite3
+
+# Secretos / entorno local
+.env
+.env.*
+
+# Sistema / editores
+.DS_Store
+.idea/
+.vscode/

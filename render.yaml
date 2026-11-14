@@ -1,0 +1,25 @@
+# Sistema de Banca Moderna — Blueprint de Render (servicios INDEPENDIENTES, no toca otras apps)
+# Uso: Render -> New -> Blueprint -> conectar el repo -> aplica este archivo.
+# La BD se siembra sola al primer arranque (consorcio, admin, 19 sorteos,
+# tipos QN/PL/SP y tabla de pagos inicial). Cambie la clave del admin
+# (admin/admin123) en Panel -> Usuarios tras el primer ingreso.
+databases:
+  - name: sistema-de-banca-moderna-db
+    plan: free
+    databaseName: banca_moderna
+    user: banca_moderna
+services:
+  - type: web
+    name: sistema-de-banca-moderna
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sistema-de-banca-moderna-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: "3.12.3"
