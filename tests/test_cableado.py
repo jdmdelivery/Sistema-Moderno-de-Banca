@@ -95,6 +95,24 @@ def test_onclick_del_html_tienen_funcion_en_js():
     assert not faltan, f"onclick sin función en app.js: {faltan}"
 
 
+def test_clase_seccion_visible_coincide_en_js_css_y_html():
+    """La clase que app.js alterna en las secciones debe ser la misma que
+    style.css usa para mostrarlas (display:block) y la que index.html trae
+    puesta en la sección inicial. (Fallo real 2026-11-14: el JS alternaba
+    «activo» y el CSS/HTML usaban «activa»: el menú marcaba el botón pero
+    ninguna sección cambiaba.)"""
+    CSS = (RAIZ / "apps" / "web" / "style.css").read_text(encoding="utf-8")
+    m = re.search(r'\$\$\("\.seccion"\)\.forEach\(\(s\) => s\.classList\.toggle\("(\w+)"', APP_JS)
+    assert m, "app.js no alterna ninguna clase en las secciones"
+    clase_js = m.group(1)
+    m_css = re.search(r"\.seccion\.(\w+)\s*\{\s*display:\s*block", CSS)
+    assert m_css, "style.css no tiene regla .seccion.<clase> con display:block"
+    assert m_css.group(1) == clase_js, (
+        f"La clase visible no coincide: app.js usa «{clase_js}» y style.css «{m_css.group(1)}»")
+    assert f'class="seccion {clase_js}"' in INDEX, (
+        "index.html no trae la clase visible puesta en la sección inicial")
+
+
 def test_panel_y_estaticos_se_sirven(entorno):
     r = entorno.c.get("/")
     assert r.status_code == 200 and "Sistema de Banca Moderna" in r.text

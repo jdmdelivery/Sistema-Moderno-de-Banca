@@ -13,7 +13,7 @@ nav{display:flex;flex-wrap:wrap;gap:6px;padding:10px 16px;background:var(--panel
 .navbtn:hover{border-color:var(--verde)}
 .navbtn.activo{background:var(--verde-osc);border-color:var(--verde-osc);color:#fff;font-weight:600}
 main{padding:16px;max-width:1180px;margin:0 auto}
-.seccion{display:none}.seccion.activa{display:block}
+.seccion{display:none}.seccion.activo{display:block}
 h2{margin:8px 0 12px;font-size:20px}h3{margin:22px 0 8px;font-size:16px;color:var(--suave)}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
 .card{background:var(--panel);border:1px solid var(--borde);border-radius:12px;padding:14px}
