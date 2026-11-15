@@ -37,7 +37,8 @@ def test_ventas_filtradas_por_usuario_y_totales(entorno):
 
     # Un ticket anulado sale de la lista pero NO suma en el total vendido
     resp = entorno.c.post("/terminal/tickets/anular",
-                          json={"id": t10["id"], "serial": t10["serial"]}, headers=b1["headers"])
+                          json={"id": t10["id"], "serial": t10["serial"], "motivo": "error"},
+                          headers=b1["headers"])
     assert resp.status_code == 200, resp.text
     r = _ventas(entorno)
     assert r["total_tickets"] == 3

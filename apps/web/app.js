@@ -537,11 +537,19 @@ function pintarTicket(d) {
   const jugadas = (d.jugadas || []).map((j) =>
     `• ${esc(j.tipo_nombre)} ${esc(j.numeros)} → ${esc(j.loterias.join(" + "))} · ${fmt(j.monto)}` +
     (j.evaluada ? ` · premio ${fmt(j.premio || 0)}` : " · sin evaluar")).join("\n");
+  let extra = "";
+  if (d.estado === "anulado") {
+    extra = `\nAnulado: ${d.anulado_en || "—"} · Por: ${d.anulado_por || "—"} · Motivo: ${d.anulado_motivo || "—"}`;
+  } else if (d.mensaje_anular) {
+    extra = `\n${d.mensaje_anular}`;
+  } else if (d.puede_anular_cajera) {
+    extra = `\nCajera puede anular · quedan ${d.segundos_para_anular || 0}s`;
+  }
   caja.textContent =
     `Ticket ${d.id} · Serial ${d.serial} · ${d.banca} (${d.banca_codigo})\n` +
     `Vendido: ${d.fecha_hora} · Total: ${fmt(d.total)}\n${jugadas}\n` +
     `Cajero: ${d.cajero || "—"} · Sucursal: ${d.banca || "—"}\n` +
-    `Estado: ${String(d.estado).toUpperCase()} · Premio: ${fmt(d.premio_total)}\n${d.mensaje || ""}`;
+    `Estado: ${String(d.estado).toUpperCase()} · Premio: ${fmt(d.premio_total)}\n${d.mensaje || ""}${extra}`;
 }
 async function consultarTicket() {
   try {
@@ -556,9 +564,14 @@ async function pagarTicketPanel() {
   } catch (e) { msg("#tic-msg", e.message, false); }
 }
 async function anularTicketPanel() {
-  if (!confirm("¿Anular este ticket? El efectivo se devuelve al cliente y sale de la caja de la banca vendedora.")) return;
+  const motivo = ($("#tic-motivo").value || "").trim();
+  if (!motivo) {
+    msg("#tic-msg", "Indique el motivo de la anulación.", false);
+    return;
+  }
+  if (!confirm("¿Anular este ticket como administrador? El efectivo se devuelve al cliente y sale de la caja de la banca vendedora. Queda registrado quién anuló, cuándo y el motivo.")) return;
   try {
-    const d = await post("/panel/tickets/anular", { ...llaveTicket(), motivo: $("#tic-motivo").value.trim() });
+    const d = await post("/panel/tickets/anular", { ...llaveTicket(), motivo });
     pintarTicket(d); msg("#tic-msg", "Ticket ANULADO ✔ El efectivo salió de la caja de la banca vendedora.");
   } catch (e) { msg("#tic-msg", e.message, false); }
 }

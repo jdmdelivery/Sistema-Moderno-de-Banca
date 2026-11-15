@@ -833,8 +833,12 @@ def panel_pagar(datos: PanelPagoIn, db=Depends(get_db),
 
 @app.post("/panel/tickets/anular")
 def panel_anular(datos: AnularIn, db=Depends(get_db),
-                 usuario=Depends(requiere_rol("admin", "supervisor"))):
-    return servicios.anular_ticket(db, datos.id, datos.serial, usuario.id, terminal_id=None, motivo=datos.motivo)
+                 usuario=Depends(requiere_rol("admin"))):
+    """Solo el administrador del Panel. No aplica el límite de 5 minutos."""
+    return servicios.anular_ticket(
+        db, datos.id, datos.serial, usuario.id, terminal_id=None,
+        motivo=datos.motivo, ventana_cajera=False,
+    )
 
 
 # ------------------------------------------------------------------ caja panel
@@ -1216,9 +1220,10 @@ def terminal_reimprimir(datos: LlaveIn, db=Depends(get_db), terminal=Depends(ter
 @app.post("/terminal/tickets/anular")
 def terminal_anular(datos: AnularIn, db=Depends(get_db), terminal=Depends(terminal_actual),
                     operador=Depends(operador_actual)):
+    """Cajera: solo sus tickets y solo durante los primeros 5 minutos."""
     return servicios.anular_ticket(
         db, datos.id, datos.serial, operador.id, terminal_id=terminal.id,
-        motivo=datos.motivo, solo_propietario=operador.rol == "operador",
+        motivo=datos.motivo, ventana_cajera=True,
     )
 
 

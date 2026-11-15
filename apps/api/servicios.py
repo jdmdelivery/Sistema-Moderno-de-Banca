@@ -11,7 +11,17 @@ from sqlalchemy import func, or_, update
 from sqlalchemy.exc import IntegrityError
 
 from . import motor
-from .comun import D, ErrorServicio, ZONA, ahora_local, modo_desarrollo
+from .comun import (
+    D,
+    ErrorServicio,
+    MSG_ANULACION_VENCIDA,
+    ZONA,
+    ahora_local,
+    ahora_oficial,
+    modo_desarrollo,
+    segundos_para_anular_cajera,
+    ventana_anulacion_cajera,
+)
 from .models import (
     Auditoria,
     Consorcio,
@@ -482,11 +492,38 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
 
 
 # ------------------------------------------------------- consulta/pago/anula
-def buscar_ticket(db, ticket_id, serial):
-    ticket = db.get(Ticket, int(ticket_id)) if str(ticket_id).isdigit() else None
-    if ticket is None or ticket.serial != str(serial or "").strip().upper():
+def buscar_ticket(db, ticket_id, serial, bloquear=False):
+    serial_norm = str(serial or "").strip().upper()
+    if not str(ticket_id).isdigit():
+        raise ErrorServicio(404, "Ticket no encontrado: verifique el ID y el Serial del ticket")
+    consulta = db.query(Ticket).filter(Ticket.id == int(ticket_id))
+    if bloquear:
+        consulta = consulta.with_for_update()
+    ticket = consulta.first()
+    if ticket is None or ticket.serial != serial_norm:
         raise ErrorServicio(404, "Ticket no encontrado: verifique el ID y el Serial del ticket")
     return ticket
+
+
+def _info_anulacion(db, ticket, ahora=None):
+    ahora = ahora or ahora_oficial(db)
+    queda = segundos_para_anular_cajera(ticket.vendido_en, ahora)
+    abierta = ticket.estado == "vendido" and ventana_anulacion_cajera(ticket.vendido_en, ahora)
+    return {
+        "puede_anular_cajera": abierta,
+        "segundos_para_anular": queda if ticket.estado == "vendido" else 0,
+        "anulado_en": ticket.anulado_en.isoformat(sep=" ") if ticket.anulado_en else None,
+        "anulado_motivo": ticket.anulado_motivo,
+        "anulado_por": (
+            db.get(Usuario, ticket.anulado_por).nombre
+            if ticket.anulado_por and db.get(Usuario, ticket.anulado_por)
+            else None
+        ),
+        "mensaje_anular": (
+            None if abierta or ticket.estado != "vendido"
+            else MSG_ANULACION_VENCIDA
+        ),
+    }
 
 
 def ticket_a_dict(db, ticket, saldo_restante=None):
@@ -526,6 +563,7 @@ def ticket_a_dict(db, ticket, saldo_restante=None):
         "reimpresiones": int(ticket.reimpresiones or 0),
         "cajero": db.get(Usuario, ticket.usuario_id).nombre if ticket.usuario_id and db.get(Usuario, ticket.usuario_id) else "",
     }
+    datos.update(_info_anulacion(db, ticket))
     if ticket.estado == "pagado":
         pagador = db.get(Usuario, ticket.pagado_por_usuario_id) if ticket.pagado_por_usuario_id else None
         datos["pago"] = {
@@ -946,18 +984,57 @@ def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuar
     )
 
 
+def _ya_movio_anulacion(db, ticket):
+    """Evita duplicar el movimiento de caja si dos peticiones llegan juntas."""
+    ref = f"Anulación ticket {ticket.id}"
+    ref_prueba = f"Anulación de prueba ticket {ticket.id}"
+    if db.query(MovimientoCajera).filter(
+        MovimientoCajera.referencia.in_((ref, ref_prueba)),
+        MovimientoCajera.tipo.in_(("anulacion", "anulacion_prueba")),
+    ).first() is not None:
+        return True
+    if (
+        not ticket.es_prueba
+        and db.query(MovimientoSaldo).filter_by(
+            sucursal_id=ticket.sucursal_vendedora_id,
+            tipo="anulacion",
+            referencia=ref,
+        ).first()
+        is not None
+    ):
+        return True
+    return False
+
+
 def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=None, motivo=None,
-                   solo_propietario=False):
-    ahora = ahora or ahora_local()
-    ticket = buscar_ticket(db, ticket_id, serial)
-    if solo_propietario and ticket.usuario_id != usuario_id:
-        raise ErrorServicio(403, "Solo puede anular sus propios tickets")
+                   ventana_cajera=False):
+    """Anula un ticket. La seguridad vive aquí, no en la SUNMI.
+
+    - Cajera (ventana_cajera=True): solo sus tickets y solo antes de 5 minutos.
+    - A los 5 minutos exactos el servidor la bloquea.
+    - Panel admin (ventana_cajera=False): puede anular después, si el sorteo
+      sigue abierto y el ticket no está pagado.
+    """
+    ahora = ahora_oficial(db, forzar=ahora)
+    motivo_txt = str(motivo or "").strip()[:200]
+    if not motivo_txt:
+        raise ErrorServicio(400, "Indique el motivo de la anulación")
+    ticket = buscar_ticket(db, ticket_id, serial, bloquear=True)
+    if ventana_cajera:
+        if ticket.usuario_id != usuario_id:
+            raise ErrorServicio(403, "Solo puede anular sus propios tickets")
+        if not ventana_anulacion_cajera(ticket.vendido_en, ahora):
+            raise ErrorServicio(403, MSG_ANULACION_VENCIDA)
     if ticket.estado == "anulado":
         raise ErrorServicio(409, "El ticket ya está anulado")
     if ticket.estado == "pagado":
         datos = ticket_a_dict(db, ticket)
-        p = datos["pago"]
-        raise ErrorServicio(409, f"El ticket ya fue pagado en la sucursal {p['sucursal']} el {p['fecha_hora']}")
+        p = datos.get("pago") or {}
+        raise ErrorServicio(
+            409,
+            f"El ticket ya fue pagado en la sucursal {p.get('sucursal', '?')} "
+            f"el {p.get('fecha_hora', '?')}",
+        )
     if any(j.pagada for j in ticket.jugadas):
         raise ErrorServicio(409, "Este ticket ya tiene premios pagados. No se puede anular.")
     if ticket.estado in ("ganador", "no_ganador", "vencido"):
@@ -968,11 +1045,25 @@ def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=Non
                 continue
             if j.fecha < ahora.date() or (j.fecha == ahora.date() and ahora.time() >= s.hora_cierre):
                 raise ErrorServicio(409, f"No se puede anular: el sorteo {s.nombre} ya cerró")
-    ticket.estado = "anulado"
-    ticket.anulado_en = ahora
-    ticket.anulado_por = usuario_id
-    motivo_txt = str(motivo or "").strip()[:200]
-    ticket.anulado_motivo = motivo_txt or None
+    if _ya_movio_anulacion(db, ticket):
+        raise ErrorServicio(409, "El ticket ya está anulado")
+    # UPDATE atómico: si otra petición ya anuló, rowcount=0 y no hay doble movimiento.
+    marcados = (
+        db.query(Ticket)
+        .filter(Ticket.id == ticket.id, Ticket.estado == "vendido")
+        .update(
+            {
+                "estado": "anulado",
+                "anulado_en": ahora,
+                "anulado_por": usuario_id,
+                "anulado_motivo": motivo_txt,
+            },
+            synchronize_session="fetch",
+        )
+    )
+    if marcados != 1:
+        raise ErrorServicio(409, "El ticket ya está anulado")
+    db.refresh(ticket)
     sucursal = db.get(Sucursal, ticket.sucursal_vendedora_id)
     if not ticket.es_prueba:
         sucursal.saldo_actual = D(sucursal.saldo_actual) - D(ticket.total)
@@ -996,10 +1087,21 @@ def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=Non
             f"Anulación de prueba ticket {ticket.id}", -1, motivo=ticket.anulado_motivo,
             bolsa="prueba",
         )
-    auditar(db, "ticket", ticket.id, "anulacion", usuario_id=usuario_id, terminal_id=terminal_id,
-            detalle={"total_devuelto": "0.00" if ticket.es_prueba else str(D(ticket.total)),
-                     "motivo": ticket.anulado_motivo, "usuario_id": usuario_id,
-                     "fecha": ahora.isoformat(sep=" "), "es_prueba": bool(ticket.es_prueba)})
+    quien = db.get(Usuario, usuario_id)
+    auditar(
+        db, "ticket", ticket.id, "anulacion", usuario_id=usuario_id, terminal_id=terminal_id,
+        detalle={
+            "total_devuelto": "0.00" if ticket.es_prueba else str(D(ticket.total)),
+            "motivo": ticket.anulado_motivo,
+            "usuario_id": usuario_id,
+            "usuario": quien.usuario if quien else None,
+            "nombre": quien.nombre if quien else None,
+            "fecha": ahora.isoformat(sep=" "),
+            "vendido_en": ticket.vendido_en.isoformat(sep=" ") if ticket.vendido_en else None,
+            "desde_panel": not ventana_cajera,
+            "es_prueba": bool(ticket.es_prueba),
+        },
+    )
     db.commit()
     db.refresh(ticket)
     return ticket_a_dict(db, ticket)

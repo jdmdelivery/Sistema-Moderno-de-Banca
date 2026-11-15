@@ -97,7 +97,7 @@ def test_qn_pl_sp_pago_unico_y_correccion(entorno, monkeypatch, fijar_hora):
     pendiente = entorno.vender_ok(headers, [{"tipo": "QN", "sorteos": [florida], "numeros": "25", "monto": 10}])
     baja = entorno.c.post(
         "/terminal/tickets/anular",
-        json={"id": anulado["id"], "serial": anulado["serial"]},
+        json={"id": anulado["id"], "serial": anulado["serial"], "motivo": "prueba"},
         headers=headers,
     )
     assert baja.status_code == 200, baja.text

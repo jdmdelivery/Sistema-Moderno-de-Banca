@@ -9,7 +9,7 @@ from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from apps.api import db as dbmod
+from apps.api import comun, db as dbmod
 from apps.api import servicios
 from apps.api.main import app
 
@@ -113,6 +113,22 @@ class Entorno:
     def banca(self, saldo=100000, codigo="1301", nombre="BANCA CASTILLO", usuario="vend1", clave="1234"):
         """Sucursal + operador + sesión, lista para vender (la terminal se
         resuelve sola desde la sucursal del operador al entrar)."""
+        usuarios = self.c.get("/usuarios", headers=self.admin).json()
+        existente = next((u for u in usuarios if u.get("usuario") == usuario), None)
+        if existente and existente.get("sucursal_id"):
+            sucursales = self.c.get("/sucursales", headers=self.admin).json()
+            suc = next(s for s in sucursales if s["id"] == existente["sucursal_id"])
+            if saldo:
+                actual = float(suc.get("saldo_actual") or 0)
+                if saldo > actual:
+                    self.recargar(suc["id"], saldo - actual)
+                    sucursales = self.c.get("/sucursales", headers=self.admin).json()
+                    suc = next(s for s in sucursales if s["id"] == suc["id"])
+            headers = self.login_terminal(usuario, clave)
+            return {"sucursal": suc, "headers": headers}
+        if codigo == "1301" and any(s.get("codigo") == "1301" for s in self.c.get("/sucursales", headers=self.admin).json()):
+            self._n += 1
+            codigo = f"T{self._n:04d}"
         suc = self.sucursal(codigo=codigo, nombre=nombre)
         if saldo:
             self.recargar(suc["id"], saldo)
@@ -166,6 +182,7 @@ def entorno(monkeypatch):
     dbmod.configurar(f"sqlite:///{ruta}")
     dbmod.init_db()
     monkeypatch.setattr(servicios, "ahora_local", lambda: AHORA_FIJO)
+    monkeypatch.setattr(comun, "ahora_local", lambda: AHORA_FIJO)
     client = TestClient(app)
     yield Entorno(client)
     client.close()
@@ -176,9 +193,10 @@ def entorno(monkeypatch):
 
 @pytest.fixture()
 def fijar_hora(monkeypatch):
-    """Permite a un test mover el reloj del servidor (servicios.ahora_local)."""
+    """Permite a un test mover el reloj del servidor (ahora_local / ahora_oficial)."""
 
     def _fijar(dt):
         monkeypatch.setattr(servicios, "ahora_local", lambda: dt)
+        monkeypatch.setattr(comun, "ahora_local", lambda: dt)
 
     return _fijar
