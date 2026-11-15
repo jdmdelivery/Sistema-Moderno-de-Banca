@@ -15,6 +15,7 @@ from .comun import (
     D,
     ErrorServicio,
     MSG_ANULACION_VENCIDA,
+    MSG_USUARIO_BLOQUEADO,
     ZONA,
     ahora_local,
     ahora_oficial,
@@ -93,7 +94,11 @@ def sesion_y_usuario(db, token, tipo=None):
         raise ErrorServicio(401, "Esa sesión no sirve para esta operación")
     usuario = db.get(Usuario, sesion.usuario_id)
     if usuario is None or not usuario.activo:
-        raise ErrorServicio(401, "El usuario está inactivo")
+        # Token vigente no sirve si el usuario quedó bloqueado.
+        if sesion is not None:
+            db.delete(sesion)
+            db.flush()
+        raise ErrorServicio(401, MSG_USUARIO_BLOQUEADO)
     return sesion, usuario
 
 
@@ -102,6 +107,74 @@ def cerrar_sesion(db, token):
     if sesion is not None:
         db.delete(sesion)
         db.commit()
+
+
+def invalidar_sesiones_usuario(db, usuario_id):
+    """Borra todas las sesiones panel/terminal del usuario (bloqueo en tiempo real)."""
+    for sesion in db.query(Sesion).filter_by(usuario_id=usuario_id).all():
+        db.delete(sesion)
+    db.flush()
+
+
+def bloquear_usuario(db, admin, usuario_id):
+    """Desactiva el acceso (activo=False). No toca caja, tickets ni historial."""
+    if admin.rol != "admin":
+        raise ErrorServicio(403, "Solo un administrador puede bloquear usuarios")
+    objetivo = db.get(Usuario, usuario_id)
+    if objetivo is None:
+        raise ErrorServicio(404, "El usuario no existe")
+    if objetivo.id == admin.id:
+        raise ErrorServicio(400, "No puede bloquearse a sí mismo")
+    if not objetivo.activo:
+        raise ErrorServicio(409, "El usuario ya está bloqueado")
+    if objetivo.rol == "admin":
+        activos = (
+            db.query(Usuario)
+            .filter(Usuario.rol == "admin", Usuario.activo.is_(True), Usuario.id != objetivo.id)
+            .count()
+        )
+        if activos < 1:
+            raise ErrorServicio(400, "No se puede bloquear la última cuenta administradora activa")
+    objetivo.activo = False
+    invalidar_sesiones_usuario(db, objetivo.id)
+    auditar(
+        db, "usuario", objetivo.id, "bloqueo", usuario_id=admin.id,
+        detalle={
+            "bloqueado_usuario": objetivo.usuario,
+            "bloqueado_nombre": objetivo.nombre,
+            "bloqueado_rol": objetivo.rol,
+            "por": admin.usuario,
+            "cuando": ahora_oficial(db).isoformat(sep=" "),
+        },
+    )
+    db.commit()
+    db.refresh(objetivo)
+    return objetivo
+
+
+def desbloquear_usuario(db, admin, usuario_id):
+    """Restaura el acceso. No altera caja, movimientos ni historial."""
+    if admin.rol != "admin":
+        raise ErrorServicio(403, "Solo un administrador puede desbloquear usuarios")
+    objetivo = db.get(Usuario, usuario_id)
+    if objetivo is None:
+        raise ErrorServicio(404, "El usuario no existe")
+    if objetivo.activo:
+        raise ErrorServicio(409, "El usuario ya está activo")
+    objetivo.activo = True
+    auditar(
+        db, "usuario", objetivo.id, "desbloqueo", usuario_id=admin.id,
+        detalle={
+            "desbloqueado_usuario": objetivo.usuario,
+            "desbloqueado_nombre": objetivo.nombre,
+            "desbloqueado_rol": objetivo.rol,
+            "por": admin.usuario,
+            "cuando": ahora_oficial(db).isoformat(sep=" "),
+        },
+    )
+    db.commit()
+    db.refresh(objetivo)
+    return objetivo
 
 
 # ---------------------------------------------------------------- terminales
@@ -591,7 +664,14 @@ def _numero_oficial(db, sorteo_id, fecha):
 def _premio_ya_cobrado(jugada, ticket):
     if not jugada.evaluada or jugada.premio is None or D(jugada.premio) <= 0:
         return False
-    return bool(jugada.pagada) or ticket.estado == "pagado"
+    # Solo la jugada marcada como pagada cuenta: un ticket "pagado" que luego
+    # recibe otro premio liquidado no debe marcar el tramo nuevo como cobrado.
+    if jugada.pagada:
+        return True
+    return ticket.estado == "pagado" and all(
+        (not j.evaluada) or j.premio is None or D(j.premio) <= 0 or j.pagada
+        for j in ticket.jugadas
+    )
 
 
 def _linea_premio(db, ticket, jugada):
@@ -2072,9 +2152,83 @@ def _texto_entrega(sucursal, terminal, cajero, entrega, cuando, prueba):
     return "\n".join(lineas)
 
 
+def _jugadas_ganadoras(ticket):
+    return [
+        j for j in ticket.jugadas
+        if j.evaluada and j.premio is not None and D(j.premio) > 0
+    ]
+
+
+def _etiqueta_pago_ganador(ticket):
+    ganadoras = _jugadas_ganadoras(ticket)
+    if ganadoras:
+        cobradas = sum(1 for j in ganadoras if j.pagada)
+        if cobradas == 0:
+            return "PENDIENTE"
+        if cobradas < len(ganadoras):
+            return "PARCIALMENTE PAGADO"
+        # Todas las ganadoras confirmadas están cobradas (pueden faltar sorteos).
+        return "PAGADO"
+    if ticket.estado == "pagado":
+        return "PAGADO"
+    if ticket.estado == "parcial":
+        return "PARCIALMENTE PAGADO"
+    return "PENDIENTE"
+
+
+def _loterias_unicas_ganadoras(ticket):
+    nombres = []
+    vistos = set()
+    for jugada in _jugadas_ganadoras(ticket):
+        for sorteo in (jugada.sorteo, jugada.sorteo2):
+            if sorteo is None or sorteo.nombre in vistos:
+                continue
+            vistos.add(sorteo.nombre)
+            nombres.append(sorteo.nombre)
+    return nombres
+
+
+def _resumen_pago_ganador(db, ticket):
+    premio = D(ticket.premio_total)
+    pendiente = _importe_sin_cobrar(ticket)
+    pagado = premio - pendiente
+    if pagado < 0:
+        pagado = D(0)
+    pagadores = []
+    vistos = set()
+    for jugada in _jugadas_ganadoras(ticket):
+        if not _premio_ya_cobrado(jugada, ticket):
+            continue
+        uid = jugada.pagado_por_usuario_id or ticket.pagado_por_usuario_id
+        if uid is None or uid in vistos:
+            continue
+        vistos.add(uid)
+        quien = db.get(Usuario, uid)
+        if quien is not None:
+            pagadores.append(quien.nombre)
+    if not pagadores and ticket.pagado_por_usuario_id:
+        quien = db.get(Usuario, ticket.pagado_por_usuario_id)
+        if quien is not None:
+            pagadores.append(quien.nombre)
+    horas = [j.pagado_en for j in _jugadas_ganadoras(ticket) if j.pagado_en]
+    if ticket.pagado_en:
+        horas.append(ticket.pagado_en)
+    ultimo = max(horas).isoformat(sep=" ") if horas else None
+    return {
+        "premio_total": str(premio),
+        "importe_pagado": str(pagado),
+        "importe_pendiente": str(pendiente),
+        "estado_pago": _etiqueta_pago_ganador(ticket),
+        "cajero_pago": " · ".join(pagadores),
+        "pagado_en": ultimo,
+    }
+
+
 def _filas_ganadores(db, fecha, sorteo_id, sucursal_id, usuario_id, estado, prueba):
+    # Incluye "vendido" con premios ya liquidados en alguna lotería (faltan otras).
     q = db.query(Ticket).filter(
-        Ticket.es_prueba.is_(prueba), Ticket.estado.in_(("ganador", "parcial", "pagado")),
+        Ticket.es_prueba.is_(prueba),
+        Ticket.estado.in_(("ganador", "parcial", "pagado", "vendido")),
     )
     if fecha is not None:
         q = q.filter(Ticket.fecha == fecha)
@@ -2082,56 +2236,161 @@ def _filas_ganadores(db, fecha, sorteo_id, sucursal_id, usuario_id, estado, prue
         q = q.filter(Ticket.sucursal_vendedora_id == sucursal_id)
     if usuario_id:
         q = q.filter(Ticket.usuario_id == usuario_id)
-    if estado == "ganador":
-        q = q.filter(Ticket.estado.in_(("ganador", "parcial")))
-    elif estado == "pagado":
-        q = q.filter(Ticket.estado == estado)
     if sorteo_id:
-        q = q.join(Jugada).filter((Jugada.sorteo_id == sorteo_id) | (Jugada.sorteo2_id == sorteo_id))
+        q = q.join(Jugada).filter(
+            ((Jugada.sorteo_id == sorteo_id) | (Jugada.sorteo2_id == sorteo_id)),
+            Jugada.evaluada.is_(True),
+            Jugada.premio > 0,
+        )
     vistos = []
     ids = set()
     for ticket in q.order_by(Ticket.id.desc()).all():
         if ticket.id in ids:
             continue
+        if not _jugadas_ganadoras(ticket):
+            continue
         ids.add(ticket.id)
         vistos.append(ticket)
     filas = []
     for ticket in vistos:
-        datos = ticket_a_dict(db, ticket)
-        pagador = db.get(Usuario, ticket.pagado_por_usuario_id) if ticket.pagado_por_usuario_id else None
-        jugada = next((j for j in ticket.jugadas if j.premio and D(j.premio) > 0), None)
+        pago = _resumen_pago_ganador(db, ticket)
+        etiqueta = pago["estado_pago"]
+        if estado in ("ganador", "pendiente") and etiqueta != "PENDIENTE":
+            continue
+        if estado == "parcial" and etiqueta != "PARCIALMENTE PAGADO":
+            continue
+        if estado == "pagado" and etiqueta != "PAGADO":
+            continue
+        loterias = _loterias_unicas_ganadoras(ticket)
+        vendedor = db.get(Usuario, ticket.usuario_id) if ticket.usuario_id else None
         filas.append({
             "id": ticket.id,
             "serial": ticket.serial,
-            "loterias": " · ".join(" · ".join(j["loterias"]) for j in datos["jugadas"]),
-            "fecha": datos["fecha"],
-            "cajero": datos["cajero"],
-            "banca": datos["banca"],
-            "numero": jugada.numeros if jugada is not None else "",
-            "modalidad": jugada.tipo.codigo if jugada is not None and jugada.tipo else "",
-            "monto": str(D(jugada.monto)) if jugada is not None else datos["total"],
-            "premio": datos["premio_total"],
+            "loterias": " · ".join(loterias),
+            "loterias_lista": loterias,
+            "fecha": ticket.fecha.isoformat() if ticket.fecha else None,
+            "cajero": vendedor.nombre if vendedor else "",
+            "cajero_id": ticket.usuario_id,
+            "banca": ticket.sucursal_vendedora.nombre if ticket.sucursal_vendedora else "?",
+            "sucursal_id": ticket.sucursal_vendedora_id,
+            "premio": pago["premio_total"],
+            "importe_pagado": pago["importe_pagado"],
+            "importe_pendiente": pago["importe_pendiente"],
             "estado": ticket.estado,
-            "cajero_pago": pagador.nombre if pagador else "",
-            "pagado_en": ticket.pagado_en.isoformat(sep=" ") if ticket.pagado_en else None,
+            "estado_pago": pago["estado_pago"],
+            "cajero_pago": pago["cajero_pago"],
+            "pagado_en": pago["pagado_en"],
             "no_oficial": prueba,
             "leyenda": "PRUEBA — NO OFICIAL" if prueba else "",
         })
     return filas
 
 
+def detalle_ticket_ganador(db, ticket_id):
+    """Solo jugadas ganadoras, agrupadas por lotería. Lectura para el panel."""
+    ticket = db.get(Ticket, ticket_id)
+    if ticket is None:
+        raise ErrorServicio(404, "Ticket no encontrado")
+    if ticket.estado not in ("ganador", "parcial", "pagado", "vendido"):
+        raise ErrorServicio(409, "Este ticket no es un ganador liquidado")
+    if ticket.estado == "vendido" and not _jugadas_ganadoras(ticket):
+        raise ErrorServicio(409, "Este ticket no es un ganador liquidado")
+    pago = _resumen_pago_ganador(db, ticket)
+    vendedor = db.get(Usuario, ticket.usuario_id) if ticket.usuario_id else None
+    grupos = {}
+    for jugada in _jugadas_ganadoras(ticket):
+        for sorteo in (jugada.sorteo, jugada.sorteo2):
+            if sorteo is None:
+                continue
+            clave = sorteo.id
+            if clave not in grupos:
+                oficial = _numero_oficial(db, sorteo.id, jugada.fecha)
+                grupos[clave] = {
+                    "loteria": sorteo.nombre,
+                    "sorteo_id": sorteo.id,
+                    "hora_sorteo": sorteo.hora_sorteo.strftime("%H:%M") if sorteo.hora_sorteo else "",
+                    "fecha": jugada.fecha.isoformat() if jugada.fecha else None,
+                    "resultado_oficial": oficial[0] if oficial else None,
+                    "fuente_resultado": oficial[1] if oficial else None,
+                    "jugadas": [],
+                }
+            # Evitar duplicar la misma jugada en Súper Palé (dos sorteos).
+            if any(x["jugada_id"] == jugada.id for x in grupos[clave]["jugadas"]):
+                continue
+            pagador = None
+            if jugada.pagado_por_usuario_id:
+                pagador = db.get(Usuario, jugada.pagado_por_usuario_id)
+            elif ticket.estado == "pagado" and ticket.pagado_por_usuario_id:
+                pagador = db.get(Usuario, ticket.pagado_por_usuario_id)
+            cobrada = _premio_ya_cobrado(jugada, ticket)
+            codigo = jugada.tipo.codigo if jugada.tipo else ""
+            grupos[clave]["jugadas"].append({
+                "jugada_id": jugada.id,
+                "numeros": jugada.numeros,
+                "tipo": codigo,
+                "tipo_nombre": _NOMBRE_JUGADA.get(codigo, jugada.tipo.nombre if jugada.tipo else "?"),
+                "monto": str(D(jugada.monto)),
+                "premio": str(D(jugada.premio)),
+                "detalle_eval": jugada.detalle_eval,
+                "estado_premio": "PAGADO" if cobrada else "PENDIENTE",
+                "pagada": cobrada,
+                "pagado_en": jugada.pagado_en.isoformat(sep=" ") if jugada.pagado_en else (
+                    ticket.pagado_en.isoformat(sep=" ") if cobrada and ticket.pagado_en else None
+                ),
+                "pagado_por": pagador.nombre if pagador else "",
+            })
+    # Súper Palé: una jugada aparece en dos loterías; está bien. Para QN/PL una sola.
+    # Compactar SP: si una jugada está en dos grupos, dejarla solo en el primero
+    # y anotar ambas loterías en la jugada del grupo principal.
+    vistos_jugada = {}
+    ordenados = []
+    for grupo in sorted(grupos.values(), key=lambda g: g["loteria"]):
+        propias = []
+        for jugada in grupo["jugadas"]:
+            jid = jugada["jugada_id"]
+            if jid in vistos_jugada:
+                vistos_jugada[jid]["loterias"].append(grupo["loteria"])
+                continue
+            jugada["loterias"] = [grupo["loteria"]]
+            vistos_jugada[jid] = jugada
+            propias.append(jugada)
+        if propias:
+            grupo["jugadas"] = propias
+            ordenados.append(grupo)
+    return {
+        "id": ticket.id,
+        "serial": ticket.serial,
+        "fecha": ticket.fecha.isoformat() if ticket.fecha else None,
+        "vendido_en": ticket.vendido_en.isoformat(sep=" ") if ticket.vendido_en else None,
+        "cajero": vendedor.nombre if vendedor else "",
+        "cajero_id": ticket.usuario_id,
+        "banca": ticket.sucursal_vendedora.nombre if ticket.sucursal_vendedora else "?",
+        "estado": ticket.estado,
+        "estado_pago": pago["estado_pago"],
+        "premio_total": pago["premio_total"],
+        "importe_pagado": pago["importe_pagado"],
+        "importe_pendiente": pago["importe_pendiente"],
+        "cajero_pago": pago["cajero_pago"],
+        "pagado_en": pago["pagado_en"],
+        "no_oficial": bool(ticket.es_prueba),
+        "leyenda": "PRUEBA — NO OFICIAL" if ticket.es_prueba else "",
+        "grupos": ordenados,
+    }
+
+
 def listar_ganadores(db, fecha=None, sorteo_id=None, sucursal_id=None, usuario_id=None, estado=None):
     """Los totales son solo de tickets reales. Las pruebas van en otra lista."""
     filas = _filas_ganadores(db, fecha, sorteo_id, sucursal_id, usuario_id, estado, False)
     premios = sum((D(f["premio"]) for f in filas), D(0))
-    pagados = sum((D(f["premio"]) for f in filas if f["estado"] == "pagado"), D(0))
+    pagados = sum((D(f["importe_pagado"]) for f in filas), D(0))
+    pendientes = sum((D(f["importe_pendiente"]) for f in filas), D(0))
     pruebas = _filas_ganadores(db, fecha, sorteo_id, sucursal_id, usuario_id, estado, True) if modo_desarrollo() else []
     return {
         "tickets": filas,
         "total_tickets": len(filas),
         "total_premios": str(premios),
         "premios_pagados": str(pagados),
-        "premios_pendientes": str(premios - pagados),
+        "premios_pendientes": str(pendientes),
         "prueba": pruebas,
     }
 
@@ -2903,16 +3162,17 @@ def _dia_guardado(momento):
 
 
 def _importe_sin_cobrar(ticket):
-    """Lo que todavía no salió de caja. Un ganador sin tramos usa el total guardado."""
-    if ticket.estado == "ganador":
-        return D(ticket.premio_total)
-    if ticket.estado != "parcial":
-        return D(0)
-    return sum(
+    """Lo que todavía no salió de caja, según jugadas ganadoras confirmadas."""
+    pendiente = sum(
         (D(j.premio) for j in ticket.jugadas
          if j.evaluada and j.premio is not None and D(j.premio) > 0 and not j.pagada),
         D(0),
     )
+    if pendiente > 0:
+        return pendiente
+    if ticket.estado == "ganador":
+        return D(ticket.premio_total)
+    return D(0)
 
 
 def _premio_pendiente_valido(db, ticket):

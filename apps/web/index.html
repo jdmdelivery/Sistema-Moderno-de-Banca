@@ -2,8 +2,15 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sistema de Banca Moderna — Panel del Consorcio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#1f9d57">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Banca Moderna Admin">
+<title>Banca Moderna Admin — Panel del Consorcio</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -19,10 +26,12 @@
 </div>
 
 <header>
+  <button type="button" id="btn-menu" class="btn-menu" aria-label="Abrir menú" aria-expanded="false">☰</button>
   <div class="marca">🎰 <b>Sistema de Banca Moderna</b> <span class="sub">Panel del Consorcio</span></div>
   <div class="sesion"><span id="yo-nombre"></span> <button id="btn-salir" class="btn chico">Salir</button></div>
 </header>
 
+<div id="nav-fondo" class="nav-fondo" hidden></div>
 <nav id="nav">
   <button class="navbtn activo" data-sec="inicio">Inicio</button>
   <button class="navbtn" data-sec="sucursales">Sucursales</button>
@@ -104,6 +113,7 @@
 
 <section id="sec-usuarios" class="seccion">
   <h2>Usuarios</h2>
+  <p class="nota">BLOQUEAR corta el acceso de inmediato (SUNMI y panel) sin borrar tickets, caja ni historial. Use DESBLOQUEAR para restaurar el acceso.</p>
   <div id="usu-tabla"></div>
   <h3>Crear / editar usuario</h3>
   <div class="form">
@@ -117,7 +127,7 @@
     </select></label>
     <label>Sucursal<select id="usu-sucursal"></select></label>
     <label>Contraseña<input id="usu-clave" type="password" placeholder="(sin cambio si se deja vacío)"></label>
-    <label class="check"><input id="usu-activo" type="checkbox" checked> Activo</label>
+    <label class="check"><input id="usu-activo" type="checkbox" checked> Activo al crear</label>
     <button id="btn-usu-guardar" class="btn primario">GUARDAR</button>
     <button id="btn-usu-limpiar" class="btn">Limpiar</button>
     <p id="usu-msg" class="msg"></p>
@@ -384,23 +394,36 @@
 
 <section id="sec-ganadores" class="seccion">
   <h2>Ganadores en vivo</h2>
+  <p class="nota">Una tarjeta por ticket. Solo lectura: el pago se registra en la SUNMI. Se actualiza solo cada 15 s.</p>
   <div class="form">
     <label>Fecha<input id="gan-fecha" type="date"></label>
     <label>Lotería<select id="gan-sorteo"></select></label>
-    <label>Banca<select id="gan-sucursal"></select></label>
+    <label>Sucursal<select id="gan-sucursal"></select></label>
+    <label>Cajera<select id="gan-cajera"><option value="">Todas</option></select></label>
     <label>Estado<select id="gan-estado">
       <option value="">Todos</option>
-      <option value="ganador">Pendiente de pago</option>
-      <option value="pagado">Pagado</option>
+      <option value="pendiente">PENDIENTE</option>
+      <option value="parcial">PARCIALMENTE PAGADO</option>
+      <option value="pagado">PAGADO</option>
     </select></label>
     <button id="btn-gan" class="btn">ACTUALIZAR</button>
     <p id="gan-msg" class="msg"></p>
   </div>
-  <div id="gan-totales" class="estado-box"></div>
-  <div id="gan-tabla"></div>
+  <div id="gan-totales" class="cards"></div>
+  <div id="gan-lista" class="gan-lista"></div>
   <p id="gan-prueba" class="nota"></p>
-  <div id="gan-prueba-tabla"></div>
+  <div id="gan-prueba-lista" class="gan-lista"></div>
 </section>
+
+<div id="gan-modal" class="modal" hidden>
+  <div class="modal-caja">
+    <div class="modal-cab">
+      <h3 id="gan-modal-titulo">Ticket ganador</h3>
+      <button type="button" id="gan-modal-cerrar" class="btn chico">Cerrar</button>
+    </div>
+    <div id="gan-modal-cuerpo" class="modal-cuerpo"></div>
+  </div>
+</div>
 
 <section id="sec-auditoria" class="seccion">
   <h2>Auditoría</h2>

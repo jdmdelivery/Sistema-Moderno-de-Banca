@@ -51,21 +51,28 @@ def recomputar_ticket(db, ticket):
 
     Un premio ya cobrado no vuelve a quedar pendiente. Si todavía hay un
     sorteo sin resultado, el ticket sigue vendido aunque otra jugada ya se haya pagado.
+    Si un sorteo posterior confirma un premio nuevo sobre un ticket ya cobrado,
+    se reabre a parcial sin tocar los pagos previos.
     """
-    if ticket.estado in ("pagado", "anulado", "vencido"):
+    if ticket.estado in ("anulado", "vencido"):
         return
     premio = sum(
         (D(j.premio) for j in ticket.jugadas if j.evaluada and j.premio is not None),
         D(0),
     )
     ticket.premio_total = D(premio)
+    impagos = [
+        j for j in ticket.jugadas
+        if j.evaluada and j.premio is not None and D(j.premio) > 0 and not j.pagada
+    ]
+    # Ticket ya cobrado completo: solo se reabre si aparece un premio nuevo.
+    if ticket.estado == "pagado":
+        if impagos:
+            ticket.estado = "parcial"
+        return
     if not ticket.jugadas or not all(j.evaluada for j in ticket.jugadas):
         ticket.estado = "vendido"
         return
-    impagos = [
-        j for j in ticket.jugadas
-        if j.premio is not None and D(j.premio) > 0 and not j.pagada
-    ]
     if impagos:
         # Un tramo ya cobrado no vuelve a estado ganador. El código anterior
         # cobra premio_total completo solo cuando el estado es ganador.

@@ -159,7 +159,8 @@ def test_anular_dos_veces_rechazado(entorno, fijar_hora):
     assert movs == 1
 
 
-def test_anular_pagado_rechazado(entorno, fijar_hora):
+def test_anular_pagado_rechazado(entorno, monkeypatch, fijar_hora):
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
     fijar_hora(datetime(2026, 11, 14, 10, 0, 0))
     b = entorno.banca(saldo=20000)
     # Fondo de prueba para poder pagar el premio simulado.

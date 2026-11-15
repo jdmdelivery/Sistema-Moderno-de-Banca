@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import conectate, conectate_widget, resultados_auto, servicios
-from .comun import D, ErrorServicio, loterias_abiertas_desarrollo, modo_desarrollo
+from .comun import D, ErrorServicio, MSG_USUARIO_BLOQUEADO, loterias_abiertas_desarrollo, modo_desarrollo
 from .db import configurar, engine, init_db, nueva_sesion
 from .models import (
     Auditoria,
@@ -119,6 +119,7 @@ def usuario_dict(u, con_cajas=False):
     datos = {
         "id": u.id, "nombre": u.nombre, "usuario": u.usuario, "rol": u.rol,
         "sucursal_id": u.sucursal_id, "activo": bool(u.activo),
+        "estado": "ACTIVO" if u.activo else "BLOQUEADO",
         "tiene_clave": bool(u.clave_hash), "tiene_pin": bool(u.pin_hash),
     }
     if con_cajas:
@@ -234,9 +235,11 @@ class LoginIn(BaseModel):
 @app.post("/auth/login")
 def login(datos: LoginIn, db=Depends(get_db)):
     usuario = db.query(Usuario).filter_by(usuario=datos.usuario.strip()).first()
-    if (usuario is None or not usuario.activo or usuario.rol not in ("admin", "supervisor")
+    if (usuario is None or usuario.rol not in ("admin", "supervisor")
             or not usuario.clave_hash or not verificar_clave(datos.clave, usuario.clave_hash)):
         raise ErrorServicio(401, "Usuario o clave incorrectos")
+    if not usuario.activo:
+        raise ErrorServicio(401, MSG_USUARIO_BLOQUEADO)
     token = servicios.crear_sesion(db, usuario, tipo="panel")
     db.commit()
     return {"token": token, "usuario": usuario_dict(usuario)}
@@ -456,13 +459,34 @@ def editar_usuario(usuario_id: int, datos: UsuarioIn, db=Depends(get_db),
     u = db.get(Usuario, usuario_id)
     if u is None:
         raise ErrorServicio(404, "El usuario no existe")
-    u.nombre, u.rol, u.sucursal_id, u.activo = datos.nombre.strip(), datos.rol, datos.sucursal_id, datos.activo
+    # El estado ACTIVO/BLOQUEADO se cambia solo con /bloquear y /desbloquear
+    # para exigir confirmación, auditoría e invalidación de sesiones.
+    u.nombre, u.rol, u.sucursal_id = datos.nombre.strip(), datos.rol, datos.sucursal_id
     if datos.clave:
         u.clave_hash = hash_clave(datos.clave)
     servicios.auditar(db, "usuario", u.id, "edicion", usuario_id=usuario.id, detalle={})
     db.commit()
     db.refresh(u)
     return usuario_dict(u)
+
+
+@app.post("/usuarios/{usuario_id}/bloquear")
+def bloquear_usuario(usuario_id: int, db=Depends(get_db),
+                     usuario=Depends(requiere_rol("admin"))):
+    """Bloqueo en tiempo real: activo=False + invalida sesiones SUNMI/panel."""
+    return usuario_dict(
+        servicios.bloquear_usuario(db, usuario, usuario_id),
+        con_cajas=True,
+    )
+
+
+@app.post("/usuarios/{usuario_id}/desbloquear")
+def desbloquear_usuario(usuario_id: int, db=Depends(get_db),
+                        usuario=Depends(requiere_rol("admin"))):
+    return usuario_dict(
+        servicios.desbloquear_usuario(db, usuario, usuario_id),
+        con_cajas=True,
+    )
 
 
 # ------------------------------------------------------------------ sorteos
@@ -797,6 +821,12 @@ def ganadores(fecha: str | None = None, sorteo_id: int | None = None, sucursal_i
     )
 
 
+@app.get("/ganadores/{ticket_id}")
+def ganador_detalle(ticket_id: int, db=Depends(get_db), usuario=Depends(panel_actual)):
+    """Solo lectura: jugadas ganadoras del ticket, sin pagar desde el panel."""
+    return servicios.detalle_ticket_ganador(db, ticket_id)
+
+
 @app.get("/importaciones")
 def listar_importaciones(limite: int = 20, db=Depends(get_db), usuario=Depends(panel_actual)):
     filas = db.query(Importacion).order_by(Importacion.id.desc()).limit(min(limite, 100)).all()
@@ -976,11 +1006,12 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
     usuario = db.query(Usuario).filter_by(usuario=datos.usuario.strip()).first()
     if (
         usuario is None
-        or not usuario.activo
         or not usuario.clave_hash
         or not verificar_clave(datos.clave, usuario.clave_hash)
     ):
         raise ErrorServicio(401, "Usuario o contraseña incorrectos")
+    if not usuario.activo:
+        raise ErrorServicio(401, MSG_USUARIO_BLOQUEADO)
     if usuario.rol == "admin":
         token = servicios.crear_sesion(db, usuario, tipo="panel")
         servicios.auditar(
@@ -1314,6 +1345,19 @@ def terminal_reporte_pendientes(desde: str, hasta: str, formato: str = "json",
 @app.get("/")
 def raiz():
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/manifest.webmanifest")
+def manifest_pwa():
+    return FileResponse(
+        WEB_DIR / "manifest.webmanifest",
+        media_type="application/manifest+json",
+    )
+
+
+@app.get("/sw.js")
+def service_worker():
+    return FileResponse(WEB_DIR / "sw.js", media_type="application/javascript")
 
 
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")

@@ -45,8 +45,8 @@ function msg(id, texto, ok = true) {
 function tabla(el, columnas, filas) {
   const destino = typeof el === "string" ? $(el) : el;
   if (!filas.length) { destino.innerHTML = '<p class="nota">Sin datos.</p>'; return; }
-  destino.innerHTML = "<table><thead><tr>" + columnas.map((c) => `<th>${esc(c)}</th>`).join("") +
-    "</tr></thead><tbody>" + filas.join("") + "</tbody></table>";
+  destino.innerHTML = '<div class="tabla-scroll"><table><thead><tr>' + columnas.map((c) => `<th>${esc(c)}</th>`).join("") +
+    "</tr></thead><tbody>" + filas.join("") + "</tbody></table></div>";
 }
 function opciones(lista, valor, texto, extra = "") {
   return extra + lista.map((x) => `<option value="${esc(valor(x))}">${esc(texto(x))}</option>`).join("");
@@ -85,11 +85,30 @@ async function restaurarSesion() {
 
 /* --------------------------------------------------------------------- nav */
 let GANADORES_RELOJ = null;
+function cerrarMenuMovil() {
+  const nav = $("#nav");
+  const fondo = $("#nav-fondo");
+  const btn = $("#btn-menu");
+  if (!nav) return;
+  nav.classList.remove("abierto");
+  if (fondo) { fondo.classList.remove("abierto"); fondo.hidden = true; }
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
+function alternarMenuMovil() {
+  const nav = $("#nav");
+  const fondo = $("#nav-fondo");
+  const btn = $("#btn-menu");
+  const abierto = !nav.classList.contains("abierto");
+  nav.classList.toggle("abierto", abierto);
+  if (fondo) { fondo.classList.toggle("abierto", abierto); fondo.hidden = !abierto; }
+  if (btn) btn.setAttribute("aria-expanded", abierto ? "true" : "false");
+}
 function ir(sec) {
   if (GANADORES_RELOJ) {
     clearInterval(GANADORES_RELOJ);
     GANADORES_RELOJ = null;
   }
+  cerrarMenuMovil();
   $$(".navbtn").forEach((b) => b.classList.toggle("activo", b.dataset.sec === sec));
   $$(".seccion").forEach((s) => s.classList.toggle("activo", s.id === "sec-" + sec));
   const cargar = {
@@ -264,15 +283,27 @@ async function reactivarTerminal(id) {
 /* ----------------------------------------------------------------- usuarios */
 async function cargarUsuarios() {
   const usuarios = await api("/usuarios");
-  tabla("#usu-tabla", ["Nombre", "Usuario", "Rol", "Sucursal", "Caja", "Caja de prueba", "Activo", "Acciones"],
+  const soyAdmin = YO && YO.rol === "admin";
+  tabla("#usu-tabla", ["Nombre", "Usuario", "Rol", "Sucursal", "Caja", "Caja de prueba", "Estado", "Acciones"],
     usuarios.map((u) => {
       const suc = SUCURSALES.find((s) => s.id === u.sucursal_id);
       const caja = u.saldo_caja == null ? "—" : fmt(u.saldo_caja);
       const prueba = u.saldo_caja_prueba == null ? "—" : fmt(u.saldo_caja_prueba);
+      const estado = u.activo
+        ? '<span class="pill activo">ACTIVO</span>'
+        : '<span class="pill bloqueado">BLOQUEADO</span>';
+      let acciones = `<button class="btn fila" onclick="editarUsuario(${u.id})">EDITAR</button>`;
+      if (soyAdmin) {
+        if (u.activo) {
+          acciones += ` <button class="btn fila peligro" onclick="bloquearUsuario(${u.id})">BLOQUEAR</button>`;
+        } else {
+          acciones += ` <button class="btn fila primario" onclick="desbloquearUsuario(${u.id})">DESBLOQUEAR</button>`;
+        }
+      }
       return `<tr><td>${esc(u.nombre)}</td><td>${esc(u.usuario)}</td><td>${esc(u.rol)}</td>
         <td>${esc(suc ? suc.nombre : "—")}</td><td>${caja}</td><td>${prueba}</td>
-        <td>${u.activo ? "Sí" : "No"}</td>
-        <td><button class="btn fila" onclick="editarUsuario(${u.id})">Editar</button></td></tr>`;
+        <td>${estado}</td>
+        <td><div class="acciones-fila">${acciones}</div></td></tr>`;
     }));
   window._usuarios = usuarios;
 }
@@ -296,6 +327,24 @@ async function guardarUsuario() {
   try {
     if (id) await put(`/usuarios/${id}`, body); else await post("/usuarios", body);
     msg("#usu-msg", "Usuario guardado ✔"); limpiarUsuario(); await cargarUsuarios();
+  } catch (e) { msg("#usu-msg", e.message, false); }
+}
+async function bloquearUsuario(id) {
+  const u = (window._usuarios || []).find((x) => x.id === id); if (!u) return;
+  if (!confirm(`¿BLOQUEAR a ${u.nombre} (${u.usuario})?\nPerderá el acceso de inmediato en SUNMI y en el panel. Su caja y tickets no se modifican.`)) return;
+  try {
+    await post(`/usuarios/${id}/bloquear`);
+    msg("#usu-msg", `${u.usuario} quedó BLOQUEADO.`);
+    await cargarUsuarios();
+  } catch (e) { msg("#usu-msg", e.message, false); }
+}
+async function desbloquearUsuario(id) {
+  const u = (window._usuarios || []).find((x) => x.id === id); if (!u) return;
+  if (!confirm(`¿DESBLOQUEAR a ${u.nombre} (${u.usuario})?\nPodrá iniciar sesión de nuevo con sus credenciales.`)) return;
+  try {
+    await post(`/usuarios/${id}/desbloquear`);
+    msg("#usu-msg", `${u.usuario} quedó ACTIVO.`);
+    await cargarUsuarios();
   } catch (e) { msg("#usu-msg", e.message, false); }
 }
 
@@ -939,6 +988,9 @@ async function marcarDesarrollo() {
 
 document.addEventListener("DOMContentLoaded", () => {
   marcarDesarrollo();
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
   $("#ini-hoy").addEventListener("click", () => consultarPeriodo("hoy").catch((e) => msg("#inicio-msg", e.message, false)));
   $("#ini-ayer").addEventListener("click", () => consultarPeriodo("ayer").catch((e) => msg("#inicio-msg", e.message, false)));
   $("#ini-quince").addEventListener("click", () => consultarPeriodo("quince").catch((e) => msg("#inicio-msg", e.message, false)));
@@ -946,6 +998,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-login").addEventListener("click", entrar);
   $("#login-clave").addEventListener("keydown", (e) => { if (e.key === "Enter") entrar(); });
   $("#btn-salir").addEventListener("click", salir);
+  $("#btn-menu").addEventListener("click", alternarMenuMovil);
+  $("#nav-fondo").addEventListener("click", cerrarMenuMovil);
   $$(".navbtn").forEach((b) => b.addEventListener("click", () => ir(b.dataset.sec)));
   $("#btn-suc-guardar").addEventListener("click", guardarSucursal);
   $("#btn-suc-limpiar").addEventListener("click", limpiarSucursal);
@@ -991,6 +1045,12 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-aud-ver").addEventListener("click", () => verAuditoria().catch((e) => alert(e.message)));
   $("#btn-fuente").addEventListener("click", () => consultarFuente().catch((e) => msg("#fuente-msg", e.message, false)));
   $("#btn-gan").addEventListener("click", () => cargarGanadores().catch((e) => msg("#gan-msg", e.message, false)));
+  ["#gan-fecha", "#gan-sorteo", "#gan-sucursal", "#gan-cajera", "#gan-estado"].forEach((sel) => {
+    const el = $(sel);
+    if (el) el.addEventListener("change", () => refrescarGanadores().catch((e) => msg("#gan-msg", e.message, false)));
+  });
+  $("#gan-modal-cerrar").addEventListener("click", cerrarModalGanador);
+  $("#gan-modal").addEventListener("click", (e) => { if (e.target === $("#gan-modal")) cerrarModalGanador(); });
   restaurarSesion();
 });
 
@@ -1016,9 +1076,55 @@ async function consultarFuente() {
   await cargarFuente();
 }
 
+function pillPago(estado) {
+  const clave = estado === "PAGADO" ? "pagado" : (estado === "PARCIALMENTE PAGADO" ? "parcial" : "pendiente");
+  return `<span class="pill ${clave}">${esc(estado || "PENDIENTE")}</span>`;
+}
+
+function tarjetaGanador(t) {
+  const prueba = t.no_oficial || t.leyenda;
+  return `<article class="gan-card${prueba ? " prueba" : ""}">
+    <div class="gan-card-top">
+      <div>
+        <h4>Ticket #${esc(t.id)}</h4>
+        <div class="meta">Serial ${esc(t.serial || "—")} · ${esc(t.fecha || "—")}</div>
+      </div>
+      ${pillPago(t.estado_pago || (t.estado === "pagado" ? "PAGADO" : "PENDIENTE"))}
+    </div>
+    ${prueba ? `<div class="aviso">${esc(t.leyenda || "PRUEBA — NO OFICIAL")}</div>` : ""}
+    <div class="meta">Vendió: <b>${esc(t.cajero || "—")}</b><br>Sucursal: <b>${esc(t.banca || "—")}</b><br>
+      Lotería(s): <b>${esc(t.loterias || "—")}</b></div>
+    <div class="montos">
+      <div>Premio total<br><b>${fmt(t.premio)}</b></div>
+      <div>Pagado<br><b>${fmt(t.importe_pagado || 0)}</b></div>
+      <div>Pendiente<br><b>${fmt(t.importe_pendiente == null ? t.premio : t.importe_pendiente)}</b></div>
+      <div>Pagó<br><b>${esc(t.cajero_pago || "—")}</b></div>
+    </div>
+    <div class="meta">${t.pagado_en ? "Pago: " + esc(t.pagado_en) : "Sin pago confirmado"}</div>
+    <button type="button" class="btn primario" onclick="verTicketGanador(${t.id})">VER TICKET</button>
+  </article>`;
+}
+
+async function pintarCajerasGanadores() {
+  const sel = $("#gan-cajera");
+  if (!sel) return;
+  const actual = sel.value;
+  try {
+    const usuarios = await api("/usuarios");
+    const cajeras = usuarios.filter((u) => u.rol === "operador");
+    sel.innerHTML = '<option value="">Todas</option>' + cajeras.map(
+      (u) => `<option value="${u.id}">${esc(u.nombre)} (${esc(u.usuario)})</option>`
+    ).join("");
+    if (actual) sel.value = actual;
+  } catch {}
+}
+
 async function cargarGanadores() {
+  await cargarCatalogos();
+  await pintarCajerasGanadores();
+  if (!$("#gan-fecha").value) $("#gan-fecha").value = hoyISO();
   if (GANADORES_RELOJ) clearInterval(GANADORES_RELOJ);
-  GANADORES_RELOJ = setInterval(() => refrescarGanadores().catch(() => {}), 20000);
+  GANADORES_RELOJ = setInterval(() => refrescarGanadores().catch(() => {}), 15000);
   await refrescarGanadores();
 }
 
@@ -1027,30 +1133,72 @@ async function refrescarGanadores() {
   if ($("#gan-fecha").value) q.set("fecha", $("#gan-fecha").value);
   if ($("#gan-sorteo").value) q.set("sorteo_id", $("#gan-sorteo").value);
   if ($("#gan-sucursal").value) q.set("sucursal_id", $("#gan-sucursal").value);
+  if ($("#gan-cajera") && $("#gan-cajera").value) q.set("usuario_id", $("#gan-cajera").value);
   if ($("#gan-estado").value) q.set("estado", $("#gan-estado").value);
   const datos = await api("/ganadores?" + q.toString());
-  $("#gan-totales").textContent =
-    `TOTAL DE TICKETS GANADORES ${datos.total_tickets} · TOTAL EN PREMIOS $${datos.total_premios} · ` +
-    `PREMIOS PAGADOS $${datos.premios_pagados} · PREMIOS PENDIENTES $${datos.premios_pendientes}`;
+  $("#gan-totales").innerHTML =
+    `<div class="card"><div class="num">${esc(datos.total_tickets)}</div><div class="lbl">Tickets ganadores</div></div>` +
+    `<div class="card"><div class="num">${fmt(datos.total_premios)}</div><div class="lbl">Premio total</div></div>` +
+    `<div class="card"><div class="num">${fmt(datos.premios_pagados)}</div><div class="lbl">Pagado</div></div>` +
+    `<div class="card"><div class="num">${fmt(datos.premios_pendientes)}</div><div class="lbl">Pendiente</div></div>`;
   const prueba = datos.prueba || [];
-  const aviso = document.querySelector("#gan-prueba");
+  const aviso = $("#gan-prueba");
   if (aviso) {
     aviso.textContent = prueba.length
       ? `PRUEBA — NO OFICIAL: ${prueba.length} ticket(s). Estos premios no salen de la caja real.`
       : "";
   }
-  if (prueba.length) {
-    tabla("#gan-prueba-tabla",
-      ["Ticket", "Lotería", "Premio", "Estado", "Aviso"],
-      prueba.map((t) => `<tr><td>${esc(t.id)}</td><td>${esc(t.loterias)}</td><td>${esc(t.premio)}</td>
-        <td>${esc(t.estado)}</td><td>${esc(t.leyenda)}</td></tr>`));
-  } else if (document.querySelector("#gan-prueba-tabla")) {
-    document.querySelector("#gan-prueba-tabla").innerHTML = "";
+  $("#gan-lista").innerHTML = (datos.tickets || []).length
+    ? datos.tickets.map(tarjetaGanador).join("")
+    : '<p class="nota">Sin ganadores con estos filtros.</p>';
+  const cajaPrueba = $("#gan-prueba-lista");
+  if (cajaPrueba) {
+    cajaPrueba.innerHTML = prueba.length ? prueba.map(tarjetaGanador).join("") : "";
   }
-  tabla("#gan-tabla",
-    ["Ticket", "Lotería", "Fecha", "Cajera", "Banca", "Número", "Modalidad", "Apostado", "Premio", "Estado", "Pagó", "Fecha del pago"],
-    datos.tickets.map((t) => `<tr><td>${esc(t.id)}</td><td>${esc(t.loterias)}</td><td>${esc(t.fecha)}</td>
-      <td>${esc(t.cajero)}</td><td>${esc(t.banca)}</td><td>${esc(t.numero)}</td><td>${esc(t.modalidad)}</td>
-      <td>${esc(t.monto)}</td><td>${esc(t.premio)}</td><td>${t.estado === "pagado" ? "PAGADO" : "PENDIENTE DE PAGO"}</td>
-      <td>${esc(t.cajero_pago || "—")}</td><td>${esc(t.pagado_en || "—")}</td></tr>`));
 }
+
+async function verTicketGanador(id) {
+  const modal = $("#gan-modal");
+  const cuerpo = $("#gan-modal-cuerpo");
+  $("#gan-modal-titulo").textContent = `Ticket #${id}`;
+  cuerpo.innerHTML = '<p class="nota">Cargando…</p>';
+  modal.hidden = false;
+  try {
+    const d = await api(`/ganadores/${id}`);
+    const grupos = (d.grupos || []).map((g) => {
+      const jugadas = (g.jugadas || []).map((j) => {
+        const lots = (j.loterias && j.loterias.length) ? j.loterias.join(" · ") : g.loteria;
+        return `<div class="gan-jugada">
+          <b>${esc(j.tipo_nombre)}</b> · ${esc(j.numeros)} · ${pillPago(j.estado_premio)}<br>
+          Lotería: ${esc(lots)}<br>
+          Apostado ${fmt(j.monto)} · Premio ${fmt(j.premio)}
+          ${j.pagado_por ? `<br>Pagó: ${esc(j.pagado_por)}${j.pagado_en ? " · " + esc(j.pagado_en) : ""}` : ""}
+        </div>`;
+      }).join("");
+      return `<div class="gan-grupo">
+        <h5>${esc(g.loteria)}</h5>
+        <div class="meta">Sorteo ${esc(g.fecha || "—")} ${esc(g.hora_sorteo || "")}
+          ${g.resultado_oficial ? ` · Oficial ${esc(g.resultado_oficial)}` : ""}</div>
+        ${jugadas || '<p class="nota">Sin jugadas ganadoras en esta lotería.</p>'}
+      </div>`;
+    }).join("");
+    cuerpo.innerHTML = `
+      ${d.leyenda ? `<div class="aviso">${esc(d.leyenda)}</div>` : ""}
+      <div class="meta" style="margin:8px 0 12px">
+        Vendió: <b>${esc(d.cajero || "—")}</b> · Sucursal: <b>${esc(d.banca || "—")}</b><br>
+        ${pillPago(d.estado_pago)} · Premio ${fmt(d.premio_total)} · Pagado ${fmt(d.importe_pagado)} · Pendiente ${fmt(d.importe_pendiente)}
+        ${d.cajero_pago ? `<br>Pagó: <b>${esc(d.cajero_pago)}</b>${d.pagado_en ? " · " + esc(d.pagado_en) : ""}` : ""}
+      </div>
+      ${grupos || '<p class="nota">Sin jugadas ganadoras.</p>'}`;
+  } catch (e) {
+    cuerpo.innerHTML = `<p class="msg error">${esc(e.message)}</p>`;
+  }
+}
+
+function cerrarModalGanador() {
+  const modal = $("#gan-modal");
+  if (modal) modal.hidden = true;
+}
+
+window.verTicketGanador = verTicketGanador;
+window.cerrarModalGanador = cerrarModalGanador;

@@ -12,6 +12,7 @@ MSG_ANULACION_VENCIDA = (
     "El tiempo de anulación de la cajera venció (5 minutos). "
     "Solo el administrador puede anularlo desde el Panel del Consorcio."
 )
+MSG_USUARIO_BLOQUEADO = "USUARIO BLOQUEADO. CONTACTE AL ADMINISTRADOR."
 
 
 def D(valor) -> Decimal:

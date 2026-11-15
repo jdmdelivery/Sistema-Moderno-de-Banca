@@ -1,0 +1,25 @@
+{
+  "name": "Banca Moderna Admin",
+  "short_name": "Banca Admin",
+  "description": "Panel del Consorcio — Sistema de Banca Moderna",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0e1512",
+  "theme_color": "#1f9d57",
+  "lang": "es",
+  "icons": [
+    {
+      "src": "/static/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

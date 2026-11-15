@@ -37,7 +37,7 @@ def _pagar(entorno, headers, ticket, operacion):
 
 
 def test_simulado_fuera_de_desarrollo_se_rechaza(entorno):
-    b = entorno.banca(saldo=5764, nombre="BANCA CASTILLO (PRUEBA)", usuario="jose")
+    b = entorno.banca(saldo=5764, nombre="BANCA CASTILLO (PRUEBA)", usuario="jose", clave="prueba123")
     sorteo = entorno.sorteo_id("LOTEDOM")
     r = entorno.c.post(
         "/resultados",
@@ -51,7 +51,7 @@ def test_simulado_fuera_de_desarrollo_se_rechaza(entorno):
 
 def test_simulado_no_reemplaza_rdlotto(entorno, monkeypatch):
     monkeypatch.setenv("MODO_DESARROLLO", "true")
-    b = entorno.banca(saldo=5764, nombre="BANCA CASTILLO (PRUEBA)", usuario="jose")
+    b = entorno.banca(saldo=5764, nombre="BANCA CASTILLO (PRUEBA)", usuario="jose", clave="prueba123")
     sorteo = entorno.sorteo_id("LOTEDOM")
     guardado = entorno.guardar_resultado(sorteo, 1, 2, 3)
     from apps.api.db import nueva_sesion
