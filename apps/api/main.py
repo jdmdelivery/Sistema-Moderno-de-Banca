@@ -637,6 +637,36 @@ def borrar_limite(limite_id: int, db=Depends(get_db), usuario=Depends(requiere_r
     return {"ok": True}
 
 
+class LimiteCajeraIn(BaseModel):
+    usuario_id: int
+    sorteo_id: int | None = None
+    tipo: str
+    numeros: str | None = None
+    monto_max_acumulado: float
+    id: int | None = None
+
+
+@app.get("/limites-cajera")
+def listar_limites_cajera(usuario_id: int | None = None, sucursal_id: int | None = None,
+                          db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+    return servicios.listar_limites_cajera(db, usuario_id, sucursal_id)
+
+
+@app.post("/limites-cajera", status_code=201)
+def guardar_limite_cajera(datos: LimiteCajeraIn, db=Depends(get_db),
+                          usuario=Depends(requiere_rol("admin"))):
+    return servicios.guardar_limite_cajera(
+        db, usuario, datos.usuario_id, datos.sorteo_id, datos.tipo, datos.numeros,
+        datos.monto_max_acumulado, datos.id,
+    )
+
+
+@app.delete("/limites-cajera/{limite_id}")
+def borrar_limite_cajera(limite_id: int, db=Depends(get_db),
+                         usuario=Depends(requiere_rol("admin"))):
+    return servicios.borrar_limite_cajera(db, usuario, limite_id)
+
+
 # ---------------------------------------------------------------- resultados
 class ResultadoIn(BaseModel):
     sorteo_id: int
@@ -1007,6 +1037,81 @@ def panel_entregas(sucursal_id: int | None = None, db=Depends(get_db),
 def panel_recibir_entrega(entrega_id: int, db=Depends(get_db),
                           usuario=Depends(requiere_rol("admin", "supervisor"))):
     return servicios.recibir_entrega(db, entrega_id, usuario)
+
+
+class FondoIn(BaseModel):
+    sucursal_id: int
+    usuario_id: int
+    monto: float
+    tipo: str
+    operacion_id: str
+    motivo: str | None = None
+
+
+@app.get("/fondos")
+def panel_fondos(sucursal_id: int | None = None, usuario_id: int | None = None,
+                 db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+    return servicios.listar_fondos(db, sucursal_id, usuario_id)
+
+
+@app.post("/fondos", status_code=201)
+def panel_asignar_fondo(datos: FondoIn, db=Depends(get_db),
+                        usuario=Depends(requiere_rol("admin"))):
+    return servicios.asignar_fondo(
+        db, usuario, datos.usuario_id, datos.sucursal_id, datos.monto, datos.tipo,
+        datos.operacion_id, datos.motivo,
+    )
+
+
+class ComisionIn(BaseModel):
+    usuario_id: int
+    porcentaje: float
+
+
+class LiquidacionIn(BaseModel):
+    usuario_id: int
+    desde: str
+    hasta: str
+    operacion_id: str
+
+
+@app.get("/comisiones")
+def panel_comisiones(sucursal_id: int | None = None, usuario_id: int | None = None,
+                     db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+    return servicios.listar_comisiones(db, sucursal_id, usuario_id)
+
+
+@app.post("/comisiones", status_code=201)
+def panel_guardar_comision(datos: ComisionIn, db=Depends(get_db),
+                           usuario=Depends(requiere_rol("admin"))):
+    return servicios.guardar_comision(db, usuario, datos.usuario_id, datos.porcentaje)
+
+
+@app.get("/comisiones/resumen")
+def panel_resumen_comisiones(desde: str, hasta: str, sucursal_id: int | None = None,
+                             usuario_id: int | None = None, db=Depends(get_db),
+                             usuario=Depends(requiere_rol("admin"))):
+    return servicios.resumen_comisiones(db, _fecha(desde), _fecha(hasta), sucursal_id, usuario_id)
+
+
+@app.get("/comisiones/liquidaciones")
+def panel_liquidaciones(sucursal_id: int | None = None, usuario_id: int | None = None,
+                        db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+    return servicios.listar_liquidaciones(db, sucursal_id, usuario_id)
+
+
+@app.post("/comisiones/liquidaciones", status_code=201)
+def panel_registrar_liquidacion(datos: LiquidacionIn, db=Depends(get_db),
+                                usuario=Depends(requiere_rol("admin"))):
+    return servicios.registrar_liquidacion(
+        db, usuario, datos.usuario_id, _fecha(datos.desde), _fecha(datos.hasta), datos.operacion_id,
+    )
+
+
+@app.post("/comisiones/liquidaciones/{liquidacion_id}/pagar")
+def panel_pagar_liquidacion(liquidacion_id: int, db=Depends(get_db),
+                            usuario=Depends(requiere_rol("admin"))):
+    return servicios.pagar_liquidacion(db, usuario, liquidacion_id)
 
 
 class JugadaIn(BaseModel):

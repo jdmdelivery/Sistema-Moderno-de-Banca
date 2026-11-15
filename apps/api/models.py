@@ -154,6 +154,22 @@ class LimiteVenta(Base):
     monto_max_acumulado = Column(DINERO, nullable=False)
 
 
+class LimiteCajera(Base):
+    """Tope de una cajera. sorteo_id 0 = todas las loterías. clave * = cada número por separado."""
+
+    __tablename__ = "limites_cajera"
+    __table_args__ = (
+        UniqueConstraint("usuario_id", "sorteo_id", "tipo_jugada_id", "clave_numero", name="uq_limite_cajera"),
+    )
+    id = Column(Integer, primary_key=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    sucursal_id = Column(Integer, ForeignKey("sucursales.id"), nullable=False, index=True)
+    sorteo_id = Column(Integer, nullable=False, default=0)
+    tipo_jugada_id = Column(Integer, ForeignKey("tipos_jugada.id"), nullable=False)
+    clave_numero = Column(String(12), nullable=False)
+    monto_max_acumulado = Column(DINERO, nullable=False)
+
+
 class MovimientoSaldo(Base):
     __tablename__ = "movimientos_saldo"
     id = Column(Integer, primary_key=True)
@@ -367,3 +383,64 @@ class Auditoria(Base):
     terminal_id = Column(Integer, ForeignKey("terminales.id"))
     detalle_json = Column(Text, nullable=False, default="{}")
     creado_en = Column(DateTime, nullable=False, default=ahora_local, index=True)
+
+
+class FondoAsignado(Base):
+    """Fondo que un administrador entrega a una cajera. No es una venta.
+
+    aporte_prueba suma solo el cajón de prueba y no toca la caja general.
+    transferencia_general sale de la caja de la sucursal y entra en el cajón real.
+    """
+
+    __tablename__ = "fondos_asignados"
+    id = Column(Integer, primary_key=True)
+    operacion_id = Column(String(40), nullable=False, unique=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    sucursal_id = Column(Integer, ForeignKey("sucursales.id"), nullable=False, index=True)
+    autorizado_por = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    tipo = Column(String(30), nullable=False)
+    monto = Column(DINERO, nullable=False)
+    motivo = Column(String(200))
+    saldo_cajera_resultante = Column(DINERO, nullable=False)
+    saldo_general_resultante = Column(DINERO, nullable=False)
+    creado_en = Column(DateTime, nullable=False, default=ahora_local, index=True)
+
+
+class ComisionCajera(Base):
+    """Porcentaje de una cajera a partir de una fecha. No reescribe los anteriores."""
+
+    __tablename__ = "comisiones_cajera"
+    id = Column(Integer, primary_key=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    sucursal_id = Column(Integer, ForeignKey("sucursales.id"), nullable=False, index=True)
+    porcentaje = Column(Numeric(6, 2), nullable=False)
+    porcentaje_anterior = Column(Numeric(6, 2))
+    vigente_desde = Column(DateTime, nullable=False, index=True)
+    autorizado_por = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    creado_en = Column(DateTime, nullable=False, default=ahora_local)
+
+
+class LiquidacionComision(Base):
+    """Cierre de una quincena. Marcarla pagada no mueve ninguna caja."""
+
+    __tablename__ = "liquidaciones_comision"
+    __table_args__ = (
+        UniqueConstraint("usuario_id", "desde", "hasta", name="uq_liquidacion_periodo"),
+    )
+    id = Column(Integer, primary_key=True)
+    operacion_id = Column(String(40), nullable=False, unique=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    sucursal_id = Column(Integer, ForeignKey("sucursales.id"), nullable=False, index=True)
+    desde = Column(Date, nullable=False)
+    hasta = Column(Date, nullable=False)
+    ventas_reales = Column(DINERO, nullable=False, default=0)
+    comision_real = Column(DINERO, nullable=False, default=0)
+    ventas_prueba = Column(DINERO, nullable=False, default=0)
+    comision_prueba = Column(DINERO, nullable=False, default=0)
+    importe = Column(DINERO, nullable=False, default=0)
+    es_prueba = Column(Boolean, nullable=False, default=False)
+    estado = Column(String(20), nullable=False, default="pendiente")
+    detalle = Column(Text, nullable=False, default="")
+    pagada_en = Column(DateTime)
+    pagada_por = Column(Integer, ForeignKey("usuarios.id"))
+    creado_en = Column(DateTime, nullable=False, default=ahora_local)

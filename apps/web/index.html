@@ -39,6 +39,8 @@
   <button class="navbtn" data-sec="tickets">Tickets</button>
   <button class="navbtn" data-sec="caja">Caja y Cuadre</button>
   <button class="navbtn" data-sec="entregas">Entregas</button>
+  <button class="navbtn" data-sec="fondos">Asignar fondo</button>
+  <button class="navbtn" data-sec="comisiones">Comisiones</button>
   <button class="navbtn" data-sec="reportes">Reportes</button>
   <button class="navbtn" data-sec="auditoria">Auditoría</button>
 </nav>
@@ -153,19 +155,35 @@
 </section>
 
 <section id="sec-limites" class="seccion">
-  <h2>Límites de venta por número</h2>
-  <div id="lim-tabla"></div>
-  <h3>Crear / actualizar límite</h3>
+  <h2>Límites por cajera</h2>
+  <p class="nota">Cada número y cada palé tienen su propio máximo del día. El límite general, si existe, sigue aplicando cuando es más bajo.</p>
+  <h3>Elegir cajera</h3>
   <div class="form">
-    <label>Sorteo<select id="lim-sorteo"></select></label>
-    <label>Tipo<select id="lim-tipo"></select></label>
-    <label>Número(s)<input id="lim-numeros" placeholder="26 o 26-58"></label>
-    <label>Monto máximo acumulado $<input id="lim-monto" type="number" step="0.01"></label>
-    <button id="btn-lim-guardar" class="btn primario">GUARDAR LÍMITE</button>
-    <button id="btn-lim-todas" class="btn">APLICAR PARA TODAS</button>
-    <label><input id="lim-reemplazar" type="checkbox"> Reemplazar límites individuales existentes</label>
+    <label>Sucursal<select id="lim-sucursal"></select></label>
+    <label>Cajera<select id="lim-cajera"></select></label>
+  </div>
+  <h3>Límites de quiniela</h3>
+  <div class="form">
+    <label>Lotería<select id="lim-qn-loteria"></select></label>
+    <label>Número<select id="lim-qn-numero"></select></label>
+    <label>Máximo por número RD$<input id="lim-qn-monto" type="number" min="0.01" step="0.01" placeholder="500"></label>
+    <button id="btn-lim-qn" class="btn primario">GUARDAR QUINIELA</button>
+  </div>
+  <h3>Límites de palé</h3>
+  <div class="form">
+    <label>Lotería<select id="lim-pl-loteria"></select></label>
+    <label>Combinación<select id="lim-pl-modo">
+      <option value="*">Cualquier palé</option>
+      <option value="uno">Una combinación</option>
+    </select></label>
+    <label>Primero<select id="lim-pl-a"></select></label>
+    <label>Segundo<select id="lim-pl-b"></select></label>
+    <label>Máximo por palé RD$<input id="lim-pl-monto" type="number" min="0.01" step="0.01" placeholder="50"></label>
+    <button id="btn-lim-pl" class="btn primario">GUARDAR PALÉ</button>
     <p id="lim-msg" class="msg"></p>
   </div>
+  <h3>Límites guardados</h3>
+  <div id="lim-tabla"></div>
 </section>
 
 <section id="sec-resultados" class="seccion">
@@ -253,6 +271,51 @@
   <div id="ent-reales"></div>
   <h3>PRUEBA — NO OFICIAL</h3>
   <div id="ent-prueba"></div>
+</section>
+
+<section id="sec-fondos" class="seccion">
+  <h2>Asignar fondo a cajera</h2>
+  <p class="nota">Solo el administrador. El aporte de prueba entra en MI CAJA y no toca la caja general. La transferencia sale de la caja general y entra en la caja real de esa cajera. Ninguno de los dos es una venta ni se suma otra vez al consolidado.</p>
+  <div class="form">
+    <label>Sucursal<select id="fon-sucursal"></select></label>
+    <label>Cajera<select id="fon-cajera"></select></label>
+    <p id="fon-caja" class="nota">Seleccione una cajera para ver MI CAJA.</p>
+    <label>Tipo<select id="fon-tipo">
+      <option value="aporte_prueba">Aporte de prueba (no sale de la caja general)</option>
+      <option value="transferencia_general">Transferencia desde la caja general</option>
+    </select></label>
+    <label>Monto $<input id="fon-monto" type="number" min="0.01" step="0.01"></label>
+    <label>Motivo<input id="fon-motivo" placeholder="Opcional"></label>
+    <button id="btn-fondo" class="btn primario">ASIGNAR FONDO</button>
+    <p id="fon-msg" class="msg"></p>
+  </div>
+  <h3>Fondos asignados</h3>
+  <div id="fon-tabla"></div>
+</section>
+
+<section id="sec-comisiones" class="seccion">
+  <h2>Comisiones de cajeras</h2>
+  <p class="nota">El porcentaje es de cada cajera y vale para las ventas hechas desde el momento en que se guarda. No cambia las ventas anteriores ni se descuenta de MI CAJA.</p>
+  <div class="form">
+    <label>Sucursal<select id="com-sucursal"></select></label>
+    <label>Cajera<select id="com-cajera"></select></label>
+    <label>Porcentaje %<input id="com-porcentaje" type="number" min="0" max="100" step="0.01"></label>
+    <button id="btn-comision" class="btn primario">GUARDAR PORCENTAJE</button>
+    <p id="com-msg" class="msg"></p>
+  </div>
+  <h3>Historial de porcentajes</h3>
+  <div id="com-historial"></div>
+  <h3>Resumen del período</h3>
+  <div class="form">
+    <label>Desde<input id="com-desde" type="date"></label>
+    <label>Hasta<input id="com-hasta" type="date"></label>
+    <button id="btn-com-ver" class="btn">VER COMISIONES</button>
+    <button id="btn-com-liquidar" class="btn primario">REGISTRAR LIQUIDACIÓN</button>
+    <p id="com-res-msg" class="msg"></p>
+  </div>
+  <div id="com-resumen"></div>
+  <h3>Liquidaciones</h3>
+  <div id="com-liquidaciones"></div>
 </section>
 
 <section id="sec-reportes" class="seccion">

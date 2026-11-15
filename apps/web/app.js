@@ -60,6 +60,7 @@ async function entrar() {
     localStorage.setItem("lot_token", TOKEN);
     $("#login").style.display = "none";
     $("#yo-nombre").textContent = `${YO.nombre} (${YO.rol})`;
+    mostrarFondo(YO.rol === "admin");
     await cargarCatalogos();
     ir("inicio");
   } catch (e) { msg("#login-msg", e.message, false); }
@@ -76,6 +77,7 @@ async function restaurarSesion() {
     YO = await api("/auth/yo");
     $("#login").style.display = "none";
     $("#yo-nombre").textContent = `${YO.nombre} (${YO.rol})`;
+    mostrarFondo(YO.rol === "admin");
     await cargarCatalogos();
     ir("inicio");
   } catch { TOKEN = ""; localStorage.removeItem("lot_token"); }
@@ -95,7 +97,8 @@ function ir(sec) {
     usuarios: cargarUsuarios, sorteos: cargarSorteos, tabla: cargarTabla,
     limites: cargarLimites, resultados: cargarResultados, tickets: async () => {},
     fuente: cargarFuente, ganadores: cargarGanadores,
-    caja: cargarCaja, entregas: cargarEntregas, reportes: cargarReportes, auditoria: async () => {},
+    caja: cargarCaja, entregas: cargarEntregas, fondos: cargarFondos, comisiones: cargarComisiones,
+    reportes: cargarReportes, auditoria: async () => {},
   }[sec];
   if (cargar) cargar().catch((e) => console.error(e));
 }
@@ -119,11 +122,15 @@ async function cargarCatalogos() {
   if (ganSorteo) ganSorteo.innerHTML = opciones(SORTEOS, (s) => s.id, (s) => s.nombre, '<option value="">Todas</option>');
   const ganSucursal = document.querySelector("#gan-sucursal");
   if (ganSucursal) ganSucursal.innerHTML = suc('<option value="">Todas</option>');
-  $("#lim-sorteo").innerHTML = sor;
+  const limLoteria = document.querySelector("#lim-qn-loteria");
+  if (limLoteria) {
+    const todas = opciones(SORTEOS, (s) => s.id, (s) => s.nombre, '<option value="0">TODAS LAS LOTERÍAS</option>');
+    limLoteria.innerHTML = todas;
+    $("#lim-pl-loteria").innerHTML = todas;
+  }
   $("#res-sorteo").innerHTML = sor;
   const tip = opciones(TIPOS, (t) => t.codigo, (t) => `${t.codigo} — ${t.nombre}`);
   $("#tab-tipo").innerHTML = tip;
-  $("#lim-tipo").innerHTML = tip;
   $("#caj-terminal").innerHTML = opciones(
     TERMINALES, (t) => t.id, (t) => `${t.sucursal} · Terminal ${t.numero_terminal}`, '<option value="">— Todas / ninguna —</option>');
   actualizarClavesTabla();
@@ -312,47 +319,94 @@ async function guardarFactor() {
 }
 
 /* ------------------------------------------------------------------ límites */
+let LIMITE_CAJERAS = [];
+let LIMITE_EDICION = null;
+function numeros00a99(extra) {
+  let html = extra || "";
+  for (let n = 0; n < 100; n++) html += `<option value="${String(n).padStart(2, "0")}">${String(n).padStart(2, "0")}</option>`;
+  return html;
+}
 async function cargarLimites() {
-  const filas = await api("/limites");
-  tabla("#lim-tabla", ["Sorteo", "Tipo", "Número", "Máximo acumulado", "Acciones"],
-    filas.map((l) => `<tr><td>${esc(l.sorteo)}</td><td>${esc(l.tipo)}</td><td>${esc(l.clave_numero)}</td>
-      <td>${fmt(l.monto_max_acumulado)}</td>
-      <td><button class="btn fila" onclick="borrarLimite(${l.id})">Eliminar</button></td></tr>`));
+  if (!$("#lim-qn-numero").options.length) {
+    $("#lim-qn-numero").innerHTML = numeros00a99('<option value="*">TODOS LOS NÚMEROS</option>');
+    $("#lim-pl-a").innerHTML = numeros00a99();
+    $("#lim-pl-b").innerHTML = numeros00a99();
+  }
+  const elegido = $("#lim-sucursal").value;
+  $("#lim-sucursal").innerHTML = opciones(SUCURSALES, (s) => s.id, (s) => `${s.codigo} — ${s.nombre}`);
+  if (elegido) $("#lim-sucursal").value = elegido;
+  LIMITE_CAJERAS = (await api("/usuarios")).filter((u) => u.rol === "operador");
+  pintarCajerasLimite();
+  await pintarLimites();
 }
-async function guardarLimite() {
-  try {
-    await post("/limites", {
-      sorteo_id: parseInt($("#lim-sorteo").value), tipo: $("#lim-tipo").value,
-      numeros: $("#lim-numeros").value.trim(), monto_max_acumulado: parseFloat($("#lim-monto").value || 0),
-    });
-    msg("#lim-msg", "Límite guardado ✔"); await cargarLimites();
-  } catch (e) { msg("#lim-msg", e.message, false); }
+function pintarCajerasLimite() {
+  const lista = LIMITE_CAJERAS.filter((u) => String(u.sucursal_id) === String($("#lim-sucursal").value));
+  const elegido = $("#lim-cajera").value;
+  $("#lim-cajera").innerHTML = lista.length
+    ? opciones(lista, (u) => u.id, (u) => `${u.nombre} (${u.usuario})`)
+    : '<option value="">No hay cajeras en esta sucursal</option>';
+  if (elegido) $("#lim-cajera").value = elegido;
 }
-async function borrarLimite(id) {
+async function pintarLimites() {
+  const suc = $("#lim-sucursal").value;
+  const cajera = $("#lim-cajera").value;
+  const q = new URLSearchParams();
+  if (suc) q.set("sucursal_id", suc);
+  if (cajera) q.set("usuario_id", cajera);
+  const filas = await api("/limites-cajera?" + q.toString());
+  tabla("#lim-tabla", ["Cajera", "Tipo", "Lotería", "Número", "Máximo del día", "Acciones"],
+    filas.map((l) => `<tr><td>${esc(l.cajera)}</td><td>${esc(l.tipo)}</td><td>${esc(l.sorteo)}</td>
+      <td>${esc(l.numero)}</td><td>${fmt(l.monto_max_acumulado)}</td>
+      <td><button class="btn fila" data-editar-limite="${l.id}">Editar</button>
+      <button class="btn fila" data-borrar-limite="${l.id}">Eliminar</button></td></tr>`));
+  filas.forEach((l) => { window["limite" + l.id] = l; });
+  document.querySelectorAll("[data-editar-limite]").forEach((b) => b.addEventListener("click", () => editarLimite(window["limite" + b.dataset.editarLimite])));
+  document.querySelectorAll("[data-borrar-limite]").forEach((b) => b.addEventListener("click", () => borrarLimiteCajera(b.dataset.borrarLimite)));
+}
+function editarLimite(l) {
+  LIMITE_EDICION = l.id;
+  $("#lim-cajera").value = String(l.usuario_id);
+  if (l.tipo === "PL") {
+    $("#lim-pl-loteria").value = String(l.sorteo_id);
+    $("#lim-pl-monto").value = l.monto_max_acumulado;
+    if (l.clave_numero === "*") $("#lim-pl-modo").value = "*";
+    else {
+      $("#lim-pl-modo").value = "uno";
+      const partes = l.clave_numero.split("-");
+      $("#lim-pl-a").value = partes[0];
+      $("#lim-pl-b").value = partes[1] || partes[0];
+    }
+  } else {
+    $("#lim-qn-loteria").value = String(l.sorteo_id);
+    $("#lim-qn-numero").value = l.clave_numero;
+    $("#lim-qn-monto").value = l.monto_max_acumulado;
+  }
+  msg("#lim-msg", "Editando el límite. Guarde para reemplazarlo.", true);
+}
+async function guardarLimiteCajera(tipo) {
+  const cajera = $("#lim-cajera").value;
+  if (!cajera) throw new Error("Seleccione una cajera");
+  const cuerpo = { usuario_id: Number(cajera), tipo, id: LIMITE_EDICION };
+  if (tipo === "QN") {
+    cuerpo.sorteo_id = Number($("#lim-qn-loteria").value);
+    cuerpo.numeros = $("#lim-qn-numero").value;
+    cuerpo.monto_max_acumulado = Number($("#lim-qn-monto").value);
+  } else {
+    cuerpo.sorteo_id = Number($("#lim-pl-loteria").value);
+    cuerpo.numeros = $("#lim-pl-modo").value === "*" ? "*" : `${$("#lim-pl-a").value}-${$("#lim-pl-b").value}`;
+    cuerpo.monto_max_acumulado = Number($("#lim-pl-monto").value);
+  }
+  if (!cuerpo.monto_max_acumulado || cuerpo.monto_max_acumulado <= 0) throw new Error("Indique el monto máximo");
+  await post("/limites-cajera", cuerpo);
+  LIMITE_EDICION = null;
+  msg("#lim-msg", "Límite guardado. Cada número o palé conserva su propio máximo.", true);
+  await pintarLimites();
+}
+async function borrarLimiteCajera(id) {
   if (!confirm("¿Eliminar este límite?")) return;
-  await del(`/limites/${id}`); await cargarLimites();
-}
-async function aplicarLimiteTodas() {
-  const cuerpo = {
-    tipo: $("#lim-tipo").value,
-    numeros: $("#lim-numeros").value.trim(),
-    monto_max_acumulado: parseFloat($("#lim-monto").value || 0),
-    reemplazar: $("#lim-reemplazar").checked,
-    aplicar: false,
-  };
-  try {
-    const vista = await post("/limites/aplicar-todas", cuerpo);
-    const reemplazo = cuerpo.reemplazar
-      ? `Se reemplazarán ${vista.actualizados} límites individuales ya existentes.`
-      : `Se conservarán ${vista.omitidos} límites individuales ya existentes.`;
-    const pregunta = `Este límite se revisará en ${vista.sorteos} sorteos, abiertos y cerrados.\n` +
-      `Nuevos: ${vista.creados}. ${reemplazo}\n¿Confirma la operación?`;
-    if (!confirm(pregunta)) return;
-    if (cuerpo.reemplazar && !confirm("Autoriza reemplazar los límites individuales de este número en todos los sorteos.")) return;
-    const hecho = await post("/limites/aplicar-todas", { ...cuerpo, aplicar: true });
-    msg("#lim-msg", `Listo ✔ Creados ${hecho.creados}, actualizados ${hecho.actualizados}, omitidos ${hecho.omitidos}.`);
-    await cargarLimites();
-  } catch (e) { msg("#lim-msg", e.message, false); }
+  await del(`/limites-cajera/${id}`);
+  if (LIMITE_EDICION === Number(id)) LIMITE_EDICION = null;
+  await pintarLimites();
 }
 
 /* --------------------------------------------------------------- resultados */
@@ -554,6 +608,188 @@ async function recibirEntrega(id) {
   } catch (e) { msg("#ent-msg", e.message, false); }
 }
 
+/* ---------------------------------------------------- asignar fondo a cajera */
+let FONDO_CAJERAS = [];
+let FONDO_OPERACION = "";
+
+function mostrarFondo(visible) {
+  for (const sec of ["fondos", "comisiones"]) {
+    const boton = document.querySelector(`.navbtn[data-sec="${sec}"]`);
+    if (boton) boton.hidden = !visible;
+  }
+}
+function nuevaOperacionFondo() {
+  FONDO_OPERACION = ("fondo-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)).slice(0, 40);
+}
+async function cargarFondos() {
+  if (!FONDO_OPERACION) nuevaOperacionFondo();
+  const suc = opciones(SUCURSALES, (s) => s.id, (s) => `${s.codigo} — ${s.nombre}`);
+  const elegido = $("#fon-sucursal").value;
+  $("#fon-sucursal").innerHTML = suc;
+  if (elegido) $("#fon-sucursal").value = elegido;
+  FONDO_CAJERAS = (await api("/usuarios")).filter((u) => u.rol === "operador");
+  pintarCajerasFondo();
+  await pintarHistorialFondos();
+}
+function pintarCajerasFondo() {
+  const sucursal = $("#fon-sucursal").value;
+  const lista = FONDO_CAJERAS.filter((u) => String(u.sucursal_id) === String(sucursal));
+  const elegido = $("#fon-cajera").value;
+  $("#fon-cajera").innerHTML = lista.length
+    ? opciones(lista, (u) => u.id, (u) => `${u.nombre} (${u.usuario})`)
+    : '<option value="">No hay cajeras en esta sucursal</option>';
+  if (elegido) $("#fon-cajera").value = elegido;
+  pintarCajaFondo();
+}
+function pintarCajaFondo() {
+  const cajera = FONDO_CAJERAS.find((u) => String(u.id) === $("#fon-cajera").value);
+  const sucursal = SUCURSALES.find((s) => String(s.id) === $("#fon-sucursal").value);
+  if (!cajera) {
+    $("#fon-caja").textContent = "Seleccione una cajera para ver MI CAJA.";
+    return;
+  }
+  const miCaja = window.MODO_DESARROLLO ? cajera.saldo_caja_prueba : cajera.saldo_caja;
+  const general = sucursal ? sucursal.saldo_actual : "0";
+  $("#fon-caja").textContent =
+    `MI CAJA: ${fmt(miCaja)} · Caja real: ${fmt(cajera.saldo_caja)} · Caja de prueba: ${fmt(cajera.saldo_caja_prueba)} · Caja general: ${fmt(general)}`;
+}
+async function asignarFondo() {
+  const boton = $("#btn-fondo");
+  if (boton.disabled) return;
+  const cajera = $("#fon-cajera").value;
+  const monto = $("#fon-monto").value;
+  if (!cajera) throw new Error("Seleccione una cajera");
+  if (!monto || Number(monto) <= 0) throw new Error("El fondo debe ser mayor que cero");
+  boton.disabled = true;
+  try {
+    const r = await post("/fondos", {
+      sucursal_id: Number($("#fon-sucursal").value),
+      usuario_id: Number(cajera),
+      monto: Number(monto),
+      tipo: $("#fon-tipo").value,
+      operacion_id: FONDO_OPERACION,
+      motivo: $("#fon-motivo").value.trim() || null,
+    });
+    nuevaOperacionFondo();
+    $("#fon-monto").value = "";
+    msg("#fon-msg", `${r.etiqueta}: ${r.origen} de ${fmt(r.monto)}. MI CAJA queda en ${fmt(r.mi_caja)}.`, true);
+    await cargarCatalogos();
+    await cargarFondos();
+  } finally {
+    boton.disabled = false;
+  }
+}
+async function pintarHistorialFondos() {
+  const suc = $("#fon-sucursal").value;
+  const filas = await api(`/fondos${suc ? `?sucursal_id=${suc}` : ""}`);
+  tabla("#fon-tabla",
+    ["Fecha y hora", "Cajera", "Sucursal", "Origen", "Monto", "Motivo", "Administrador", "Operación", "Cajón resultante", "Caja general"],
+    filas.map((f) => `<tr><td>${esc(f.creado_en)}</td><td>${esc(f.cajera)}</td><td>${esc(f.sucursal)}</td>
+      <td>${esc(f.etiqueta)} — ${esc(f.origen)}</td><td>${fmt(f.monto)}</td><td>${esc(f.motivo || "—")}</td>
+      <td>${esc(f.administrador)}</td><td>${esc(f.operacion_id)}</td>
+      <td>${fmt(f.saldo_cajera_resultante)}</td><td>${fmt(f.saldo_general_resultante)}</td></tr>`));
+}
+
+/* --------------------------------------------------------- comisiones */
+let COMISION_CAJERAS = [];
+let COMISION_OPERACION = "";
+async function cargarComisiones() {
+  if (!COMISION_OPERACION) {
+    COMISION_OPERACION = ("liq-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)).slice(0, 40);
+  }
+  const hoy = hoyISO();
+  if (!$("#com-desde").value) { $("#com-desde").value = hoy; $("#com-hasta").value = hoy; }
+  const elegido = $("#com-sucursal").value;
+  $("#com-sucursal").innerHTML = opciones(SUCURSALES, (s) => s.id, (s) => `${s.codigo} — ${s.nombre}`);
+  if (elegido) $("#com-sucursal").value = elegido;
+  COMISION_CAJERAS = (await api("/usuarios")).filter((u) => u.rol === "operador");
+  pintarCajerasComision();
+  await pintarHistorialComision();
+  await pintarLiquidaciones();
+}
+function pintarCajerasComision() {
+  const sucursal = $("#com-sucursal").value;
+  const lista = COMISION_CAJERAS.filter((u) => String(u.sucursal_id) === String(sucursal));
+  const elegido = $("#com-cajera").value;
+  $("#com-cajera").innerHTML = lista.length
+    ? opciones(lista, (u) => u.id, (u) => `${u.nombre} (${u.usuario})`)
+    : '<option value="">No hay cajeras en esta sucursal</option>';
+  if (elegido) $("#com-cajera").value = elegido;
+}
+async function guardarComision() {
+  const cajera = $("#com-cajera").value;
+  const porcentaje = $("#com-porcentaje").value;
+  if (!cajera) throw new Error("Seleccione una cajera");
+  if (porcentaje === "" || Number(porcentaje) < 0 || Number(porcentaje) > 100) {
+    throw new Error("El porcentaje debe estar entre 0 y 100");
+  }
+  const r = await post("/comisiones", { usuario_id: Number(cajera), porcentaje: Number(porcentaje) });
+  msg("#com-msg", `Porcentaje de ${r.cajera}: ${r.porcentaje}%`, true);
+  await pintarHistorialComision();
+}
+async function pintarHistorialComision() {
+  const suc = $("#com-sucursal").value;
+  const filas = await api(`/comisiones${suc ? `?sucursal_id=${suc}` : ""}`);
+  tabla("#com-historial",
+    ["Fecha y hora", "Cajera", "Anterior", "Nuevo", "Vigente desde", "Administrador"],
+    filas.map((f) => `<tr><td>${esc(f.creado_en)}</td><td>${esc(f.cajera)}</td>
+      <td>${f.porcentaje_anterior == null ? "—" : esc(f.porcentaje_anterior) + "%"}</td>
+      <td>${esc(f.porcentaje)}%</td><td>${esc(f.vigente_desde)}</td><td>${esc(f.administrador)}</td></tr>`));
+}
+function bloqueComision(bloque) {
+  if (!bloque) return "—";
+  const partes = (bloque.desglose || []).map((d) => `${d.porcentaje}% sobre ${fmt(d.ventas)} = ${fmt(d.comision)}`);
+  return `Ventas ${fmt(bloque.ventas_validas)} · Comisión ${fmt(bloque.comision)}` +
+    (partes.length > 1 ? ` · ${partes.join(" · ")}` : "");
+}
+async function verComisiones() {
+  const suc = $("#com-sucursal").value;
+  const cajera = $("#com-cajera").value;
+  const q = new URLSearchParams({ desde: $("#com-desde").value, hasta: $("#com-hasta").value });
+  if (suc) q.set("sucursal_id", suc);
+  if (cajera) q.set("usuario_id", cajera);
+  const datos = await api("/comisiones/resumen?" + q.toString());
+  tabla("#com-resumen",
+    ["Cajera", "Sucursal", "Porcentaje actual", "Ventas y comisión", "Prueba", "Liquidación"],
+    datos.cajeras.map((c) => `<tr><td>${esc(c.cajera)}</td><td>${esc(c.sucursal)}</td>
+      <td>${esc(c.porcentaje_actual)}%</td><td>${esc(bloqueComision(c.real))}</td>
+      <td>${esc(bloqueComision(c.prueba))}</td>
+      <td>${c.liquidacion ? esc(c.liquidacion.estado.toUpperCase()) + " " + fmt(c.liquidacion.importe) : "—"}</td></tr>`));
+  msg("#com-res-msg", "Comisiones del período listas", true);
+}
+async function liquidarComision() {
+  const cajera = $("#com-cajera").value;
+  if (!cajera) throw new Error("Seleccione una cajera");
+  const r = await post("/comisiones/liquidaciones", {
+    usuario_id: Number(cajera),
+    desde: $("#com-desde").value,
+    hasta: $("#com-hasta").value,
+    operacion_id: COMISION_OPERACION,
+  });
+  COMISION_OPERACION = ("liq-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)).slice(0, 40);
+  msg("#com-res-msg", `Liquidación ${r.estado.toUpperCase()} por ${fmt(r.importe)}. No se descontó ninguna caja.`, true);
+  await pintarLiquidaciones();
+  await verComisiones();
+}
+async function pintarLiquidaciones() {
+  const suc = $("#com-sucursal").value;
+  const filas = await api(`/comisiones/liquidaciones${suc ? `?sucursal_id=${suc}` : ""}`);
+  tabla("#com-liquidaciones",
+    ["Período", "Cajera", "Importe", "Estado", "Responsable", "Fecha de pago", ""],
+    filas.map((f) => `<tr><td>${esc(f.desde)} a ${esc(f.hasta)}</td><td>${esc(f.cajera)}</td>
+      <td>${fmt(f.importe)}</td><td>${esc(f.estado.toUpperCase())}</td><td>${esc(f.responsable || "—")}</td>
+      <td>${esc(f.pagada_en || "—")}</td>
+      <td>${f.estado === "pendiente" ? `<button class="btn fila" data-pagar-comision="${f.id}">MARCAR PAGADA</button>` : ""}</td></tr>`));
+  document.querySelectorAll("[data-pagar-comision]").forEach((boton) => {
+    boton.addEventListener("click", () => pagarComision(boton.dataset.pagarComision));
+  });
+}
+async function pagarComision(id) {
+  const r = await post(`/comisiones/liquidaciones/${id}/pagar`, {});
+  msg("#com-res-msg", `Comisión PAGADA por ${fmt(r.importe)}. MI CAJA y la caja general no cambiaron.`, true);
+  await pintarLiquidaciones();
+}
+
 /* ----------------------------------------------------------------- reportes */
 async function cargarReportes() {
   const hoy = hoyISO();
@@ -649,6 +885,7 @@ async function marcarDesarrollo() {
     if (salud.loterias_abiertas_desarrollo) {
       lineas.push("MODO DESARROLLO — LOTERÍAS ABIERTAS 24 HORAS");
     }
+    window.MODO_DESARROLLO = !!salud.modo_desarrollo;
     if (salud.modo_desarrollo) {
       lineas.push("MODO DESARROLLO — DATOS DE PRUEBA");
     }
@@ -678,8 +915,10 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-sor-limpiar").addEventListener("click", limpiarSorteo);
   $("#tab-tipo").addEventListener("change", actualizarClavesTabla);
   $("#btn-tab-guardar").addEventListener("click", guardarFactor);
-  $("#btn-lim-guardar").addEventListener("click", guardarLimite);
-  $("#btn-lim-todas").addEventListener("click", () => aplicarLimiteTodas().catch((e) => msg("#lim-msg", e.message, false)));
+  $("#lim-sucursal").addEventListener("change", () => { pintarCajerasLimite(); pintarLimites().catch(() => {}); });
+  $("#lim-cajera").addEventListener("change", () => pintarLimites().catch(() => {}));
+  $("#btn-lim-qn").addEventListener("click", () => guardarLimiteCajera("QN").catch((e) => msg("#lim-msg", e.message, false)));
+  $("#btn-lim-pl").addEventListener("click", () => guardarLimiteCajera("PL").catch((e) => msg("#lim-msg", e.message, false)));
   $("#btn-res-buscar").addEventListener("click", () => buscarResultado().catch((e) => msg("#res-msg", e.message, false)));
   $("#btn-res-guardar").addEventListener("click", guardarResultado);
   $("#btn-res-confirmar").addEventListener("click", confirmarResultado);
@@ -694,6 +933,13 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-caj-listar").addEventListener("click", () => listarCaja().catch((e) => msg("#caj-msg", e.message, false)));
   $("#btn-caj-cuadre").addEventListener("click", entregarCuadre);
   $("#btn-ent-ver").addEventListener("click", () => cargarEntregas().catch((e) => msg("#ent-msg", e.message, false)));
+  $("#fon-sucursal").addEventListener("change", pintarCajerasFondo);
+  $("#fon-cajera").addEventListener("change", pintarCajaFondo);
+  $("#btn-fondo").addEventListener("click", () => asignarFondo().catch((e) => msg("#fon-msg", e.message, false)));
+  $("#com-sucursal").addEventListener("change", pintarCajerasComision);
+  $("#btn-comision").addEventListener("click", () => guardarComision().catch((e) => msg("#com-msg", e.message, false)));
+  $("#btn-com-ver").addEventListener("click", () => verComisiones().catch((e) => msg("#com-res-msg", e.message, false)));
+  $("#btn-com-liquidar").addEventListener("click", () => liquidarComision().catch((e) => msg("#com-res-msg", e.message, false)));
   $("#caj-sucursal").addEventListener("change", () => { cargarCuadres().catch(() => {}); });
   $("#btn-rep-ver").addEventListener("click", verResumen);
   $("#btn-ven-ver").addEventListener("click", verVentas);
