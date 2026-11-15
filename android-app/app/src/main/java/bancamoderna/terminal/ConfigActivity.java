@@ -13,12 +13,13 @@ import android.widget.TextView;
 import org.json.JSONObject;
 
 /**
- * Activación de la terminal (una sola vez): URL del servidor, serial
- * SUNMI de este equipo y token que el consorcio emite en el panel
- * (Panel → Terminales → crear/reactivar: el token se muestra una vez).
+ * Configuración: SOLO la URL del servidor. Ya no hay activación ni token
+ * (2026-11-14): la terminal entra con el usuario y la contraseña del
+ * operador. La URL viene precargada con el servidor del consorcio y solo
+ * se toca si el consorcio cambia de servidor.
  */
 public class ConfigActivity extends Activity {
-    private EditText urlTxt, serialTxt, tokenTxt;
+    private EditText urlTxt;
     private TextView estadoTxt;
 
     @Override
@@ -28,24 +29,15 @@ public class ConfigActivity extends Activity {
         Prefs prefs = new Prefs(this);
 
         LinearLayout root = Ui.columna(this);
-        root.addView(Ui.texto(this, "Configuración de la terminal", 22, true));
+        root.addView(Ui.texto(this, "Configuración", 22, true));
         root.addView(Ui.texto(this,
-                "Estos datos los entrega el consorcio. El token se ve una "
-                        + "sola vez al crear la terminal en el panel.", 14, false));
+                "La terminal entra con su usuario y contraseña; no necesita "
+                        + "ningún código. Aquí solo se cambia el servidor si "
+                        + "el consorcio lo mueve.", 14, false));
 
         urlTxt = Ui.campo(this, "URL del servidor", InputType.TYPE_TEXT_VARIATION_URI);
         urlTxt.setText(prefs.serverUrl());
         root.addView(urlTxt);
-
-        serialTxt = Ui.campo(this, "Serial SUNMI de esta terminal",
-                InputType.TYPE_CLASS_TEXT);
-        serialTxt.setText(prefs.terminalSerial());
-        root.addView(serialTxt);
-
-        tokenTxt = Ui.campo(this, "Token de la terminal",
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        tokenTxt.setText(prefs.terminalToken());
-        root.addView(tokenTxt);
 
         estadoTxt = Ui.texto(this, "", 15, false);
         root.addView(estadoTxt);
@@ -54,16 +46,13 @@ public class ConfigActivity extends Activity {
         probar.setOnClickListener(v -> probarConexion());
         root.addView(probar);
 
-        Button guardar = Ui.boton(this, "GUARDAR Y CONTINUAR");
+        Button guardar = Ui.boton(this, "GUARDAR");
         guardar.setOnClickListener(v -> {
-            if (urlTxt.getText().toString().trim().isEmpty()
-                    || serialTxt.getText().toString().trim().isEmpty()
-                    || tokenTxt.getText().toString().trim().isEmpty()) {
-                Ui.toast(this, "Complete la URL, el serial y el token.");
+            if (urlTxt.getText().toString().trim().isEmpty()) {
+                Ui.toast(this, "Escriba la URL del servidor.");
                 return;
             }
-            prefs.guardarActivacion(urlTxt.getText().toString(),
-                    serialTxt.getText().toString(), tokenTxt.getText().toString());
+            prefs.guardarUrl(urlTxt.getText().toString());
             prefs.cerrarSesion();
             startActivity(new Intent(this, LoginActivity.class));
             finish();
@@ -78,8 +67,7 @@ public class ConfigActivity extends Activity {
     private void probarConexion() {
         Prefs prefs = new Prefs(this);
         // Se prueba con la URL escrita aunque aún no se haya guardado.
-        prefs.guardarActivacion(urlTxt.getText().toString(),
-                prefs.terminalSerial(), prefs.terminalToken());
+        prefs.guardarUrl(urlTxt.getText().toString());
         estadoTxt.setText("Probando…");
         Ui.async(() -> new ApiClient(prefs).getPublico("/health"),
                 (JSONObject r) -> estadoTxt.setText("Servidor OK: "

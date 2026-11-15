@@ -68,7 +68,7 @@ class Entorno:
         )
         assert r.status_code == 201, r.text
         datos = r.json()
-        return {"id": datos["id"], "serial": serial, "token": datos["token"], "sucursal_id": sucursal_id}
+        return {"id": datos["id"], "serial": serial, "sucursal_id": sucursal_id}
 
     def operador(self, usuario, clave, sucursal_id):
         r = self.c.post(
@@ -80,21 +80,22 @@ class Entorno:
         assert r.status_code == 201, r.text
         return r.json()
 
-    def login_terminal(self, terminal, usuario="vend1", clave="1234"):
-        headers = {"X-Terminal-Serial": terminal["serial"], "X-Terminal-Token": terminal["token"]}
-        r = self.c.post("/terminal/login", json={"usuario": usuario, "clave": clave}, headers=headers)
+    def login_terminal(self, usuario="vend1", clave="1234"):
+        # Desde 2026-11-14 la terminal entra SOLO con usuario y contraseña:
+        # sin serial, sin token de activación, sin cabeceras de terminal.
+        r = self.c.post("/terminal/login", json={"usuario": usuario, "clave": clave})
         assert r.status_code == 200, r.text
-        return {**headers, "Authorization": f"Bearer {r.json()['token']}"}
+        return {"Authorization": f"Bearer {r.json()['token']}"}
 
     def banca(self, saldo=100000, codigo="1301", nombre="BANCA CASTILLO", usuario="vend1", clave="1234"):
-        """Sucursal + terminal + operador + sesión, lista para vender."""
+        """Sucursal + operador + sesión, lista para vender (la terminal se
+        resuelve sola desde la sucursal del operador al entrar)."""
         suc = self.sucursal(codigo=codigo, nombre=nombre)
         if saldo:
             self.recargar(suc["id"], saldo)
-        ter = self.terminal(suc["id"])
         self.operador(usuario, clave, suc["id"])
-        headers = self.login_terminal(ter, usuario, clave)
-        return {"sucursal": suc, "terminal": ter, "headers": headers}
+        headers = self.login_terminal(usuario, clave)
+        return {"sucursal": suc, "headers": headers}
 
     # ---------------------------------------------------------------- venta
     def vender(self, headers, jugadas):

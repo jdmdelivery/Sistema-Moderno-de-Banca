@@ -101,7 +101,6 @@ async function cargarCatalogos() {
   const suc = (extra) => opciones(SUCURSALES, (s) => s.id, (s) => `${s.codigo} — ${s.nombre}`, extra || "");
   $("#rec-sucursal").innerHTML = suc();
   $("#mov-sucursal").innerHTML = suc();
-  $("#ter-sucursal").innerHTML = suc();
   $("#tic-sucursal").innerHTML = suc();
   $("#caj-sucursal").innerHTML = suc();
   $("#pen-sucursal").innerHTML = suc();
@@ -182,48 +181,19 @@ async function verMovimientos() {
 /* --------------------------------------------------------------- terminales */
 async function cargarTerminales() {
   await cargarCatalogos();
-  tabla("#ter-tabla", ["Sucursal", "N.º", "Serial SUNMI", "Activa", "Token", "Última conexión", "Acciones"],
+  tabla("#ter-tabla", ["Sucursal", "N.º", "Serial", "Activa", "Última conexión", "Acciones"],
     TERMINALES.map((t) => `<tr><td>${esc(t.sucursal)}</td><td>${t.numero_terminal}</td><td>${esc(t.serial_sunmi)}</td>
-      <td>${t.activa ? "Sí" : "No"}</td><td>${t.tiene_token ? "Vigente" : "Revocado"}</td>
+      <td>${t.activa ? "Sí" : "No"}</td>
       <td>${esc(t.ultima_conexion_en || "—")}</td>
-      <td><button class="btn fila" onclick="editarTerminal(${t.id})">Editar</button>
-      <button class="btn fila" onclick="revocarTerminal(${t.id})">Revocar</button>
+      <td><button class="btn fila" onclick="revocarTerminal(${t.id})">Revocar</button>
       <button class="btn fila" onclick="reactivarTerminal(${t.id})">Reactivar</button></td></tr>`));
 }
-function editarTerminal(id) {
-  const t = TERMINALES.find((x) => x.id === id); if (!t) return;
-  $("#ter-id").value = t.id; $("#ter-sucursal").value = t.sucursal_id; $("#ter-numero").value = t.numero_terminal;
-  $("#ter-serial").value = t.serial_sunmi; $("#ter-version").value = t.version_app || ""; $("#ter-activa").checked = t.activa;
-}
-function limpiarTerminal() {
-  ["#ter-id", "#ter-serial", "#ter-version"].forEach((i) => $(i).value = "");
-  $("#ter-numero").value = 1; $("#ter-activa").checked = true; $("#ter-token").style.display = "none";
-}
-function mostrarToken(token) {
-  const caja = $("#ter-token");
-  caja.style.display = "block";
-  caja.innerHTML = `🔑 <b>Token de la terminal (se muestra una sola vez, cópielo ahora):</b><br>${esc(token)}`;
-}
-async function guardarTerminal() {
-  const id = $("#ter-id").value;
-  const body = {
-    sucursal_id: parseInt($("#ter-sucursal").value), numero_terminal: parseInt($("#ter-numero").value || 1),
-    serial_sunmi: $("#ter-serial").value.trim(), version_app: $("#ter-version").value.trim() || null,
-    activa: $("#ter-activa").checked,
-  };
-  try {
-    if (id) { await put(`/terminales/${id}`, body); msg("#ter-msg", "Terminal guardada ✔"); limpiarTerminal(); }
-    else { const r = await post("/terminales", body); limpiarTerminal(); mostrarToken(r.token); msg("#ter-msg", "Terminal creada ✔ Guarde el token."); }
-    await cargarTerminales();
-  } catch (e) { msg("#ter-msg", e.message, false); }
-}
 async function revocarTerminal(id) {
-  if (!confirm("¿Revocar esta terminal? Dejará de vender de inmediato.")) return;
+  if (!confirm("¿Revocar esta terminal? Esa sucursal dejará de vender de inmediato.")) return;
   await post(`/terminales/${id}/revocar`); await cargarTerminales();
 }
 async function reactivarTerminal(id) {
-  const r = await post(`/terminales/${id}/reactivar`);
-  mostrarToken(r.token); await cargarTerminales();
+  await post(`/terminales/${id}/reactivar`); await cargarTerminales();
 }
 
 /* ----------------------------------------------------------------- usuarios */
@@ -590,8 +560,6 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-suc-limpiar").addEventListener("click", limpiarSucursal);
   $("#btn-recargar").addEventListener("click", recargarSaldo);
   $("#btn-movimientos").addEventListener("click", () => verMovimientos().catch((e) => alert(e.message)));
-  $("#btn-ter-guardar").addEventListener("click", guardarTerminal);
-  $("#btn-ter-limpiar").addEventListener("click", limpiarTerminal);
   $("#btn-usu-guardar").addEventListener("click", guardarUsuario);
   $("#btn-usu-limpiar").addEventListener("click", limpiarUsuario);
   $("#btn-sor-guardar").addEventListener("click", guardarSorteo);

@@ -12,9 +12,9 @@ import android.widget.ScrollView;
 import org.json.JSONObject;
 
 /**
- * Inicio de sesión del operador (especificación §2.1): la terminal ya
- * está activada (serial + token); el operador entra con usuario y
- * contraseña contra POST /terminal/login.
+ * Inicio de sesión del operador (especificación §2.1): entra SOLO con
+ * su usuario y contraseña contra POST /terminal/login. Sin activación
+ * ni token: el servidor resuelve su sucursal y su terminal.
  */
 public class LoginActivity extends Activity {
     private EditText usuarioTxt, claveTxt;
@@ -27,7 +27,7 @@ public class LoginActivity extends Activity {
 
         LinearLayout root = Ui.columna(this);
         root.addView(Ui.texto(this, "Sistema de Banca Moderna", 22, true));
-        root.addView(Ui.texto(this, "Terminal: " + prefs.terminalSerial(), 14, false));
+        root.addView(Ui.texto(this, "Entre con su usuario y contraseña", 14, false));
 
         usuarioTxt = Ui.campo(this, "Usuario del operador", InputType.TYPE_CLASS_TEXT);
         root.addView(usuarioTxt);
@@ -40,7 +40,7 @@ public class LoginActivity extends Activity {
         entrar.setOnClickListener(v -> entrar());
         root.addView(entrar);
 
-        Button config = Ui.boton(this, "CONFIGURACIÓN DE LA TERMINAL");
+        Button config = Ui.boton(this, "CONFIGURACIÓN");
         config.setOnClickListener(v -> {
             startActivity(new Intent(this, ConfigActivity.class));
         });

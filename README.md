@@ -61,8 +61,9 @@ tests/                 Suite pytest (venta, motor, pago, anulación, cuadre,
 
 ## Piezas clave (y cómo se probaron)
 
-- **Venta con el servidor como juez:** valida terminal (serial + token),
-  sesión de operador, cierre de cada sorteo, montos mín/máx y límites
+- **Venta con el servidor como juez:** valida la sesión del operador
+  (que entra con usuario y contraseña; su terminal se resuelve desde
+  su sucursal), cierre de cada sorteo, montos mín/máx y límites
   por número ANTES de vender. Si algo falla no hay venta ni número
   consumido. El ID es el **consecutivo global del consorcio**; el Serial
   es aleatorio de 10 caracteres; el QR de la terminal contendrá
@@ -141,9 +142,9 @@ importador empezará a proponer sin cambiar nada más.
 ## Qué falta
 
 - **Etapa 4 — Piloto en la SUNMI física:** instalar el APK, crear la
-  terminal en el panel con el serial real del equipo, pegar el token de
-  un solo uso en la app y hacer una venta de prueba (ahí se verifica la
-  impresión real y la lectura del QR impreso).
+  sucursal y el usuario del operador en el panel, entrar en la app con
+  ese usuario y contraseña y hacer una venta de prueba (ahí se
+  verifica la impresión real y la lectura del QR impreso).
 - **Base de datos definitiva** en el servidor en vivo (PostgreSQL) y
   cambio de la clave admin por la definitiva.
 - **Firma release del APK** con clave propia cuando pase a producción.

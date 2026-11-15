@@ -5,9 +5,9 @@ import android.content.SharedPreferences;
 
 /**
  * Configuración de la terminal y sesión del operador.
- * La terminal se activa UNA vez con el serial SUNMI y el token que emite
- * el panel del consorcio (Panel → Terminales). La sesión (Bearer) se
- * obtiene en el login del operador y se guarda hasta cerrar sesión.
+ * Sin activación ni token (2026-11-14): el operador entra con su usuario
+ * y contraseña, y el servidor resuelve su sucursal y su terminal. Aquí
+ * solo vive la URL del servidor y la sesión (Bearer) del login.
  */
 public class Prefs {
     public static final String URL_DEFECTO = "https://sistema-de-banca-moderna.onrender.com";
@@ -26,24 +26,8 @@ public class Prefs {
         return u;
     }
 
-    public String terminalSerial() {
-        return sp.getString("terminal_serial", "");
-    }
-
-    public String terminalToken() {
-        return sp.getString("terminal_token", "");
-    }
-
-    public boolean activada() {
-        return !terminalSerial().isEmpty() && !terminalToken().isEmpty();
-    }
-
-    public void guardarActivacion(String url, String serial, String token) {
-        sp.edit()
-                .putString("server_url", url.trim())
-                .putString("terminal_serial", serial.trim())
-                .putString("terminal_token", token.trim())
-                .apply();
+    public void guardarUrl(String url) {
+        sp.edit().putString("server_url", url.trim()).apply();
     }
 
     public String sessionToken() {

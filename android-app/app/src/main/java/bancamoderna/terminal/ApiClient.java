@@ -12,9 +12,8 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Cliente HTTP de la API de terminal del Sistema de Banca Moderna.
- * Autenticación en dos capas, como manda el servidor:
- *  - Cabeceras X-Terminal-Serial + X-Terminal-Token (la terminal activada).
- *  - Authorization: Bearer <sesión> tras el login del operador.
+ * Autenticación: Authorization: Bearer <sesión>, obtenida en el login
+ * del operador con su usuario y contraseña (sin token de terminal).
  * Los errores del servidor llegan como {"detail": "mensaje"} con su
  * código HTTP y se lanzan como ApiException para mostrarlos tal cual.
  */
@@ -43,17 +42,17 @@ public class ApiClient {
         return request("POST", path, body);
     }
 
-    /** GET público sin credenciales de terminal (solo /health). */
+    /** GET público sin sesión (solo /health). */
     public JSONObject getPublico(String path) throws ApiException {
-        return requestRaw("GET", path, null, false, false);
+        return requestRaw("GET", path, null, false);
     }
 
     private JSONObject request(String method, String path, JSONObject body) throws ApiException {
-        return requestRaw(method, path, body, true, true);
+        return requestRaw(method, path, body, true);
     }
 
     private JSONObject requestRaw(String method, String path, JSONObject body,
-                                  boolean conTerminal, boolean conSesion) throws ApiException {
+                                  boolean conSesion) throws ApiException {
         HttpURLConnection conn = null;
         try {
             URL url = new URL(prefs.serverUrl() + path);
@@ -62,10 +61,6 @@ public class ApiClient {
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(25000);
             conn.setRequestProperty("Accept", "application/json");
-            if (conTerminal && prefs.activada()) {
-                conn.setRequestProperty("X-Terminal-Serial", prefs.terminalSerial());
-                conn.setRequestProperty("X-Terminal-Token", prefs.terminalToken());
-            }
             if (conSesion && !prefs.sessionToken().isEmpty()) {
                 conn.setRequestProperty("Authorization", "Bearer " + prefs.sessionToken());
             }

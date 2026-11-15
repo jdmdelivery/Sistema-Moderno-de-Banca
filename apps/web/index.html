@@ -79,21 +79,8 @@
 
 <section id="sec-terminales" class="seccion">
   <h2>Terminales SUNMI</h2>
+  <p class="nota">Sin tokens ni activación: la terminal entra con el <b>usuario y la contraseña</b> del operador, y su sucursal aparece aquí sola la primera vez que entra. Revocar = esa sucursal deja de vender al instante, hasta reactivarla.</p>
   <div id="ter-tabla"></div>
-  <h3>Crear / editar terminal</h3>
-  <div class="form">
-    <input type="hidden" id="ter-id">
-    <label>Sucursal<select id="ter-sucursal"></select></label>
-    <label>N.º terminal<input id="ter-numero" type="number" value="1"></label>
-    <label>Serial SUNMI (S/N)<input id="ter-serial" placeholder="Ej. 4DBDDAE5C8498"></label>
-    <label>Versión app<input id="ter-version" placeholder="1.0"></label>
-    <label class="check"><input id="ter-activa" type="checkbox" checked> Activa</label>
-    <button id="btn-ter-guardar" class="btn primario">GUARDAR</button>
-    <button id="btn-ter-limpiar" class="btn">Limpiar</button>
-    <p id="ter-msg" class="msg"></p>
-  </div>
-  <div id="ter-token" class="token-box" style="display:none"></div>
-  <p class="nota">El token de una terminal nueva o reactivada se muestra <b>una sola vez</b>: cópielo en la terminal. Revocar = la terminal deja de vender al instante.</p>
 </section>
 
 <section id="sec-usuarios" class="seccion">

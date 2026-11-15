@@ -47,11 +47,10 @@ def test_consecutivo_global_entre_sucursales(entorno):
     assert (t1["id"], t2["id"]) == (1, 2)  # un solo consecutivo para el consorcio
 
 
-def test_venta_sin_token_de_terminal(entorno):
+def test_venta_sin_ninguna_sesion_rechazada(entorno):
     b = entorno.banca(saldo=500)
     s = entorno.sorteo_id("La Primera 12")
-    headers = {k: v for k, v in b["headers"].items() if k != "X-Terminal-Token"}
-    r = entorno.vender(headers, [{"tipo": "QN", "sorteos": [s], "numeros": "01", "monto": 5}])
+    r = entorno.vender({}, [{"tipo": "QN", "sorteos": [s], "numeros": "01", "monto": 5}])
     assert r.status_code == 401
 
 

@@ -77,15 +77,17 @@ def requiere_rol(*roles):
 
 
 def terminal_actual(request: Request, db=Depends(get_db)):
-    return servicios.autenticar_terminal(
-        db, request.headers.get("x-terminal-serial"), request.headers.get("x-terminal-token")
-    )
+    """La terminal sale de la SESIÓN del operador (sin serial ni token de
+    activación desde 2026-11-14: se entra con usuario y contraseña)."""
+    sesion, _ = servicios.sesion_y_usuario(db, _bearer(request), tipo="terminal")
+    terminal = db.get(Terminal, sesion.terminal_id) if sesion.terminal_id else None
+    if terminal is None or not terminal.activa:
+        raise ErrorServicio(401, "La terminal de esta sesión está revocada o no existe")
+    return terminal
 
 
-def operador_actual(request: Request, db=Depends(get_db), terminal=Depends(terminal_actual)):
-    sesion, usuario = servicios.sesion_y_usuario(db, _bearer(request), tipo="terminal")
-    if sesion.terminal_id != terminal.id:
-        raise ErrorServicio(401, "La sesión del operador no corresponde a esta terminal")
+def operador_actual(request: Request, db=Depends(get_db)):
+    _, usuario = servicios.sesion_y_usuario(db, _bearer(request), tipo="terminal")
     return usuario
 
 
@@ -321,10 +323,9 @@ def crear_terminal(datos: TerminalIn, db=Depends(get_db), usuario=Depends(requie
         raise ErrorServicio(409, "Ya hay una terminal con ese serial SUNMI")
     if db.query(Terminal).filter_by(sucursal_id=datos.sucursal_id, numero_terminal=datos.numero_terminal).first():
         raise ErrorServicio(409, "Esa sucursal ya tiene una terminal con ese número")
-    token = nuevo_token()
     t = Terminal(
         sucursal_id=datos.sucursal_id, numero_terminal=datos.numero_terminal,
-        serial_sunmi=datos.serial_sunmi.strip(), token_hash=hash_token(token),
+        serial_sunmi=datos.serial_sunmi.strip(),
         activa=datos.activa, version_app=datos.version_app,
     )
     db.add(t)
@@ -333,9 +334,7 @@ def crear_terminal(datos: TerminalIn, db=Depends(get_db), usuario=Depends(requie
                       detalle={"serial_sunmi": t.serial_sunmi})
     db.commit()
     db.refresh(t)
-    salida = terminal_dict(t)
-    salida["token"] = token  # se muestra UNA sola vez: hay que guardarlo en la terminal
-    return salida
+    return terminal_dict(t)
 
 
 @app.put("/terminales/{terminal_id}")
@@ -361,7 +360,7 @@ def revocar_terminal(terminal_id: int, db=Depends(get_db), usuario=Depends(requi
         raise ErrorServicio(404, "La terminal no existe")
     t.token_hash = None
     t.activa = False
-    servicios.auditar(db, "terminal", t.id, "revocacion_token", usuario_id=usuario.id,
+    servicios.auditar(db, "terminal", t.id, "revocacion", usuario_id=usuario.id,
                       detalle={"serial_sunmi": t.serial_sunmi})
     db.commit()
     db.refresh(t)
@@ -373,15 +372,12 @@ def reactivar_terminal(terminal_id: int, db=Depends(get_db), usuario=Depends(req
     t = db.get(Terminal, terminal_id)
     if t is None:
         raise ErrorServicio(404, "La terminal no existe")
-    token = nuevo_token()
-    t.token_hash = hash_token(token)
+    t.token_hash = None
     t.activa = True
     servicios.auditar(db, "terminal", t.id, "reactivacion", usuario_id=usuario.id, detalle={})
     db.commit()
     db.refresh(t)
-    salida = terminal_dict(t)
-    salida["token"] = token
-    return salida
+    return terminal_dict(t)
 
 
 # ------------------------------------------------------------------ usuarios
@@ -791,7 +787,9 @@ class TerminalLoginIn(BaseModel):
 
 
 @app.post("/terminal/login")
-def terminal_login(datos: TerminalLoginIn, db=Depends(get_db), terminal=Depends(terminal_actual)):
+def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
+    """Entrada de la terminal: SOLO usuario y contraseña (sin serial ni
+    token de activación). La sucursal y la terminal salen del usuario."""
     usuario = db.query(Usuario).filter_by(usuario=datos.usuario.strip()).first()
     if (
         usuario is None
@@ -801,16 +799,28 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db), terminal=Depends(
         or not verificar_clave(datos.clave, usuario.clave_hash)
     ):
         raise ErrorServicio(401, "Usuario o contraseña incorrectos")
-    if usuario.sucursal_id is not None and usuario.sucursal_id != terminal.sucursal_id:
-        raise ErrorServicio(403, "Este operador no pertenece a la sucursal de esta terminal")
+    if usuario.sucursal_id is None:
+        raise ErrorServicio(
+            403,
+            "Este usuario no tiene sucursal asignada: el consorcio debe asignarla en el panel (Usuarios).",
+        )
+    sucursal = db.get(Sucursal, usuario.sucursal_id)
+    if sucursal is None or not sucursal.activa:
+        raise ErrorServicio(403, "La sucursal de este usuario está inactiva")
+    terminal = servicios.terminal_de_sucursal(db, sucursal)
+    if terminal is None:
+        raise ErrorServicio(
+            403,
+            "La terminal de esta sucursal está revocada: el consorcio debe reactivarla en el panel.",
+        )
+    terminal.ultima_conexion_en = servicios.ahora_local()
     token = servicios.crear_sesion(db, usuario, tipo="terminal", terminal_id=terminal.id)
     db.commit()
-    sucursal = db.get(Sucursal, terminal.sucursal_id)
     return {
         "token": token,
         "operador": usuario_dict(usuario),
-        "sucursal": sucursal_dict(sucursal) if sucursal else None,
-        "saldo": str(D(sucursal.saldo_actual)) if sucursal else "0.00",
+        "sucursal": sucursal_dict(sucursal),
+        "saldo": str(D(sucursal.saldo_actual)),
     }
 
 

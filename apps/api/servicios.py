@@ -84,19 +84,32 @@ def cerrar_sesion(db, token):
 
 
 # ---------------------------------------------------------------- terminales
-def autenticar_terminal(db, serial_sunmi, token):
-    terminal = db.query(Terminal).filter_by(serial_sunmi=(serial_sunmi or "").strip()).first()
-    if (
-        terminal is None
-        or not terminal.activa
-        or not terminal.token_hash
-        or not token
-        or hash_token(token) != terminal.token_hash
-    ):
-        raise ErrorServicio(401, "Terminal no autorizada (serial o token inválido)")
-    terminal.ultima_conexion_en = ahora_local()
-    db.commit()
-    return terminal
+def terminal_de_sucursal(db, sucursal):
+    """La terminal de trabajo de una sucursal (2026-11-14: sin token ni
+    activación — el operador entra con usuario y contraseña y el servidor
+    resuelve la terminal desde SU sucursal). Devuelve la primera terminal
+    activa; si la sucursal no tiene ninguna, la crea (número 1). Si tiene
+    pero están todas revocadas, devuelve None y el login se rechaza."""
+    terminales = (
+        db.query(Terminal)
+        .filter_by(sucursal_id=sucursal.id)
+        .order_by(Terminal.numero_terminal)
+        .all()
+    )
+    for t in terminales:
+        if t.activa:
+            return t
+    if terminales:
+        return None
+    t = Terminal(
+        sucursal_id=sucursal.id,
+        numero_terminal=1,
+        serial_sunmi=f"APP-{sucursal.codigo}",
+        activa=True,
+    )
+    db.add(t)
+    db.flush()
+    return t
 
 
 # --------------------------------------------------------------------- venta

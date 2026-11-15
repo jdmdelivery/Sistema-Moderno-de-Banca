@@ -19,12 +19,13 @@ Habla con la API de terminal del **Sistema de Banca Moderna**
 
 ## Qué hace esta primera versión (sin pantallas decorativas)
 
-1. **Configuración y activación:** URL del servidor precargada
-   (`https://sistema-de-banca-moderna.onrender.com`, editable) +
-   serial SUNMI + token de terminal (los que emite el panel).
-   Botón «Probar conexión» contra `/health`.
-2. **Inicio de sesión** del operador (usuario + contraseña) contra
-   `POST /terminal/login`.
+1. **Entrada directa:** el operador abre la app y entra con su
+   **usuario y contraseña** contra `POST /terminal/login`. Sin
+   activación, sin serial, sin token: el servidor resuelve su
+   sucursal y su terminal desde el usuario. La pantalla
+   «Configuración» solo guarda la URL del servidor (precargada con
+   la del consorcio) por si el consorcio lo mueve, con su botón
+   «Probar conexión» contra `/health`.
 3. **Venta** fiel a la especificación: botón **DISP** con selección
    múltiple de los sorteos abiertos (los cerrados se muestran
    deshabilitados con su motivo), tipos **QN / PL / SP** con las
@@ -62,22 +63,19 @@ caja/cuadre y reportes desde la terminal.
 3. Abrir el .apk y tocar **Instalar**. Aparece como **«Banca
    Moderna»**.
 
-## Cómo se activa una terminal real
+## Cómo entra una terminal real (sin activación)
 
-1. En el **panel del consorcio** (la URL del servidor, usuario
-   administrador): sección **Terminales** → elegir la sucursal,
-   número de terminal y escribir el **Serial SUNMI** del equipo
-   (está en la etiqueta del equipo y en sus ajustes; es el mismo
-   «S/N» que se ve en los tickets) → Guardar.
-2. El panel muestra el **token de la terminal UNA SOLA VEZ**:
-   copiarlo en ese momento.
-3. En la app: pantalla **Configuración de la terminal** → la URL ya
-   viene precargada → escribir el **Serial SUNMI** y el **token** →
-   «Probar conexión» debe decir «Servidor alcanzado ✔» → **Guardar**.
-4. Volver e **iniciar sesión** con el usuario y la contraseña de un operador
-   creado en el panel para esa sucursal. Si el serial/token no
-   coinciden con el panel, el servidor responde «Terminal no
-   autorizada» y la app lo muestra tal cual.
+1. En el **panel del consorcio**: crear la **sucursal** y el
+   **usuario** del operador (sección Usuarios) con su contraseña y
+   su sucursal asignada.
+2. En la app: escribir ese **usuario y contraseña** → **ENTRAR**.
+   Nada más. La primera vez que un operador de una sucursal entra,
+   su terminal aparece sola en la sección Terminales del panel
+   (serial `APP-<código de sucursal>`); desde ahí el consorcio puede
+   revocarla (esa sucursal deja de vender) y reactivarla.
+3. Si el usuario no tiene sucursal asignada, el servidor lo dice tal
+   cual («Este usuario no tiene sucursal asignada…») y la app lo
+   muestra en pantalla.
 
 ## Cómo se compila el APK
 

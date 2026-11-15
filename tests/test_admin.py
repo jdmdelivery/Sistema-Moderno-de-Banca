@@ -26,39 +26,41 @@ def test_sucursal_duplicada_rechazada(entorno):
 
 def test_terminal_revocada_no_opera_y_reactivada_si(entorno):
     b = entorno.banca(saldo=1000)
-    ter = b["terminal"]
+    # La terminal se creó sola cuando el operador entró: la buscamos en el panel
+    ter = [t for t in entorno.c.get("/terminales", headers=entorno.admin).json()
+           if t["sucursal_id"] == b["sucursal"]["id"]][0]
     r = entorno.c.post(f"/terminales/{ter['id']}/revocar", headers=entorno.admin)
-    assert r.status_code == 200 and r.json()["activa"] is False and r.json()["tiene_token"] is False
-    # Con el token revocado ni siquiera puede iniciar sesión
-    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "clave": "1234"},
-                       headers={"X-Terminal-Serial": ter["serial"], "X-Terminal-Token": ter["token"]})
+    assert r.status_code == 200 and r.json()["activa"] is False
+    # Con la terminal revocada, la sesión abierta ya no puede vender
+    s = entorno.sorteo_id("La Primera 12")
+    r = entorno.vender(b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "01", "monto": 5}])
     assert r.status_code == 401
-    # Al reactivar nace un token NUEVO; el viejo sigue muerto
+    # Ni siquiera puede volver a entrar
+    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "clave": "1234"})
+    assert r.status_code == 403
+    # Al reactivarla, entra con su usuario y contraseña y vende de nuevo
     r = entorno.c.post(f"/terminales/{ter['id']}/reactivar", headers=entorno.admin)
-    nuevo = r.json()["token"]
-    assert nuevo and nuevo != ter["token"]
-    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "clave": "1234"},
-                       headers={"X-Terminal-Serial": ter["serial"], "X-Terminal-Token": ter["token"]})
-    assert r.status_code == 401
-    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "clave": "1234"},
-                       headers={"X-Terminal-Serial": ter["serial"], "X-Terminal-Token": nuevo})
-    assert r.status_code == 200
+    assert r.status_code == 200 and r.json()["activa"] is True
+    headers = entorno.login_terminal()
+    t = entorno.vender_ok(headers, [{"tipo": "QN", "sorteos": [s], "numeros": "01", "monto": 5}])
+    assert t["estado"] == "vendido"
 
 
-def test_operador_de_otra_sucursal_no_entra_en_la_terminal(entorno):
+def test_operador_entra_solo_en_su_propia_sucursal(entorno):
+    # Sin token de terminal ya no hay «terminal ajena»: cada operador entra
+    # directo a SU sucursal y sus ventas caen en su propia caja.
     b1 = entorno.banca(saldo=100, codigo="1301", usuario="vend1")
     b2 = entorno.banca(saldo=100, codigo="2200", nombre="BANCA PEGUERO", usuario="vend2")
-    ter1 = b1["terminal"]
-    r = entorno.c.post("/terminal/login", json={"usuario": "vend2", "clave": "1234"},
-                       headers={"X-Terminal-Serial": ter1["serial"], "X-Terminal-Token": ter1["token"]})
-    assert r.status_code == 403
+    s = entorno.sorteo_id("La Primera 12")
+    t = entorno.vender_ok(b2["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "01", "monto": 5}])
+    assert t["banca"] == "BANCA PEGUERO"
+    assert entorno.saldo(b1["sucursal"]["id"]) == 100.00
+    assert entorno.saldo(b2["sucursal"]["id"]) == 105.00
 
 
 def test_clave_incorrecta(entorno):
-    b = entorno.banca(saldo=100)
-    ter = b["terminal"]
-    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "clave": "no-es-esta"},
-                       headers={"X-Terminal-Serial": ter["serial"], "X-Terminal-Token": ter["token"]})
+    entorno.banca(saldo=100)
+    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "clave": "no-es-esta"})
     assert r.status_code == 401
 
 
