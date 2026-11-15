@@ -88,8 +88,8 @@ function ir(sec) {
   const cargar = {
     inicio: cargarInicio, sucursales: cargarSucursales, terminales: cargarTerminales,
     usuarios: cargarUsuarios, sorteos: cargarSorteos, tabla: cargarTabla,
-    limites: cargarLimites, resultados: cargarResultados, tickets: () => {},
-    caja: cargarCaja, reportes: cargarReportes, auditoria: () => {},
+    limites: cargarLimites, resultados: cargarResultados, tickets: async () => {},
+    caja: cargarCaja, reportes: cargarReportes, auditoria: async () => {},
   }[sec];
   if (cargar) cargar().catch((e) => console.error(e));
 }
@@ -283,7 +283,7 @@ function limpiarSorteo() {
 }
 async function guardarSorteo() {
   const id = $("#sor-id").value;
-  const dias = $$('input[name="sor-dia"]:checked').map((c) => parseInt(c.value));
+  const dias = [...$$('input[name="sor-dia"]:checked')].map((c) => parseInt(c.value));
   const body = {
     nombre: $("#sor-nombre").value.trim(), hora_sorteo: $("#sor-hora-sorteo").value.trim(),
     hora_cierre: $("#sor-hora-cierre").value.trim(), dias_activos: dias,
