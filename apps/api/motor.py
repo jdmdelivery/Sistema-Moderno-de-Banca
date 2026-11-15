@@ -7,7 +7,7 @@ import json
 from sqlalchemy import or_
 
 from .comun import D, ErrorServicio
-from .models import Jugada, Resultado, Ticket
+from .models import Jugada, Resultado, Ticket, Usuario
 
 
 def factores_de(jugada) -> dict:
@@ -47,7 +47,11 @@ def evaluar_jugada(jugada, res_a, res_b=None):
 
 
 def recomputar_ticket(db, ticket):
-    """Recalcula premio_total y estado de un ticket según sus jugadas evaluadas."""
+    """Recalcula premio_total y estado de un ticket según sus jugadas evaluadas.
+
+    Un premio ya cobrado no vuelve a quedar pendiente. Si todavía hay un
+    sorteo sin resultado, el ticket sigue vendido aunque otra jugada ya se haya pagado.
+    """
     if ticket.estado in ("pagado", "anulado", "vencido"):
         return
     premio = sum(
@@ -55,10 +59,33 @@ def recomputar_ticket(db, ticket):
         D(0),
     )
     ticket.premio_total = D(premio)
-    if ticket.jugadas and all(j.evaluada for j in ticket.jugadas):
-        ticket.estado = "ganador" if premio > 0 else "no_ganador"
-    else:
+    if not ticket.jugadas or not all(j.evaluada for j in ticket.jugadas):
         ticket.estado = "vendido"
+        return
+    impagos = [
+        j for j in ticket.jugadas
+        if j.premio is not None and D(j.premio) > 0 and not j.pagada
+    ]
+    if impagos:
+        # Un tramo ya cobrado no vuelve a estado ganador. El código anterior
+        # cobra premio_total completo solo cuando el estado es ganador.
+        ticket.estado = "parcial" if any(j.pagada for j in ticket.jugadas) else "ganador"
+        return
+    if any(j.pagada for j in ticket.jugadas):
+        ticket.estado = "pagado"
+        if ticket.pagado_en is None:
+            pagadas = [j for j in ticket.jugadas if j.pagada and j.pagado_en is not None]
+            if pagadas:
+                ultimo = max(pagadas, key=lambda j: j.pagado_en)
+                ticket.pagado_en = ultimo.pagado_en
+                ticket.pagado_por_usuario_id = ultimo.pagado_por_usuario_id
+                ticket.pago_operacion_id = ultimo.pago_operacion_id
+                if ultimo.pagado_por_usuario_id:
+                    cajero = db.get(Usuario, ultimo.pagado_por_usuario_id)
+                    if cajero is not None:
+                        ticket.pagado_en_sucursal_id = cajero.sucursal_id
+        return
+    ticket.estado = "no_ganador"
 
 
 def liquidar_resultado_prueba(db, resultado):
@@ -73,7 +100,7 @@ def pruebas_pagadas_con(db, resultado):
         .filter(
             Jugada.fecha == resultado.fecha,
             Ticket.es_prueba.is_(True),
-            Ticket.estado == "pagado",
+            or_(Ticket.estado == "pagado", Jugada.pagada.is_(True)),
             or_(Jugada.sorteo_id == resultado.sorteo_id, Jugada.sorteo2_id == resultado.sorteo_id),
         )
         .all()
@@ -97,6 +124,8 @@ def reabrir_pruebas(db, resultado):
     )
     tickets = set()
     for jugada in jugadas:
+        if jugada.pagada:
+            continue
         jugada.evaluada, jugada.premio, jugada.detalle_eval = False, None, None
         tickets.add(jugada.ticket_id)
     for ticket_id in tickets:
@@ -222,7 +251,7 @@ def revertir_liquidacion(db, resultado):
     pagados = [
         t.id
         for t in (db.get(Ticket, tid) for tid in ticket_ids)
-        if t is not None and t.estado == "pagado"
+        if t is not None and (t.estado == "pagado" or any(j.pagada for j in propias if j.ticket_id == t.id))
     ]
     if pagados:
         raise ErrorServicio(

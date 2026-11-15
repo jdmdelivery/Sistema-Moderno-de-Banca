@@ -230,6 +230,10 @@ class Jugada(Base):
     evaluada = Column(Boolean, nullable=False, default=False)
     premio = Column(DINERO)
     detalle_eval = Column(String(20))  # '1ro'|'2do'|'3ro'|'1-2'|'1-3'|'2-3'|'sp'
+    pagada = Column(Boolean, nullable=False, default=False)
+    pagado_en = Column(DateTime)
+    pagado_por_usuario_id = Column(Integer, ForeignKey("usuarios.id"))
+    pago_operacion_id = Column(String(40))
 
     ticket = relationship("Ticket", back_populates="jugadas")
     tipo = relationship("TipoJugada")

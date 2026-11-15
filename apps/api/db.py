@@ -82,6 +82,13 @@ def init_db():
         db.close()
 
 
+def _agregar_columna(eng):
+    """PostgreSQL ignora la columna si otro arranque ya la creó."""
+    if eng.dialect.name == "postgresql":
+        return "ADD COLUMN IF NOT EXISTS"
+    return "ADD COLUMN"
+
+
 def _columnas_faltantes():
     """Agrega columnas nuevas a tablas ya creadas (create_all no altera
     tablas existentes). Idempotente: solo agrega la que falte."""
@@ -102,7 +109,7 @@ def _columnas_faltantes():
         with eng.begin() as conn:
             for columna, tipo in faltan.items():
                 if columna not in cols:
-                    conn.execute(text(f"ALTER TABLE tickets ADD COLUMN {columna} {tipo}"))
+                    conn.execute(text(f"ALTER TABLE tickets {_agregar_columna(eng)} {columna} {tipo}"))
     if "resultados" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("resultados")}
         faltan = {
@@ -113,21 +120,104 @@ def _columnas_faltantes():
         with eng.begin() as conn:
             for columna, tipo in faltan.items():
                 if columna not in cols:
-                    conn.execute(text(f"ALTER TABLE resultados ADD COLUMN {columna} {tipo}"))
+                    conn.execute(text(f"ALTER TABLE resultados {_agregar_columna(eng)} {columna} {tipo}"))
     if "usuarios" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("usuarios")}
         tipo = "NUMERIC(12,2) NOT NULL DEFAULT 0"
         with eng.begin() as conn:
             for columna in ("saldo_caja", "saldo_caja_prueba"):
                 if columna not in cols:
-                    conn.execute(text(f"ALTER TABLE usuarios ADD COLUMN {columna} {tipo}"))
+                    conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} {columna} {tipo}"))
             for columna in ("ciclo_caja_movimiento_id", "ciclo_caja_prueba_movimiento_id"):
                 if columna not in cols:
-                    conn.execute(text(f"ALTER TABLE usuarios ADD COLUMN {columna} INTEGER"))
+                    conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} {columna} INTEGER"))
     if "terminales" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("terminales")}
         with eng.begin() as conn:
             if "modelo" not in cols:
-                conn.execute(text("ALTER TABLE terminales ADD COLUMN modelo VARCHAR(80)"))
+                conn.execute(text(f"ALTER TABLE terminales {_agregar_columna(eng)} modelo VARCHAR(80)"))
             if "android_api" not in cols:
-                conn.execute(text("ALTER TABLE terminales ADD COLUMN android_api VARCHAR(10)"))
+                conn.execute(text(f"ALTER TABLE terminales {_agregar_columna(eng)} android_api VARCHAR(10)"))
+    if "jugadas" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("jugadas")}
+        bandera = "BOOLEAN NOT NULL DEFAULT FALSE" if eng.dialect.name == "postgresql" else "INTEGER NOT NULL DEFAULT 0"
+        with eng.begin() as conn:
+            if "pagada" not in cols:
+                conn.execute(text(f"ALTER TABLE jugadas {_agregar_columna(eng)} pagada {bandera}"))
+            if "pagado_en" not in cols:
+                conn.execute(text(f"ALTER TABLE jugadas {_agregar_columna(eng)} pagado_en TIMESTAMP"))
+            if "pagado_por_usuario_id" not in cols:
+                conn.execute(text(
+                    f"ALTER TABLE jugadas {_agregar_columna(eng)} pagado_por_usuario_id INTEGER"
+                ))
+            if "pago_operacion_id" not in cols:
+                conn.execute(text(
+                    f"ALTER TABLE jugadas {_agregar_columna(eng)} pago_operacion_id VARCHAR(40)"
+                ))
+    _proteger_pago_parcial()
+
+
+def _proteger_pago_parcial():
+    """Impide que un código anterior marque pagado un ticket con un tramo ya cobrado
+    y otro todavía pendiente. El cobro nuevo marca las jugadas antes de cerrar el ticket,
+    así que ese camino sigue pasando. Un ticket ya pagado no se vuelve a tocar."""
+    from sqlalchemy import text
+
+    eng = engine()
+    with eng.begin() as conn:
+        if eng.dialect.name == "postgresql":
+            conn.execute(text("SELECT pg_advisory_xact_lock(740513)"))
+            conn.execute(text(
+                """
+                CREATE OR REPLACE FUNCTION bloquear_pago_duplicado_parcial()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF NEW.estado = 'pagado' AND OLD.estado IS DISTINCT FROM 'pagado'
+                     AND EXISTS (
+                       SELECT 1 FROM jugadas
+                       WHERE ticket_id = NEW.id AND pagada IS TRUE AND premio > 0
+                     )
+                     AND EXISTS (
+                       SELECT 1 FROM jugadas
+                       WHERE ticket_id = NEW.id AND premio > 0 AND pagada IS NOT TRUE
+                     )
+                  THEN
+                    RAISE EXCEPTION 'pago parcial ya registrado';
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """
+            ))
+            conn.execute(text("DROP TRIGGER IF EXISTS jugada_pagada_no_repite ON tickets"))
+            conn.execute(text(
+                """
+                CREATE TRIGGER jugada_pagada_no_repite
+                BEFORE UPDATE OF estado ON tickets
+                FOR EACH ROW EXECUTE FUNCTION bloquear_pago_duplicado_parcial()
+                """
+            ))
+            return
+        existe = conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = 'jugada_pagada_no_repite'"
+        )).first()
+        if existe is not None:
+            return
+        conn.execute(text(
+            """
+            CREATE TRIGGER jugada_pagada_no_repite
+            BEFORE UPDATE OF estado ON tickets
+            WHEN NEW.estado = 'pagado' AND OLD.estado != 'pagado'
+             AND EXISTS (
+               SELECT 1 FROM jugadas
+               WHERE ticket_id = NEW.id AND pagada = 1 AND premio > 0
+             )
+             AND EXISTS (
+               SELECT 1 FROM jugadas
+               WHERE ticket_id = NEW.id AND premio > 0 AND pagada = 0
+             )
+            BEGIN
+              SELECT RAISE(ABORT, 'pago parcial ya registrado');
+            END
+            """
+        ))

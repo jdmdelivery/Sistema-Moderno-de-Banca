@@ -13,7 +13,7 @@ import threading
 import time
 from datetime import timedelta
 
-from . import conectate_widget, estabilizacion, servicios
+from . import conectate_firmado, conectate_widget, estabilizacion, servicios
 from .comun import modo_desarrollo
 from .db import nueva_sesion
 from .models import CandadoConsulta, Importacion, Sorteo
@@ -133,8 +133,17 @@ def _soltar(db):
         db.commit()
 
 
-def ciclo(forzar=False, payload=None):
-    """Una pasada. payload evita la red en las pruebas. No paga."""
+def _especiales(payload, firmado, momento):
+    """La firma solo se abre en el reloj real. Las pruebas traen el documento."""
+    if firmado is not None:
+        return conectate_firmado.leer(firmado, momento.date()), None
+    if payload is not None or "PYTEST_CURRENT_TEST" in os.environ:
+        return {}, None
+    return conectate_firmado.descargar_ventana(momento.date())
+
+
+def ciclo(forzar=False, payload=None, firmado=None):
+    """Una pasada. payload y firmado evitan la red en las pruebas. No paga."""
     with _candado:
         if _estado["corriendo"]:
             return {"ok": True, "omitido": "ya hay una consulta en curso"}
@@ -157,39 +166,49 @@ def ciclo(forzar=False, payload=None):
         error = None
         if datos is None:
             datos, error = conectate_widget.descargar()
-        if error:
+        especiales, aviso_firma = _especiales(payload, firmado, momento)
+        if datos is None:
+            encontrados, forma = {}, None
+        else:
+            encontrados, forma = conectate_widget.interpretar(datos, momento.date())
+            if forma:
+                encontrados = {}
+        for nombre, dato in especiales.items():
+            if conectate_firmado.es_especial(nombre):
+                encontrados[nombre] = dato
+        if not encontrados and (error or forma or aviso_firma):
+            motivo = error or forma or aviso_firma
             db.add(Importacion(
                 fuente="conectate", url=conectate_widget.URL_WIDGET,
-                fecha_objetivo=momento.date(), ok=False, detalle=error[:500],
+                fecha_objetivo=momento.date(), ok=False, detalle=str(motivo)[:500],
                 creado_en=momento,
             ))
             db.commit()
             with _candado:
-                _estado["ultimo_error"] = error
-            return {"ok": False, "motivo": error, "confirmados": 0, "rdlotto": False}
-        encontrados, forma = conectate_widget.interpretar(datos, momento.date())
-        if forma:
-            db.add(Importacion(
-                fuente="conectate", url=conectate_widget.URL_WIDGET,
-                fecha_objetivo=momento.date(), ok=False, detalle=forma,
-                creado_en=momento,
-            ))
-            db.commit()
-            return {"ok": False, "motivo": forma, "confirmados": 0, "rdlotto": False}
+                _estado["ultimo_error"] = str(motivo)
+            return {"ok": False, "motivo": motivo, "confirmados": 0, "rdlotto": False}
         confirmados = 0
         for nombre, dato in encontrados.items():
             sorteo = db.query(Sorteo).filter_by(nombre=nombre, activo=True).first()
             if sorteo is None:
                 continue
-            marca = estabilizacion.observar(db, sorteo, dato["fecha"], dato["numeros"], momento)
+            marca = estabilizacion.observar(
+                db, sorteo, dato["fecha"], dato["numeros"], momento,
+                dato.get("origen", "widget"),
+            )
             if marca == "confirmado":
                 confirmados += 1
         premios = estabilizacion.procesar_cola(db)
+        detalle = f"confirmados {confirmados}; premios {premios}; firmados {len(especiales)}"
+        if aviso_firma:
+            detalle += "; firma pendiente"
+        if error:
+            detalle += "; widget " + str(error)[:120]
         db.add(Importacion(
             fuente="conectate", url=conectate_widget.URL_WIDGET,
             fecha_objetivo=momento.date(), ok=True, estado_http=200,
             encontrados=len(encontrados),
-            detalle=f"confirmados {confirmados}; premios {premios}",
+            detalle=detalle[:500],
             creado_en=momento,
         ))
         db.commit()

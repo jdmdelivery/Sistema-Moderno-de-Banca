@@ -14,7 +14,7 @@ LECTURAS_MINIMAS = 3
 MINUTOS_ESTABLES = 10
 
 
-def observar(db, sorteo, fecha, numeros, momento):
+def observar(db, sorteo, fecha, numeros, momento, origen="widget"):
     """Registra una lectura. Confirma solo si ya hubo tres iguales y 10 minutos."""
     obs = (
         db.query(ObservacionResultado)
@@ -45,20 +45,20 @@ def observar(db, sorteo, fecha, numeros, momento):
         obs.lecturas = 1
         obs.primera_en = momento
         obs.ultima_en = momento
-    _guardar_provisional(db, sorteo, fecha, numeros, momento)
+    _guardar_provisional(db, sorteo, fecha, numeros, momento, origen)
     transcurrido = momento - obs.primera_en
     if obs.lecturas >= LECTURAS_MINIMAS and transcurrido >= timedelta(minutes=MINUTOS_ESTABLES):
         return _confirmar(db, sorteo, fecha)
     return "provisional"
 
 
-def _guardar_provisional(db, sorteo, fecha, numeros, momento):
+def _guardar_provisional(db, sorteo, fecha, numeros, momento, origen="widget"):
     fila = db.query(Resultado).filter_by(sorteo_id=sorteo.id, fecha=fecha).first()
     if fila is None:
         db.add(Resultado(
             sorteo_id=sorteo.id, fecha=fecha,
             premio1=numeros[0], premio2=numeros[1], premio3=numeros[2],
-            estado="propuesto", fuente="conectate", externo="widget",
+            estado="propuesto", fuente="conectate", externo=origen,
             recibido_en=momento, propuesto_en=momento,
         ))
         return
@@ -67,7 +67,7 @@ def _guardar_provisional(db, sorteo, fecha, numeros, momento):
     fila.premio1, fila.premio2, fila.premio3 = numeros
     fila.estado = "propuesto"
     fila.fuente = "conectate"
-    fila.externo = "widget"
+    fila.externo = origen
     fila.recibido_en = momento
 
 
@@ -107,7 +107,7 @@ def _alerta(db, resultado, numeros):
         resultado_id=resultado.id,
         premio1=numeros[0], premio2=numeros[1], premio3=numeros[2],
         fuente="conectate",
-        detalle="El widget cambió un resultado ya confirmado. No se reemplazó.",
+        detalle="La fuente cambió un resultado ya confirmado. No se reemplazó.",
     ))
     servicios.auditar(
         db, "resultado", resultado.id, "alerta_fuente",

@@ -1,9 +1,9 @@
-"""Widget público de Conéctate. Es la única fuente automática.
+"""Widget público de Conéctate para las loterías que publican título y hora.
 
 GET https://api.conectate.com.do/conectate/api/widget
-El portal loterias.conectate.com.do lo usa sin clave. No se llama a
-site-companies ni al websocket: sin la firma de sesión esa API entrega
-números señuelo, y copiar esa firma no está autorizado.
+La Anguila y Haití Bolet no salen completos aquí. Esos 21 sorteos se leen
+en conectate_firmado, con la sesión firmada. Sin esa firma el feed entrega
+números señuelo y no se usa.
 
 Un título solo entra si el nombre y la tanda coinciden con un sorteo del
 catálogo. Una hora distinta no hereda los números de otra.
@@ -71,8 +71,8 @@ RECONOCIDOS = set(_EXACTOS.values()) | set(_ANGUILA_NOMBRES) | set(_HAITI_NOMBRE
     "Lotería Nacional 6:00 PM", "Lotería Nacional 9:00 PM",
 }
 MOTIVO_SIN_WIDGET = (
-    "El widget público no trae este sorteo. "
-    "No se usa la sesión firmada: sin esa firma la API entrega números señuelo."
+    "Este sorteo se lee con la sesión firmada de Conéctate. "
+    "Si la firma falla o el número coincide con el señuelo, queda pendiente."
 )
 
 
