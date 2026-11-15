@@ -68,8 +68,8 @@ public class AnularActivity extends Activity {
         }
         new AlertDialog.Builder(this)
                 .setTitle("Anular ticket")
-                .setMessage("La anulación no se puede deshacer y el monto "
-                        + "vuelve al saldo de la banca. ¿Continuar?")
+                .setMessage("La anulación no se puede deshacer y el efectivo "
+                        + "se devuelve al cliente y sale de la caja. ¿Continuar?")
                 .setNegativeButton("No", null)
                 .setPositiveButton("SÍ, ANULAR", (d, w) -> anular())
                 .show();

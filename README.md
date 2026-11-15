@@ -62,11 +62,23 @@ tests/                 Suite pytest (venta, motor, pago, anulación, cuadre,
 ## Piezas clave (y cómo se probaron)
 
 - **Venta con el servidor como juez:** valida terminal (serial + token),
-  sesión de operador, saldo prepago, cierre de cada sorteo, montos
-  mín/máx y límites por número ANTES de vender. Si algo falla no hay
-  venta, ni débito, ni número consumido. El ID es el **consecutivo
-  global del consorcio**; el Serial es aleatorio de 10 caracteres; el QR
-  de la terminal contendrá `LOT:{id}:{serial}`.
+  sesión de operador, cierre de cada sorteo, montos mín/máx y límites
+  por número ANTES de vender. Si algo falla no hay venta ni número
+  consumido. El ID es el **consecutivo global del consorcio**; el Serial
+  es aleatorio de 10 caracteres; el QR de la terminal contendrá
+  `LOT:{id}:{serial}`. La app envía un `operacion_id` por ticket: un
+  reenvío de la misma operación devuelve el mismo ticket (sin duplicar).
+- **Modelo de CAJA (corrección de Jose, 2026-11-14):** el campo
+  `sucursales.saldo_actual` es el **dinero en caja** de cada sucursal.
+  Vender NO exige saldo: la cajera cobra en efectivo y cada venta SUMA
+  a la caja. El premio pagado SALE de la caja de la sucursal que paga
+  (el pendiente no descuenta hasta pagarse); si la caja no alcanza, el
+  pago se bloquea con advertencia, el premio queda pendiente y el
+  intento queda en auditoría — el consorcio entrega efectivo a la
+  sucursal para habilitarlo. La anulación devuelve el efectivo al
+  cliente y lo saca de la caja. Recibir efectivo suma, el gasto resta
+  y la entrega de cuadre saca el total a entregar. Todo movimiento
+  queda en `movimientos_saldo` con su caja resultante y su autor.
 - **Jugadas multi-lotería:** una QN/PL marcada para varias loterías se
   replica por sorteo (el monto es por lotería, como en la pantalla de
   Juegos del video). El SP cruza exactamente dos loterías.
@@ -81,7 +93,8 @@ tests/                 Suite pytest (venta, motor, pago, anulación, cuadre,
   y un rechazo con los datos reales del primer pago («Ya pagado en la
   sucursal X, el día Y…»). Se puede cobrar en cualquier sucursal.
 - **Anulación acotada:** solo tickets vendidos y solo si NINGÚN sorteo
-  del ticket ha cerrado; devuelve el total al saldo con su movimiento.
+  del ticket ha cerrado; el efectivo vuelve al cliente y sale de la
+  caja de la banca vendedora, con su movimiento.
 - **El papel no vale sin el servidor:** consultar/pagar/anular exigen
   ID + Serial y el servidor responde el estado y el monto reales.
 - **Cuadre:** ventas − premios pagados − gastos + efectivo recibido,
@@ -108,11 +121,12 @@ importador empezará a proponer sin cambiar nada más.
 
 ## Decisiones menores tomadas en esta etapa
 
-1. **El premio pagado NO se acredita al saldo prepago.** La especificación
-   (§5.1 y §6.1/§6.3) define los movimientos de saldo como recarga,
-   débito por venta, crédito por anulación y ajuste, y compensa el premio
-   pagado **en el cuadre** (la banca entregó ese efectivo de su caja).
-   Acreditarlo también al saldo sería pagarlo dos veces.
+1. **Modelo financiero = caja física de la sucursal** (sustituye al
+   modelo prepago inicial por orden de Jose, 2026-11-14): la venta no
+   consume saldo, lo produce; el premio se paga del efectivo de la
+   caja. Los movimientos de caja son: venta (+), anulación (−), pago
+   de premio (−), recarga/entrega del consorcio (+), recibir efectivo
+   (+), gasto (−) y entrega de cuadre (− el total a entregar).
 2. **El monto de una jugada multi-lotería es por lotería** (la jugada se
    replica en cada sorteo marcado), como muestra la tabla de Juegos del
    video de referencia.

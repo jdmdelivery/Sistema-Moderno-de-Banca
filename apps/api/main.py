@@ -842,13 +842,14 @@ class JugadaIn(BaseModel):
 
 class VentaIn(BaseModel):
     jugadas: list[JugadaIn]
+    operacion_id: str | None = None
 
 
 @app.post("/terminal/venta", status_code=201)
 def terminal_venta(datos: VentaIn, db=Depends(get_db), terminal=Depends(terminal_actual),
                    operador=Depends(operador_actual)):
     jugadas = [j.model_dump() for j in datos.jugadas]
-    return servicios.vender(db, terminal, operador, jugadas)
+    return servicios.vender(db, terminal, operador, jugadas, operacion_id=datos.operacion_id)
 
 
 @app.post("/terminal/tickets/consultar")

@@ -136,7 +136,7 @@ async function cargarInicio() {
 /* --------------------------------------------------------------- sucursales */
 async function cargarSucursales() {
   await cargarCatalogos();
-  tabla("#suc-tabla", ["Código", "Nombre", "Comisión %", "Saldo", "Activa", "Acciones"],
+  tabla("#suc-tabla", ["Código", "Nombre", "Comisión %", "Dinero en caja", "Activa", "Acciones"],
     SUCURSALES.map((s) => `<tr><td>${esc(s.codigo)}</td><td>${esc(s.nombre)}</td><td>${esc(s.comision_porcentaje)}</td>
       <td>${fmt(s.saldo_actual)}</td><td>${s.activa ? "Sí" : "No"}</td>
       <td><button class="btn fila" onclick="editarSucursal(${s.id})">Editar</button></td></tr>`));
@@ -168,14 +168,14 @@ async function recargarSaldo() {
     const r = await post(`/sucursales/${$("#rec-sucursal").value}/recargar`, {
       monto: parseFloat($("#rec-monto").value || 0), referencia: $("#rec-referencia").value.trim() || null,
     });
-    msg("#rec-msg", `Recarga aplicada ✔ Nuevo saldo: ${fmt(r.saldo_resultante)}`);
+    msg("#rec-msg", `Efectivo entregado ✔ Nueva caja: ${fmt(r.saldo_resultante)}`);
     await cargarSucursales();
   } catch (e) { msg("#rec-msg", e.message, false); }
 }
 async function verMovimientos() {
   const id = $("#mov-sucursal").value;
   const filas = await api(`/sucursales/${id}/movimientos`);
-  tabla("#mov-tabla", ["Fecha", "Tipo", "Monto", "Referencia", "Saldo resultante"],
+  tabla("#mov-tabla", ["Fecha", "Tipo", "Monto", "Referencia", "Caja resultante"],
     filas.map((m) => `<tr><td>${esc(m.creado_en)}</td><td>${esc(m.tipo)}</td><td>${fmt(m.monto)}</td><td>${esc(m.referencia || "")}</td><td>${fmt(m.saldo_resultante)}</td></tr>`));
 }
 
@@ -445,10 +445,10 @@ async function pagarTicketPanel() {
   } catch (e) { msg("#tic-msg", e.message, false); }
 }
 async function anularTicketPanel() {
-  if (!confirm("¿Anular este ticket? El monto vuelve al saldo de la banca vendedora.")) return;
+  if (!confirm("¿Anular este ticket? El efectivo se devuelve al cliente y sale de la caja de la banca vendedora.")) return;
   try {
     const d = await post("/panel/tickets/anular", llaveTicket());
-    pintarTicket(d); msg("#tic-msg", "Ticket ANULADO ✔ El saldo fue devuelto a la banca vendedora.");
+    pintarTicket(d); msg("#tic-msg", "Ticket ANULADO ✔ El efectivo salió de la caja de la banca vendedora.");
   } catch (e) { msg("#tic-msg", e.message, false); }
 }
 

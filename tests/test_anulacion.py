@@ -1,20 +1,21 @@
-"""Anulación: solo antes del cierre de TODOS los sorteos, con reverso de saldo."""
+"""Anulación: solo antes del cierre de TODOS los sorteos; el efectivo
+devuelto al cliente SALE de la caja de la sucursal vendedora."""
 from datetime import datetime
 
 
-def test_anular_antes_del_cierre_devuelve_saldo(entorno):
+def test_anular_antes_del_cierre_saca_el_dinero_de_la_caja(entorno):
     b = entorno.banca(saldo=1000)
     s = entorno.sorteo_id("La Primera 12")
     t = entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "19", "monto": 100}])
-    assert entorno.saldo(b["sucursal"]["id"]) == 900.00
+    assert entorno.saldo(b["sucursal"]["id"]) == 1100.00  # la venta sumó a la caja
     r = entorno.c.post("/terminal/tickets/anular",
                        json={"id": t["id"], "serial": t["serial"]}, headers=b["headers"])
     assert r.status_code == 200, r.text
     assert r.json()["estado"] == "anulado"
-    assert entorno.saldo(b["sucursal"]["id"]) == 1000.00  # reverso completo
+    assert entorno.saldo(b["sucursal"]["id"]) == 1000.00  # el efectivo volvió al cliente
     movs = entorno.c.get(f"/sucursales/{b['sucursal']['id']}/movimientos", headers=entorno.admin).json()
-    credito = [m for m in movs if m["tipo"] == "credito_anulacion"]
-    assert len(credito) == 1 and float(credito[0]["monto"]) == 100.00
+    anul = [m for m in movs if m["tipo"] == "anulacion"]
+    assert len(anul) == 1 and float(anul[0]["monto"]) == 100.00
     # Y aparece como nulo en los reportes
     rep = entorno.c.get("/reportes/resumen?desde=2026-11-14&hasta=2026-11-14&vista=nulos",
                         headers=entorno.admin).json()
@@ -30,7 +31,7 @@ def test_anular_despues_del_cierre_rechazado(entorno, fijar_hora):
                        json={"id": t["id"], "serial": t["serial"]}, headers=b["headers"])
     assert r.status_code == 409 and "ya cerró" in r.json()["detail"]
     assert entorno.consultar(t)["estado"] == "vendido"
-    assert entorno.saldo(b["sucursal"]["id"]) == 990.00
+    assert entorno.saldo(b["sucursal"]["id"]) == 1010.00
 
 
 def test_anular_con_un_solo_sorteo_cerrado_rechazado(entorno, fijar_hora):

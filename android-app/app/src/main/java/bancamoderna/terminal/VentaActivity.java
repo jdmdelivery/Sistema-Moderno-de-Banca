@@ -39,6 +39,9 @@ public class VentaActivity extends Activity {
     }
 
     private final List<Jugada> jugadas = new ArrayList<>();
+    // Idempotencia: un UUID por ticket en curso; si el envío se reintenta
+    // (doble toque, red), el servidor devuelve el mismo ticket sin duplicar.
+    private String operacionId = java.util.UUID.randomUUID().toString();
     private String tipoActual = "QN";
     private StringBuilder digitos = new StringBuilder();
     private boolean focoMonto = false;
@@ -194,7 +197,7 @@ public class VentaActivity extends Activity {
         numerosTxt.setText((focoMonto ? "NÚMEROS: " : "▶ NÚMEROS: ") + numerosFormateados());
         montoTxt.setText((focoMonto ? "▶ MONTO: $" : "MONTO: $") + montoDigitos.toString());
         if (!Estado.saldo.isEmpty()) {
-            saldoTxt.setText("Saldo: $" + Ui.dinero(Estado.saldo));
+            saldoTxt.setText("Caja: $" + Ui.dinero(Estado.saldo));
         }
         listaJugadas.removeAllViews();
         double total = 0;
@@ -316,10 +319,12 @@ public class VentaActivity extends Activity {
                     }
                     JSONObject body = new JSONObject();
                     body.put("jugadas", arr);
+                    body.put("operacion_id", operacionId);
                     return new ApiClient(prefs).post("/terminal/venta", body);
                 },
                 (JSONObject ticket) -> {
                     jugadas.clear();
+                    operacionId = java.util.UUID.randomUUID().toString();
                     Intent i = new Intent(this, TicketActivity.class);
                     i.putExtra("ticket_json", ticket.toString());
                     startActivity(i);

@@ -18,7 +18,8 @@ def _ticket_ganador(entorno, monto=10, numero="19"):
 
 def test_pagar_en_otra_sucursal(entorno):
     b1, t = _ticket_ganador(entorno)
-    b2 = entorno.banca(saldo=0, codigo="2200", nombre="BANCA PEGUERO", usuario="vend2")
+    # La sucursal pagadora necesita el efectivo en su caja (premio $600)
+    b2 = entorno.banca(saldo=1000, codigo="2200", nombre="BANCA PEGUERO", usuario="vend2")
     r = entorno.c.post("/terminal/tickets/pagar",
                        json={"id": t["id"], "serial": t["serial"]}, headers=b2["headers"])
     assert r.status_code == 200, r.text

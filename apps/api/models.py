@@ -152,7 +152,7 @@ class MovimientoSaldo(Base):
     __tablename__ = "movimientos_saldo"
     id = Column(Integer, primary_key=True)
     sucursal_id = Column(Integer, ForeignKey("sucursales.id"), nullable=False, index=True)
-    tipo = Column(String(30), nullable=False)  # recarga|debito_venta|credito_anulacion|ajuste
+    tipo = Column(String(30), nullable=False)  # recarga|venta|anulacion|pago_premio|recibir_efectivo|gasto|entrega_cuadre|ajuste
     monto = Column(DINERO, nullable=False)  # siempre positivo; el tipo dice la dirección
     referencia = Column(String(120))
     saldo_resultante = Column(DINERO, nullable=False)
@@ -168,6 +168,7 @@ class Ticket(Base):
     terminal_id = Column(Integer, ForeignKey("terminales.id"))
     usuario_id = Column(Integer, ForeignKey("usuarios.id"))
     vendido_en = Column(DateTime, nullable=False, default=ahora_local, index=True)
+    operacion_id = Column(String(40), unique=True, index=True)  # idempotencia: la app lo genera por ticket
     fecha = Column(Date, nullable=False, index=True)  # fecha de los sorteos del ticket
     total = Column(DINERO, nullable=False)
     estado = Column(String(20), nullable=False, default="vendido", index=True)

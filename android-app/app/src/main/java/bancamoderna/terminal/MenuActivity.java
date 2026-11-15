@@ -85,7 +85,7 @@ public class MenuActivity extends Activity {
 
     private void mostrarSaldo() {
         if (Estado.saldo != null && !Estado.saldo.isEmpty()) {
-            saldoTxt.setText("Saldo de la banca: $" + Ui.dinero(Estado.saldo));
+            saldoTxt.setText("Dinero en caja: $" + Ui.dinero(Estado.saldo));
         }
     }
 }

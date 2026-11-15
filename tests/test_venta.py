@@ -16,16 +16,16 @@ def test_venta_valida_sp_y_qn(entorno):
     assert t["banca"] == "BANCA CASTILLO" and t["banca_codigo"] == "1301"
     assert float(t["total"]) == 15.00
     assert t["estado"] == "vendido"
-    assert float(t["saldo_restante"]) == 985.00
-    assert entorno.saldo(b["sucursal"]["id"]) == 985.00
+    assert float(t["saldo_restante"]) == 1015.00
+    assert entorno.saldo(b["sucursal"]["id"]) == 1015.00
     sp, qn = t["jugadas"]
     assert sp["loterias"] == ["Real Tarde", "La Primera 12"] and sp["numeros"] == "26-58"
     assert qn["loterias"] == ["La Primera 12"]
-    # El débito quedó en el historial de movimientos
+    # La venta SUMÓ a la caja y quedó en el historial de movimientos
     movs = entorno.c.get(f"/sucursales/{b['sucursal']['id']}/movimientos", headers=entorno.admin).json()
-    debito = [m for m in movs if m["tipo"] == "debito_venta"]
-    assert len(debito) == 1 and float(debito[0]["monto"]) == 15.00
-    assert float(debito[0]["saldo_resultante"]) == 985.00
+    venta = [m for m in movs if m["tipo"] == "venta"]
+    assert len(venta) == 1 and float(venta[0]["monto"]) == 15.00
+    assert float(venta[0]["saldo_resultante"]) == 1015.00
 
 
 def test_venta_qn_multiloteria_replica_por_sorteo(entorno):
@@ -63,15 +63,14 @@ def test_venta_sin_sesion_de_operador(entorno):
     assert r.status_code == 401
 
 
-def test_venta_saldo_insuficiente_no_vende_ni_consume_numero(entorno):
+def test_venta_con_caja_menor_que_el_ticket_vende_igual(entorno):
+    # Modelo de caja (corrección de Jose, 2026-11-14): vender NO exige
+    # saldo; la venta cobra en efectivo y SUMA a la caja de la sucursal.
     b = entorno.banca(saldo=12)
     s = entorno.sorteo_id("La Primera 12")
-    r = entorno.vender(b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "01", "monto": 15}])
-    assert r.status_code == 409 and "Saldo insuficiente" in r.json()["detail"]
-    assert entorno.saldo(b["sucursal"]["id"]) == 12.00
-    # La siguiente venta válida recibe el ID 1: el intento fallido no consumió número
-    t = entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "01", "monto": 10}])
+    t = entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "01", "monto": 15}])
     assert t["id"] == 1
+    assert entorno.saldo(b["sucursal"]["id"]) == 27.00
 
 
 def test_venta_sorteo_cerrado(entorno, fijar_hora):

@@ -153,15 +153,24 @@ def clave_numero(n1, n2):
     return f"{a:02d}-{b:02d}"
 
 
-def vender(db, terminal, operador, jugadas_in, ahora=None):
-    """Vende un ticket completo. Valida TODO antes de crear nada; si algo
-    falla, no hay venta, ni débito, ni número consumido."""
+def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
+    """Vende un ticket completo. Modelo de CAJA (2026-11-14): vender NO
+    exige saldo — la cajera cobra en efectivo y cada venta SUMA a la caja
+    de la sucursal. Valida todo antes de crear nada; si algo falla, no hay
+    venta ni número consumido. Con operacion_id, un reenvío de la misma
+    operación devuelve el ticket ya creado (nunca duplica la venta)."""
     ahora = ahora or ahora_local()
     fecha = ahora.date()
     consorcio = db.query(Consorcio).first()
     sucursal = db.get(Sucursal, terminal.sucursal_id)
     if sucursal is None or not sucursal.activa:
         raise ErrorServicio(403, "La sucursal de esta terminal está inactiva")
+    if operacion_id:
+        previo = db.query(Ticket).filter_by(operacion_id=str(operacion_id)).first()
+        if previo is not None:
+            if previo.terminal_id != terminal.id:
+                raise ErrorServicio(409, "Esa operación ya fue registrada por otra terminal")
+            return ticket_a_dict(db, previo, saldo_restante=D(sucursal.saldo_actual))
     if not jugadas_in:
         raise ErrorServicio(400, "El ticket no tiene jugadas")
 
@@ -204,13 +213,6 @@ def vender(db, terminal, operador, jugadas_in, ahora=None):
                 expandidas.append({"tipo": tipo, "sorteo": s, "sorteo2": None, "n1": n1, "n2": n2,
                                    "monto": monto, "factores": factores})
                 total += monto
-
-    if D(sucursal.saldo_actual) < total:
-        raise ErrorServicio(
-            409,
-            f"Saldo insuficiente: la sucursal tiene ${D(sucursal.saldo_actual)} "
-            f"y el ticket cuesta ${total}. Sin saldo no hay venta.",
-        )
 
     # Límites por número (acumulado del día, contando este mismo ticket)
     acumulado = {}
@@ -265,6 +267,7 @@ def vender(db, terminal, operador, jugadas_in, ahora=None):
         terminal_id=terminal.id,
         usuario_id=operador.id,
         vendido_en=ahora,
+        operacion_id=str(operacion_id) if operacion_id else None,
         fecha=fecha,
         total=total,
         estado="vendido",
@@ -287,11 +290,11 @@ def vender(db, terminal, operador, jugadas_in, ahora=None):
                 factores_json=json.dumps({k: str(v) for k, v in e["factores"].items()}),
             )
         )
-    sucursal.saldo_actual = D(sucursal.saldo_actual) - total
+    sucursal.saldo_actual = D(sucursal.saldo_actual) + total
     db.add(
         MovimientoSaldo(
             sucursal_id=sucursal.id,
-            tipo="debito_venta",
+            tipo="venta",
             monto=total,
             referencia=f"Ticket {ticket.id}",
             saldo_resultante=sucursal.saldo_actual,
@@ -380,10 +383,49 @@ def consultar_ticket(db, ticket_id, serial):
     return datos
 
 
+def _error_no_pagable(db, ticket):
+    """El error exacto según el estado de un ticket que no está ganador."""
+    if ticket.estado == "pagado":
+        p = ticket_a_dict(db, ticket)["pago"]
+        raise ErrorServicio(
+            409,
+            f"Ya pagado en la sucursal {p['sucursal']}, el día {p['fecha_hora']}. No se puede pagar dos veces.",
+        )
+    if ticket.estado == "anulado":
+        raise ErrorServicio(409, "El ticket está anulado: no se puede pagar")
+    if ticket.estado == "no_ganador":
+        raise ErrorServicio(409, "El ticket no ganó: no hay premio que pagar")
+    if ticket.estado == "vencido":
+        raise ErrorServicio(409, "El ticket está vencido: no se puede pagar")
+    raise ErrorServicio(409, "El ticket aún no es ganador: faltan resultados por liquidar")
+
+
 def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuario_id):
     """Pago ÚNICO atómico: la transición ganador->pagado es una sola
-    actualización condicionada al estado. Dos intentos a la vez = un pago."""
+    actualización condicionada al estado. Dos intentos a la vez = un pago.
+    Modelo de CAJA: el premio sale de la caja de la sucursal que paga y se
+    descuenta al pagarse (los pendientes no descuentan). Si la caja no
+    alcanza, el pago se BLOQUEA con advertencia, el premio queda pendiente
+    y el intento queda en auditoría: el consorcio debe entregar efectivo a
+    la sucursal para poder pagarlo."""
     ticket = buscar_ticket(db, ticket_id, serial)
+    if ticket.estado != "ganador":
+        _error_no_pagable(db, ticket)
+    sucursal = db.get(Sucursal, sucursal_pagadora_id)
+    premio = D(ticket.premio_total)
+    caja = D(sucursal.saldo_actual) if sucursal is not None else D(0)
+    if caja < premio:
+        auditar(db, "ticket", ticket.id, "pago_bloqueado", usuario_id=usuario_id,
+                terminal_id=terminal_id,
+                detalle={"motivo": "caja_insuficiente", "premio": str(premio),
+                         "caja": str(caja), "sucursal_pagadora": sucursal_pagadora_id})
+        db.commit()
+        raise ErrorServicio(
+            409,
+            f"Advertencia: la caja de esta sucursal tiene ${caja} y el premio es ${premio}. "
+            "No se pagó: el premio queda pendiente hasta que el consorcio entregue "
+            "efectivo a la sucursal.",
+        )
     ahora = ahora_local()
     filas = (
         db.execute(
@@ -399,28 +441,26 @@ def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuar
         ).rowcount
         or 0
     )
-    if filas == 1:
-        auditar(db, "ticket", ticket.id, "pago", usuario_id=usuario_id, terminal_id=terminal_id,
-                detalle={"monto": str(D(ticket.premio_total)), "sucursal_pagadora": sucursal_pagadora_id})
-        db.commit()
+    if filas != 1:
+        db.rollback()
         db.expire_all()
-        return consultar_ticket(db, ticket_id, serial)
-    db.rollback()
-    db.expire_all()
-    ticket = buscar_ticket(db, ticket_id, serial)
-    if ticket.estado == "pagado":
-        p = ticket_a_dict(db, ticket)["pago"]
-        raise ErrorServicio(
-            409,
-            f"Ya pagado en la sucursal {p['sucursal']}, el día {p['fecha_hora']}. No se puede pagar dos veces.",
+        _error_no_pagable(db, buscar_ticket(db, ticket_id, serial))
+    sucursal.saldo_actual = caja - premio
+    db.add(
+        MovimientoSaldo(
+            sucursal_id=sucursal.id,
+            tipo="pago_premio",
+            monto=premio,
+            referencia=f"Pago ticket {ticket.id}",
+            saldo_resultante=sucursal.saldo_actual,
+            creado_por=usuario_id,
         )
-    if ticket.estado == "anulado":
-        raise ErrorServicio(409, "El ticket está anulado: no se puede pagar")
-    if ticket.estado == "no_ganador":
-        raise ErrorServicio(409, "El ticket no ganó: no hay premio que pagar")
-    if ticket.estado == "vencido":
-        raise ErrorServicio(409, "El ticket está vencido: no se puede pagar")
-    raise ErrorServicio(409, "El ticket aún no es ganador: faltan resultados por liquidar")
+    )
+    auditar(db, "ticket", ticket.id, "pago", usuario_id=usuario_id, terminal_id=terminal_id,
+            detalle={"monto": str(premio), "sucursal_pagadora": sucursal_pagadora_id})
+    db.commit()
+    db.expire_all()
+    return consultar_ticket(db, ticket_id, serial)
 
 
 def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=None):
@@ -444,11 +484,11 @@ def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=Non
     ticket.anulado_en = ahora
     ticket.anulado_por = usuario_id
     sucursal = db.get(Sucursal, ticket.sucursal_vendedora_id)
-    sucursal.saldo_actual = D(sucursal.saldo_actual) + D(ticket.total)
+    sucursal.saldo_actual = D(sucursal.saldo_actual) - D(ticket.total)
     db.add(
         MovimientoSaldo(
             sucursal_id=sucursal.id,
-            tipo="credito_anulacion",
+            tipo="anulacion",
             monto=D(ticket.total),
             referencia=f"Anulación ticket {ticket.id}",
             saldo_resultante=sucursal.saldo_actual,
@@ -597,6 +637,22 @@ def registrar_caja(db, tipo, monto, concepto, sucursal_id, terminal_id, usuario_
         fecha=ahora_local().date(),
     )
     db.add(tx)
+    sucursal = db.get(Sucursal, sucursal_id)
+    if sucursal is not None:
+        if tipo == "recibir_efectivo":
+            sucursal.saldo_actual = D(sucursal.saldo_actual) + monto
+        else:  # gasto
+            sucursal.saldo_actual = D(sucursal.saldo_actual) - monto
+        db.add(
+            MovimientoSaldo(
+                sucursal_id=sucursal.id,
+                tipo=tipo,
+                monto=monto,
+                referencia=tx.concepto or tipo,
+                saldo_resultante=sucursal.saldo_actual,
+                creado_por=usuario_id,
+            )
+        )
     auditar(db, "caja", tx.id or "nueva", "registro_caja", usuario_id=usuario_id,
             terminal_id=terminal_id,
             detalle={"tipo": tipo, "monto": str(monto), "concepto": tx.concepto})
@@ -665,6 +721,19 @@ def entregar_cuadre(db, sucursal_id, terminal_id, usuario_id, fecha=None, efecti
             fecha=fecha,
         )
     )
+    sucursal = db.get(Sucursal, sucursal_id)
+    if sucursal is not None:
+        sucursal.saldo_actual = D(sucursal.saldo_actual) - D(total_a_entregar)
+        db.add(
+            MovimientoSaldo(
+                sucursal_id=sucursal.id,
+                tipo="entrega_cuadre",
+                monto=abs(D(total_a_entregar)),
+                referencia=f"Cuadre {fecha}",
+                saldo_resultante=sucursal.saldo_actual,
+                creado_por=usuario_id,
+            )
+        )
     auditar(db, "cuadre", cuadre.id, "entrega_cuadre", usuario_id=usuario_id,
             terminal_id=terminal_id,
             detalle={"fecha": str(fecha), "total_a_entregar": str(total_a_entregar),

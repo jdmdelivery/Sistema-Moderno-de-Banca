@@ -84,8 +84,8 @@ def test_pendientes_y_pagado_en_otra_sucursal(entorno):
         f"/reportes/pendientes?desde=2026-11-14&hasta=2026-11-14&sucursal_id={b1['sucursal']['id']}",
         headers=entorno.admin).json()
     assert float(rep["monto_pendiente"]) == 600.00 and len(rep["pendientes"]) == 1
-    # Se paga en OTRA sucursal
-    b2 = entorno.banca(saldo=0, codigo="2200", nombre="BANCA PEGUERO", usuario="vend2")
+    # Se paga en OTRA sucursal (con efectivo en caja para el premio de $600)
+    b2 = entorno.banca(saldo=1000, codigo="2200", nombre="BANCA PEGUERO", usuario="vend2")
     r = entorno.c.post("/terminal/tickets/pagar",
                        json={"id": t["id"], "serial": t["serial"]}, headers=b2["headers"])
     assert r.status_code == 200

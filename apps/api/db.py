@@ -64,8 +64,23 @@ def init_db():
     from .seed import sembrar_si_vacio
 
     Base.metadata.create_all(engine())
+    _columnas_faltantes()
     db = nueva_sesion()
     try:
         sembrar_si_vacio(db)
     finally:
         db.close()
+
+
+def _columnas_faltantes():
+    """Agrega columnas nuevas a tablas ya creadas (create_all no altera
+    tablas existentes). Idempotente: solo agrega la que falte."""
+    from sqlalchemy import inspect, text
+
+    eng = engine()
+    insp = inspect(eng)
+    if "tickets" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("tickets")}
+        if "operacion_id" not in cols:
+            with eng.begin() as conn:
+                conn.execute(text("ALTER TABLE tickets ADD COLUMN operacion_id VARCHAR(40)"))
