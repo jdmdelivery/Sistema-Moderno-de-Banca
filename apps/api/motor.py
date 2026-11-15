@@ -61,6 +61,51 @@ def recomputar_ticket(db, ticket):
         ticket.estado = "vendido"
 
 
+def liquidar_resultado_prueba(db, resultado):
+    """Evalúa solo los tickets de prueba de este resultado. No cambia su estado."""
+    return _liquidar(db, resultado, prueba=True)
+
+
+def pruebas_pagadas_con(db, resultado):
+    jugadas = (
+        db.query(Jugada)
+        .join(Ticket)
+        .filter(
+            Jugada.fecha == resultado.fecha,
+            Ticket.es_prueba.is_(True),
+            Ticket.estado == "pagado",
+            or_(Jugada.sorteo_id == resultado.sorteo_id, Jugada.sorteo2_id == resultado.sorteo_id),
+        )
+        .all()
+    )
+    return sorted({j.ticket_id for j in jugadas})
+
+
+def reabrir_pruebas(db, resultado):
+    """Deja sin evaluar las jugadas de prueba no pagadas para poder corregirlas."""
+    jugadas = (
+        db.query(Jugada)
+        .join(Ticket)
+        .filter(
+            Jugada.fecha == resultado.fecha,
+            Jugada.evaluada.is_(True),
+            Ticket.es_prueba.is_(True),
+            Ticket.estado.notin_(("pagado", "anulado")),
+            or_(Jugada.sorteo_id == resultado.sorteo_id, Jugada.sorteo2_id == resultado.sorteo_id),
+        )
+        .all()
+    )
+    tickets = set()
+    for jugada in jugadas:
+        jugada.evaluada, jugada.premio, jugada.detalle_eval = False, None, None
+        tickets.add(jugada.ticket_id)
+    for ticket_id in tickets:
+        ticket = db.get(Ticket, ticket_id)
+        if ticket is not None:
+            recomputar_ticket(db, ticket)
+    return len(tickets)
+
+
 def liquidar_resultado(db, resultado):
     """Evalúa las jugadas reales pendientes de este resultado.
 

@@ -48,6 +48,7 @@
   <h2>Resumen de hoy</h2>
   <div id="inicio-cards" class="cards"></div>
   <p class="nota">Ventas, premios y comisión del día en curso, calculados por el servidor.</p>
+  <p class="nota">PostgreSQL está en el plan gratuito de Render. Ese plan vence y no hace respaldos por sí solo. Exporte una copia de la base antes del vencimiento y antes de usar dinero real. No es un archivo permanente sin límite.</p>
 </section>
 
 <section id="sec-sucursales" class="seccion">
@@ -182,6 +183,7 @@
     <label>1.º premio<input id="res-p1" maxlength="2" inputmode="numeric" placeholder="00"></label>
     <label>2.º premio<input id="res-p2" maxlength="2" inputmode="numeric" placeholder="00"></label>
     <label>3.º premio<input id="res-p3" maxlength="2" inputmode="numeric" placeholder="00"></label>
+    <label class="check"><input id="res-simulado" type="checkbox"> Resultado simulado — no oficial</label>
     <button id="btn-res-guardar" class="btn primario">GUARDAR PROPUESTA</button>
     <button id="btn-res-confirmar" class="btn peligro">CONFIRMAR Y LIQUIDAR</button>
     <button id="btn-res-revertir" class="btn">REVERTIR LIQUIDACIÓN</button>

@@ -147,10 +147,16 @@ async function cargarInicio() {
 /* --------------------------------------------------------------- sucursales */
 async function cargarSucursales() {
   await cargarCatalogos();
-  tabla("#suc-tabla", ["Código", "Nombre", "Comisión %", "Dinero en caja", "Activa", "Acciones"],
-    SUCURSALES.map((s) => `<tr><td>${esc(s.codigo)}</td><td>${esc(s.nombre)}</td><td>${esc(s.comision_porcentaje)}</td>
-      <td>${fmt(s.saldo_actual)}</td><td>${s.activa ? "Sí" : "No"}</td>
-      <td><button class="btn fila" onclick="editarSucursal(${s.id})">Editar</button></td></tr>`));
+  tabla("#suc-tabla", ["Código", "Nombre", "Comisión %", "Caja general", "Cajas de cajeras (informativo)", "Activa", "Acciones"],
+    SUCURSALES.map((s) => {
+      const c = s.consolidado_cajas;
+      const info = c
+        ? `Prueba ${fmt(c.cajas_prueba)} · Real ${fmt(c.cajas_reales)}`
+        : "—";
+      return `<tr><td>${esc(s.codigo)}</td><td>${esc(s.nombre)}</td><td>${esc(s.comision_porcentaje)}</td>
+      <td>${fmt(s.saldo_actual)}</td><td>${info}</td><td>${s.activa ? "Sí" : "No"}</td>
+      <td><button class="btn fila" onclick="editarSucursal(${s.id})">Editar</button></td></tr>`;
+    }));
 }
 function editarSucursal(id) {
   const s = SUCURSALES.find((x) => x.id === id); if (!s) return;
@@ -211,11 +217,14 @@ async function reactivarTerminal(id) {
 /* ----------------------------------------------------------------- usuarios */
 async function cargarUsuarios() {
   const usuarios = await api("/usuarios");
-  tabla("#usu-tabla", ["Nombre", "Usuario", "Rol", "Sucursal", "Activo", "Acciones"],
+  tabla("#usu-tabla", ["Nombre", "Usuario", "Rol", "Sucursal", "Caja", "Caja de prueba", "Activo", "Acciones"],
     usuarios.map((u) => {
       const suc = SUCURSALES.find((s) => s.id === u.sucursal_id);
+      const caja = u.saldo_caja == null ? "—" : fmt(u.saldo_caja);
+      const prueba = u.saldo_caja_prueba == null ? "—" : fmt(u.saldo_caja_prueba);
       return `<tr><td>${esc(u.nombre)}</td><td>${esc(u.usuario)}</td><td>${esc(u.rol)}</td>
-        <td>${esc(suc ? suc.nombre : "—")}</td><td>${u.activo ? "Sí" : "No"}</td>
+        <td>${esc(suc ? suc.nombre : "—")}</td><td>${caja}</td><td>${prueba}</td>
+        <td>${u.activo ? "Sí" : "No"}</td>
         <td><button class="btn fila" onclick="editarUsuario(${u.id})">Editar</button></td></tr>`;
     }));
   window._usuarios = usuarios;
@@ -378,7 +387,7 @@ async function buscarResultado() {
   const r = RESULTADO_ACTUAL;
   $("#res-p1").value = r.premio1; $("#res-p2").value = r.premio2; $("#res-p3").value = r.premio3;
   caja.className = "estado-box" + (r.estado === "liquidado" ? " ganador" : "");
-  caja.textContent = `${r.sorteo} · ${r.fecha} → ${r.premio1} - ${r.premio2} - ${r.premio3} · Estado: ${r.estado.toUpperCase()} · Fuente: ${r.fuente}` +
+  caja.textContent = `${r.leyenda ? r.leyenda + " · " : ""}${r.sorteo} · ${r.fecha} → ${r.premio1} - ${r.premio2} - ${r.premio3} · Estado: ${r.estado.toUpperCase()} · Fuente: ${r.fuente}` +
     (r.liquidado_en ? ` · Liquidado: ${r.liquidado_en}` : "");
 }
 async function guardarResultado() {
@@ -386,9 +395,12 @@ async function guardarResultado() {
     const r = await post("/resultados", {
       sorteo_id: parseInt($("#res-sorteo").value), fecha: $("#res-fecha").value || hoyISO(),
       premio1: parseInt($("#res-p1").value), premio2: parseInt($("#res-p2").value), premio3: parseInt($("#res-p3").value),
+      simulado: $("#res-simulado").checked,
     });
     RESULTADO_ACTUAL = r;
-    msg("#res-msg", `Propuesta guardada ✔ ${r.sorteo}: ${r.premio1}-${r.premio2}-${r.premio3} (sin liquidar todavía)`);
+    msg("#res-msg", r.leyenda
+      ? `${r.leyenda} ✔ ${r.sorteo}: ${r.premio1}-${r.premio2}-${r.premio3}. Tickets de prueba: ${r.tickets_prueba}`
+      : `Propuesta guardada ✔ ${r.sorteo}: ${r.premio1}-${r.premio2}-${r.premio3} (sin liquidar todavía)`);
     await buscarResultado(); await cargarResultadosDia();
   } catch (e) { msg("#res-msg", e.message, false); }
 }

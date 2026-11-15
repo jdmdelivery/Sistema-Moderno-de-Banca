@@ -93,12 +93,15 @@ def operador_actual(request: Request, db=Depends(get_db)):
 
 
 # -------------------------------------------------------------- serialización
-def sucursal_dict(s):
-    return {
+def sucursal_dict(s, con_saldo=True):
+    datos = {
         "id": s.id, "codigo": s.codigo, "nombre": s.nombre, "direccion": s.direccion,
         "telefono": s.telefono, "comision_porcentaje": str(D(s.comision_porcentaje)),
-        "saldo_actual": str(D(s.saldo_actual)), "activa": bool(s.activa),
+        "activa": bool(s.activa),
     }
+    if con_saldo:
+        datos["saldo_actual"] = str(D(s.saldo_actual))
+    return datos
 
 
 def terminal_dict(t):
@@ -112,12 +115,16 @@ def terminal_dict(t):
     }
 
 
-def usuario_dict(u):
-    return {
+def usuario_dict(u, con_cajas=False):
+    datos = {
         "id": u.id, "nombre": u.nombre, "usuario": u.usuario, "rol": u.rol,
         "sucursal_id": u.sucursal_id, "activo": bool(u.activo),
         "tiene_clave": bool(u.clave_hash), "tiene_pin": bool(u.pin_hash),
     }
+    if con_cajas:
+        datos["saldo_caja"] = str(D(u.saldo_caja or 0))
+        datos["saldo_caja_prueba"] = str(D(u.saldo_caja_prueba or 0))
+    return datos
 
 
 def sorteo_dict(s):
@@ -258,7 +265,13 @@ class SucursalIn(BaseModel):
 
 @app.get("/sucursales")
 def listar_sucursales(db=Depends(get_db), usuario=Depends(panel_actual)):
-    return [sucursal_dict(s) for s in db.query(Sucursal).order_by(Sucursal.codigo).all()]
+    filas = []
+    for s in db.query(Sucursal).order_by(Sucursal.codigo).all():
+        datos = sucursal_dict(s)
+        if usuario.rol == "admin":
+            datos["consolidado_cajas"] = servicios.consolidado_cajas(db, s.id)
+        filas.append(datos)
+    return filas
 
 
 @app.post("/sucursales", status_code=201)
@@ -411,7 +424,7 @@ class UsuarioIn(BaseModel):
 
 @app.get("/usuarios")
 def listar_usuarios(db=Depends(get_db), usuario=Depends(requiere_rol("admin", "supervisor"))):
-    return [usuario_dict(u) for u in db.query(Usuario).order_by(Usuario.nombre).all()]
+    return [usuario_dict(u, con_cajas=usuario.rol == "admin") for u in db.query(Usuario).order_by(Usuario.nombre).all()]
 
 
 @app.post("/usuarios", status_code=201)
@@ -631,6 +644,7 @@ class ResultadoIn(BaseModel):
     premio1: int
     premio2: int
     premio3: int
+    simulado: bool = False
 
 
 @app.get("/resultados")
@@ -647,9 +661,13 @@ def listar_resultados(fecha: str | None = None, sorteo_id: int | None = None,
 @app.post("/resultados", status_code=201)
 def guardar_resultado(datos: ResultadoIn, db=Depends(get_db),
                       usuario=Depends(requiere_rol("admin", "supervisor"))):
-    r = servicios.guardar_resultado(db, datos.sorteo_id, _fecha(datos.fecha),
-                                    datos.premio1, datos.premio2, datos.premio3, usuario)
-    return servicios.resultado_a_dict(r)
+    r = servicios.guardar_resultado(
+        db, datos.sorteo_id, _fecha(datos.fecha),
+        datos.premio1, datos.premio2, datos.premio3, usuario, simulado=datos.simulado,
+    )
+    salida = servicios.resultado_a_dict(r)
+    salida["tickets_prueba"] = int(getattr(r, "_tickets_prueba", 0) or 0)
+    return salida
 
 
 @app.post("/resultados/{resultado_id}/confirmar")
@@ -905,8 +923,7 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
     return {
         "token": token,
         "operador": usuario_dict(usuario),
-        "sucursal": sucursal_dict(sucursal),
-        "saldo": str(D(sucursal.saldo_actual)),
+        "sucursal": sucursal_dict(sucursal, con_saldo=False),
         "mi_caja": str(servicios.mi_caja_de(usuario)),
         **_entorno_publico(),
         "terminal": {
@@ -941,10 +958,8 @@ def terminal_sorteos(db=Depends(get_db), terminal=Depends(terminal_actual),
         d["abierto"] = abierto
         d["motivo_cierre"] = motivo
         salida.append(d)
-    sucursal = db.get(Sucursal, terminal.sucursal_id)
     datos = {
         "sorteos": salida,
-        "saldo": str(D(sucursal.saldo_actual)) if sucursal else "0.00",
         **_entorno_publico(),
     }
     datos.update(servicios.indicadores_caja(db, operador))
@@ -1035,8 +1050,10 @@ def terminal_reimprimir(datos: LlaveIn, db=Depends(get_db), terminal=Depends(ter
 @app.post("/terminal/tickets/anular")
 def terminal_anular(datos: AnularIn, db=Depends(get_db), terminal=Depends(terminal_actual),
                     operador=Depends(operador_actual)):
-    return servicios.anular_ticket(db, datos.id, datos.serial, operador.id, terminal_id=terminal.id,
-                                   motivo=datos.motivo)
+    return servicios.anular_ticket(
+        db, datos.id, datos.serial, operador.id, terminal_id=terminal.id,
+        motivo=datos.motivo, solo_propietario=operador.rol == "operador",
+    )
 
 
 class CajaTerminalIn(BaseModel):
@@ -1063,7 +1080,7 @@ def terminal_gasto(datos: CajaTerminalIn, db=Depends(get_db), terminal=Depends(t
 @app.get("/terminal/caja/transacciones")
 def terminal_caja(fecha: str | None = None, db=Depends(get_db), terminal=Depends(terminal_actual),
                   operador=Depends(operador_actual)):
-    q = db.query(TransaccionCaja).filter(TransaccionCaja.terminal_id == terminal.id)
+    q = db.query(TransaccionCaja).filter(TransaccionCaja.usuario_id == operador.id)
     q = q.filter(TransaccionCaja.fecha == (_fecha(fecha) if fecha else servicios.ahora_local().date()))
     return [caja_dict(t) for t in q.order_by(TransaccionCaja.id.desc()).all()]
 
@@ -1075,8 +1092,11 @@ class CuadreTerminalIn(BaseModel):
 @app.post("/terminal/caja/cuadre", status_code=201)
 def terminal_cuadre(datos: CuadreTerminalIn, db=Depends(get_db), terminal=Depends(terminal_actual),
                     operador=Depends(operador_actual)):
-    c = servicios.entregar_cuadre(db, terminal.sucursal_id, terminal.id, operador.id,
-                                  efectivo_contado=datos.efectivo_contado)
+    c = servicios.entregar_cuadre(
+        db, terminal.sucursal_id, terminal.id, operador.id,
+        efectivo_contado=datos.efectivo_contado,
+        limitar_a_usuario=operador.id if operador.rol == "operador" else None,
+    )
     return servicios.cuadre_a_dict(c)
 
 
@@ -1097,18 +1117,26 @@ def terminal_resumen_dia(desde: str | None = None, hasta: str | None = None, alc
 def terminal_reporte_resumen(desde: str, hasta: str, vista: str = "final",
                              db=Depends(get_db), terminal=Depends(terminal_actual),
                              operador=Depends(operador_actual)):
-    return servicios.reporte_resumen(db, _fecha(desde), _fecha(hasta), vista, terminal.sucursal_id)
+    propio = operador.id if operador.rol == "operador" else None
+    return servicios.reporte_resumen(
+        db, _fecha(desde), _fecha(hasta), vista, terminal.sucursal_id, propio,
+    )
 
 
 @app.get("/terminal/reportes/pendientes")
 def terminal_reporte_pendientes(desde: str, hasta: str, formato: str = "json",
                                 db=Depends(get_db), terminal=Depends(terminal_actual),
                                 operador=Depends(operador_actual)):
+    propio = operador.id if operador.rol == "operador" else None
     if formato == "texto":
         return PlainTextResponse(
-            servicios.pendientes_texto(db, _fecha(desde), _fecha(hasta), terminal.sucursal_id, terminal)
+            servicios.pendientes_texto(
+                db, _fecha(desde), _fecha(hasta), terminal.sucursal_id, terminal, propio,
+            )
         )
-    return servicios.reporte_pendientes(db, _fecha(desde), _fecha(hasta), terminal.sucursal_id)
+    return servicios.reporte_pendientes(
+        db, _fecha(desde), _fecha(hasta), terminal.sucursal_id, propio,
+    )
 
 
 # ------------------------------------------------------------------ panel web

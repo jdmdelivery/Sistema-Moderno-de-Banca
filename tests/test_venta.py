@@ -16,7 +16,7 @@ def test_venta_valida_sp_y_qn(entorno):
     assert t["banca"] == "BANCA CASTILLO" and t["banca_codigo"] == "1301"
     assert float(t["total"]) == 15.00
     assert t["estado"] == "vendido"
-    assert float(t["saldo_restante"]) == 1015.00
+    assert "saldo_restante" not in t
     assert entorno.saldo(b["sucursal"]["id"]) == 1015.00
     sp, qn = t["jugadas"]
     assert sp["loterias"] == ["Real Tarde", "La Primera 12"] and sp["numeros"] == "26-58"
@@ -170,7 +170,7 @@ def test_modo_desarrollo_vende_cerrados_sin_cambiar_horarios(entorno, fijar_hora
     ])
     assert float(t["total"]) == 40.00
     assert t["es_prueba"] is True
-    assert float(t["saldo_restante"]) == 0.00
+    assert "saldo_restante" not in t
     admin = entorno.c.post("/auth/login", json={"usuario": "admin", "clave": "admin123"})
     assert admin.status_code == 200
     entorno.admin = {"Authorization": f"Bearer {admin.json()['token']}"}

@@ -13,6 +13,7 @@ from .comun import D, ErrorServicio, ahora_local, loterias_abiertas_desarrollo, 
 from .models import (
     Auditoria,
     Consorcio,
+    CorreccionPendiente,
     Cuadre,
     Jugada,
     LimiteVenta,
@@ -240,7 +241,7 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
         if previo is not None:
             if previo.terminal_id != terminal.id:
                 raise ErrorServicio(409, "Esa operación ya fue registrada por otra terminal")
-            return ticket_a_dict(db, previo, saldo_restante=D(sucursal.saldo_actual))
+            return ticket_a_dict(db, previo)
     if not jugadas_in:
         raise ErrorServicio(400, "El ticket no tiene jugadas")
 
@@ -386,7 +387,7 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
                      "es_prueba": prueba})
     db.commit()
     db.refresh(ticket)
-    return ticket_a_dict(db, ticket, saldo_restante=D(sucursal.saldo_actual))
+    return ticket_a_dict(db, ticket)
 
 
 # ------------------------------------------------------- consulta/pago/anula
@@ -456,7 +457,10 @@ def consultar_ticket(db, ticket_id, serial):
         return datos
     datos["puede_pagar"] = ticket.estado == "ganador"
     if ticket.estado == "ganador":
-        datos["veredicto"] = "TICKET GANADOR — NO OFICIAL" if ticket.es_prueba else "TICKET GANADOR"
+        datos["veredicto"] = (
+            "TICKET GANADOR — PENDIENTE DE PAGO — NO OFICIAL"
+            if ticket.es_prueba else "TICKET GANADOR — PENDIENTE DE PAGO"
+        )
         datos["mensaje"] = f"Ticket ganador: pague ${D(ticket.premio_total)}"
     elif ticket.estado == "pagado":
         p = datos["pago"]
@@ -584,7 +588,6 @@ def _pagar_prueba(db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, ope
     db.expire_all()
     datos = consultar_ticket(db, ticket.id, ticket.serial)
     datos["mi_caja"] = str(mi_caja_de(db.get(Usuario, usuario_id)))
-    datos["saldo_restante"] = str(D(db.get(Sucursal, sucursal_pagadora_id).saldo_actual))
     return datos
 
 
@@ -667,9 +670,12 @@ def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuar
     return datos
 
 
-def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=None, motivo=None):
+def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=None, motivo=None,
+                   solo_propietario=False):
     ahora = ahora or ahora_local()
     ticket = buscar_ticket(db, ticket_id, serial)
+    if solo_propietario and ticket.usuario_id != usuario_id:
+        raise ErrorServicio(403, "Solo puede anular sus propios tickets")
     if ticket.estado == "anulado":
         raise ErrorServicio(409, "El ticket ya está anulado")
     if ticket.estado == "pagado":
@@ -718,7 +724,7 @@ def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=Non
                      "fecha": ahora.isoformat(sep=" "), "es_prueba": bool(ticket.es_prueba)})
     db.commit()
     db.refresh(ticket)
-    return ticket_a_dict(db, ticket, saldo_restante=D(sucursal.saldo_actual))
+    return ticket_a_dict(db, ticket)
 
 
 def aplicar_limite_todas(db, tipo_codigo, numeros, monto, usuario_id, reemplazar=False, aplicar=False):
@@ -775,9 +781,17 @@ def aplicar_limite_todas(db, tipo_codigo, numeros, monto, usuario_id, reemplazar
 
 
 # ---------------------------------------------------------------- resultados
-def guardar_resultado(db, sorteo_id, fecha, p1, p2, p3, usuario, fuente="manual"):
+def guardar_resultado(db, sorteo_id, fecha, p1, p2, p3, usuario, fuente="manual", simulado=False):
     """Crea o corrige un resultado en estado PROPUESTO. Nunca toca uno
-    confirmado/liquidado: para corregirlo hay que revertirlo primero."""
+    confirmado/liquidado: para corregirlo hay que revertirlo primero.
+
+    Un resultado simulado solo existe en modo desarrollo. Liquida tickets de
+    prueba y no se confirma como oficial ni reemplaza un resultado de RDLotto.
+    """
+    if simulado:
+        if not modo_desarrollo():
+            raise ErrorServicio(403, "Un resultado simulado solo existe en modo desarrollo")
+        fuente = "simulado"
     sorteo = db.get(Sorteo, sorteo_id)
     if sorteo is None:
         raise ErrorServicio(404, "El sorteo no existe")
@@ -787,25 +801,58 @@ def guardar_resultado(db, sorteo_id, fecha, p1, p2, p3, usuario, fuente="manual"
             raise ErrorServicio(400, "Cada premio debe ser un número entre 00 y 99")
     if len(set(int(n) for n in numeros)) != 3:
         raise ErrorServicio(400, "Los tres premios deben ser números diferentes")
+    premios = tuple(int(n) for n in numeros)
     r = db.query(Resultado).filter_by(sorteo_id=sorteo_id, fecha=fecha).first()
+    if r is not None and (r.fuente == "rdlotto" or r.externo):
+        raise ErrorServicio(
+            409,
+            "Esa lotería ya tiene un resultado de RDLotto. El resultado simulado no lo reemplaza.",
+        )
     if r is not None and r.estado in ("confirmado", "liquidado"):
         raise ErrorServicio(
             409,
             "Este resultado ya fue confirmado/liquidado. Para corregirlo, primero revierta la liquidación.",
         )
+    if simulado and r is not None and r.id is not None:
+        pagados = motor.pruebas_pagadas_con(db, r)
+        if pagados:
+            db.add(
+                CorreccionPendiente(
+                    resultado_id=r.id,
+                    premio1=premios[0], premio2=premios[1], premio3=premios[2],
+                    fuente="simulado",
+                    detalle="RESULTADO SIMULADO — NO OFICIAL. No se movió dinero.",
+                )
+            )
+            db.commit()
+            raise ErrorServicio(
+                409,
+                "Hay un pago de prueba con este resultado. La corrección quedó pendiente "
+                "y no movió la caja.",
+            )
+        motor.reabrir_pruebas(db, r)
     if r is None:
         r = Resultado(sorteo_id=sorteo_id, fecha=fecha, estado="propuesto")
         db.add(r)
-    r.premio1, r.premio2, r.premio3 = (int(n) for n in numeros)
+    r.premio1, r.premio2, r.premio3 = premios
     r.fuente = fuente
+    if simulado:
+        r.estado = "propuesto"
     r.propuesto_por = usuario.id
     r.propuesto_en = ahora_local()
-    auditar(db, "resultado", r.id or f"{sorteo_id}-{fecha}", "registro_resultado",
+    db.flush()
+    auditar(db, "resultado", r.id, "registro_resultado",
             usuario_id=usuario.id,
             detalle={"sorteo": sorteo.nombre, "fecha": str(fecha),
-                     "numeros": [f"{int(n):02d}" for n in numeros], "fuente": fuente})
+                     "numeros": [f"{n:02d}" for n in premios], "fuente": fuente,
+                     "leyenda": "RESULTADO SIMULADO — NO OFICIAL" if simulado else ""})
     db.commit()
     db.refresh(r)
+    r._tickets_prueba = 0
+    if simulado:
+        r._tickets_prueba = motor.liquidar_resultado_prueba(db, r)
+        db.commit()
+        db.refresh(r)
     return r
 
 
@@ -815,6 +862,11 @@ def confirmar_resultado(db, resultado_id, usuario):
     r = db.get(Resultado, resultado_id)
     if r is None:
         raise ErrorServicio(404, "El resultado no existe")
+    if r.fuente == "simulado":
+        raise ErrorServicio(
+            409,
+            "RESULTADO SIMULADO — NO OFICIAL. No se confirma ni liquida tickets reales.",
+        )
     if r.estado == "liquidado":
         raise ErrorServicio(409, "Este resultado ya fue confirmado y liquidado")
     if r.estado == "recibido":
@@ -928,6 +980,8 @@ def resultado_a_dict(r):
         "premio3": f"{r.premio3:02d}",
         "estado": r.estado,
         "fuente": r.fuente,
+        "leyenda": "RESULTADO SIMULADO — NO OFICIAL" if r.fuente == "simulado" else "",
+        "no_oficial": r.fuente == "simulado",
         "version": int(r.version or 1),
         "externo": r.externo,
         "confirmado_en": r.confirmado_en.isoformat(sep=" ") if r.confirmado_en else None,
@@ -1356,7 +1410,8 @@ def _suma(db, columna, filtros):
     return D(db.query(func.coalesce(func.sum(columna), 0)).filter(*filtros).scalar())
 
 
-def entregar_cuadre(db, sucursal_id, terminal_id, usuario_id, fecha=None, efectivo_contado=None):
+def entregar_cuadre(db, sucursal_id, terminal_id, usuario_id, fecha=None, efectivo_contado=None,
+                    limitar_a_usuario=None):
     """Cuadre del día: ventas − premios pagados − gastos + efectivo recibido.
     La diferencia entre lo contado y lo esperado queda registrada tal cual."""
     fecha = fecha or ahora_local().date()
@@ -1376,6 +1431,10 @@ def entregar_cuadre(db, sucursal_id, terminal_id, usuario_id, fecha=None, efecti
         f_ventas.append(Ticket.sucursal_vendedora_id == sucursal_id)
         f_premios.append(Ticket.pagado_en_sucursal_id == sucursal_id)
         f_caja.append(TransaccionCaja.sucursal_id == sucursal_id)
+    if limitar_a_usuario is not None:
+        f_ventas.append(Ticket.usuario_id == limitar_a_usuario)
+        f_premios.append(Ticket.pagado_por_usuario_id == limitar_a_usuario)
+        f_caja.append(TransaccionCaja.usuario_id == limitar_a_usuario)
 
     ventas = _suma(db, Ticket.total, f_ventas)
     premios = _suma(db, Ticket.premio_total, f_premios)
@@ -1434,6 +1493,24 @@ def entregar_cuadre(db, sucursal_id, terminal_id, usuario_id, fecha=None, efecti
     return cuadre
 
 
+def consolidado_cajas(db, sucursal_id):
+    """Suma informativa de los cajones. No se escribe en la caja de la sucursal."""
+    cajeras = (
+        db.query(Usuario)
+        .filter(Usuario.sucursal_id == sucursal_id, Usuario.rol == "operador")
+        .all()
+    )
+    real = sum((D(u.saldo_caja or 0) for u in cajeras), D(0))
+    prueba = sum((D(u.saldo_caja_prueba or 0) for u in cajeras), D(0))
+    return {
+        "cajeras": len(cajeras),
+        "cajas_reales": str(real),
+        "cajas_prueba": str(prueba),
+        "informativo": True,
+        "incluido_en_caja_general": False,
+    }
+
+
 def cuadre_a_dict(c):
     return {
         "id": c.id,
@@ -1451,10 +1528,12 @@ def cuadre_a_dict(c):
 
 
 # ------------------------------------------------------------------ reportes
-def _tickets_rango(db, desde, hasta, sucursal_id=None):
+def _tickets_rango(db, desde, hasta, sucursal_id=None, usuario_id=None):
     q = db.query(Ticket).filter(Ticket.fecha >= desde, Ticket.fecha <= hasta, Ticket.es_prueba.is_(False))
     if sucursal_id:
         q = q.filter(Ticket.sucursal_vendedora_id == sucursal_id)
+    if usuario_id is not None:
+        q = q.filter(Ticket.usuario_id == usuario_id)
     return q.order_by(Ticket.id).all()
 
 
@@ -1614,8 +1693,8 @@ def _lineas_bloque(bloque):
     return lineas
 
 
-def reporte_resumen(db, desde, hasta, vista, sucursal_id=None):
-    tickets = _tickets_rango(db, desde, hasta, sucursal_id)
+def reporte_resumen(db, desde, hasta, vista, sucursal_id=None, usuario_id=None):
+    tickets = _tickets_rango(db, desde, hasta, sucursal_id, usuario_id)
     base = {"vista": vista, "desde": desde.isoformat(), "hasta": hasta.isoformat()}
     if vista == "final":
         vigentes = [t for t in tickets if t.estado != "anulado"]
@@ -1677,8 +1756,8 @@ def reporte_resumen(db, desde, hasta, vista, sucursal_id=None):
     return base
 
 
-def reporte_pendientes(db, desde, hasta, sucursal_id):
-    tickets = _tickets_rango(db, desde, hasta, sucursal_id)
+def reporte_pendientes(db, desde, hasta, sucursal_id, usuario_id=None):
+    tickets = _tickets_rango(db, desde, hasta, sucursal_id, usuario_id)
     pendientes = [t for t in tickets if t.estado == "ganador"]
     pagados_en_otra = [
         t for t in tickets
@@ -1697,10 +1776,10 @@ def reporte_pendientes(db, desde, hasta, sucursal_id):
     }
 
 
-def pendientes_texto(db, desde, hasta, sucursal_id, terminal=None):
+def pendientes_texto(db, desde, hasta, sucursal_id, terminal=None, usuario_id=None):
     """Formato de texto imprimible en la térmica, como el observado en video 3."""
     sucursal = db.get(Sucursal, sucursal_id)
-    rep = reporte_pendientes(db, desde, hasta, sucursal_id)
+    rep = reporte_pendientes(db, desde, hasta, sucursal_id, usuario_id)
     ahora = ahora_local()
     lineas = [
         (sucursal.nombre if sucursal else "SUCURSAL").upper(),

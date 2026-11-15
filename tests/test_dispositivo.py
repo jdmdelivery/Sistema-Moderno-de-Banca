@@ -20,7 +20,9 @@ def test_dos_telefonos_no_comparten_terminal_y_la_caja_no_cambia(entorno):
     assert primero.status_code == 200, primero.text
     assert primero.json()["terminal"]["serial"] == "TEL-SAMSUNG-1"
     assert primero.json()["terminal"]["modelo"] == "Samsung SM-A515F"
-    assert float(primero.json()["saldo"]) == antes
+    assert "saldo" not in primero.json()
+    assert "saldo_actual" not in primero.json()["sucursal"]
+    assert entorno.saldo(b["sucursal"]["id"]) == antes
 
     otra_vez = _entrar(entorno, "vend1", "1234", "TEL-SAMSUNG-1")
     assert otra_vez.json()["terminal"]["id"] == primero.json()["terminal"]["id"]

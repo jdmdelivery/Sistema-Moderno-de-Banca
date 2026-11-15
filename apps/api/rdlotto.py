@@ -172,6 +172,9 @@ def aplicar_documento(db, fecha, documento, usuario_id=None):
             estado = "recibido"
             alertas.append(f"{nombre}: verified sin dos fuentes independientes; queda recibido, no pagable")
         fila = db.query(Resultado).filter_by(sorteo_id=sorteo.id, fecha=fecha).first()
+        if fila is not None and fila.fuente == "simulado":
+            alertas.append(f"{nombre}: hay un resultado simulado; RDLotto no lo reemplaza")
+            continue
         if fila is not None and fila.estado in ("confirmado", "liquidado"):
             actual = (fila.premio1, fila.premio2, fila.premio3)
             if actual != tuple(premios):

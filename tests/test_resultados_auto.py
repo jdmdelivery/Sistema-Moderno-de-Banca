@@ -57,7 +57,7 @@ def test_un_resultado_verificado_no_liquida_hasta_confirmarlo(entorno):
     liquidado = entorno.confirmar(fila.id)
     assert liquidado["estado"] == "liquidado"
     consulta = entorno.consultar(t)
-    assert consulta["veredicto"] == "TICKET GANADOR"
+    assert consulta["veredicto"] == "TICKET GANADOR — PENDIENTE DE PAGO"
     assert float(consulta["premio_total"]) == 600
     ganadores = entorno.c.get("/ganadores", headers=entorno.admin).json()
     assert ganadores["total_tickets"] == 1
@@ -144,7 +144,7 @@ def test_la_prueba_se_liquida_sola_sin_tocar_la_caja_real(entorno, monkeypatch):
     db.close()
     assert entorno.consultar(real)["estado"] == "vendido"
     consulta = entorno.consultar(prueba)
-    assert consulta["veredicto"] == "TICKET GANADOR — NO OFICIAL"
+    assert consulta["veredicto"] == "TICKET GANADOR — PENDIENTE DE PAGO — NO OFICIAL"
     assert float(consulta["premio_total"]) == 600
     assert consulta["puede_pagar"] is True
     ganadores = entorno.c.get("/ganadores", headers=entorno.admin).json()
