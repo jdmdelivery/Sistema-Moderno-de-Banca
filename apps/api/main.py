@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import conectate, servicios
-from .comun import D, ErrorServicio
+from .comun import D, ErrorServicio, modo_desarrollo
 from .db import configurar, init_db, nueva_sesion
 from .models import (
     Auditoria,
@@ -196,7 +196,12 @@ def _fecha(texto):
 # ------------------------------------------------------------------- salud
 @app.get("/health")
 def salud():
-    return {"ok": True, "servicio": "sistema-de-banca-moderna", "hora": servicios.ahora_local().isoformat()}
+    return {
+        "ok": True,
+        "servicio": "sistema-de-banca-moderna",
+        "hora": servicios.ahora_local().isoformat(),
+        "modo_desarrollo": modo_desarrollo(),
+    }
 
 
 # ------------------------------------------------------------- autenticación

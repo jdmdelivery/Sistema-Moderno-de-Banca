@@ -145,3 +145,52 @@ def test_venta_sin_jugadas(entorno):
     b = entorno.banca(saldo=1000)
     r = entorno.vender(b["headers"], [])
     assert r.status_code == 400
+
+
+def test_modo_desarrollo_vende_cerrados_sin_cambiar_horarios(entorno, fijar_hora, monkeypatch):
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    b = entorno.banca(saldo=0)
+    catalogo = entorno.c.get("/sorteos", headers=entorno.admin).json()
+    antes = {
+        s["nombre"]: (s["hora_sorteo"], s["hora_cierre"], s["dias_activos"], s["activo"])
+        for s in catalogo
+    }
+    primera = next(s["id"] for s in catalogo if s["nombre"] == "La Primera 12")
+    real = next(s["id"] for s in catalogo if s["nombre"] == "Real Tarde")
+    fijar_hora(datetime(2026, 11, 14, 23, 30))
+    headers = entorno.login_terminal()
+    lista = entorno.c.get("/terminal/sorteos", headers=headers)
+    assert lista.status_code == 200
+    sorteos = lista.json()["sorteos"]
+    assert len(sorteos) == 19 and all(s["abierto"] for s in sorteos)
+    t = entorno.vender_ok(headers, [
+        {"tipo": "QN", "sorteos": [primera], "numeros": "19", "monto": 10},
+        {"tipo": "PL", "sorteos": [primera], "numeros": "26-58", "monto": 20},
+        {"tipo": "SP", "sorteos": [primera, real], "numeros": "07-11", "monto": 10},
+    ])
+    assert float(t["total"]) == 40.00
+    assert float(t["saldo_restante"]) == 40.00
+    admin = entorno.c.post("/auth/login", json={"usuario": "admin", "clave": "admin123"})
+    assert admin.status_code == 200
+    entorno.admin = {"Authorization": f"Bearer {admin.json()['token']}"}
+    assert entorno.saldo(b["sucursal"]["id"]) == 40.00
+    despues = {
+        s["nombre"]: (s["hora_sorteo"], s["hora_cierre"], s["dias_activos"], s["activo"])
+        for s in entorno.c.get("/sorteos", headers={"Authorization": f"Bearer {admin.json()['token']}"}).json()
+    }
+    assert despues == antes
+    assert entorno.c.get("/health").json()["modo_desarrollo"] is True
+
+
+def test_modo_desarrollo_mantiene_inactivo_cerrado(entorno, monkeypatch):
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    b = entorno.banca(saldo=0)
+    s = entorno.sorteo_id("La Primera 12")
+    r = entorno.c.put("/sorteos/" + str(s), json={
+        "nombre": "La Primera 12", "hora_sorteo": "11:55", "hora_cierre": "11:50",
+        "dias_activos": [1, 2, 3, 4, 5, 6, 7], "activo": False, "orden": 10,
+    }, headers=entorno.admin)
+    assert r.status_code == 200 and r.json()["activo"] is False
+    venta = entorno.vender(b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "01", "monto": 10}])
+    assert venta.status_code == 400 and "inactivo" in venta.json()["detail"]
+    assert entorno.saldo(b["sucursal"]["id"]) == 0.00

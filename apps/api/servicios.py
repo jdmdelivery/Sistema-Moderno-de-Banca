@@ -8,7 +8,7 @@ from datetime import timedelta
 from sqlalchemy import func, update
 
 from . import motor
-from .comun import D, ErrorServicio, ahora_local
+from .comun import D, ErrorServicio, ahora_local, modo_desarrollo
 from .models import (
     Auditoria,
     Consorcio,
@@ -131,6 +131,10 @@ def _verificar_sorteo_abierto(sorteo, momento):
         raise ErrorServicio(400, "El sorteo indicado no existe")
     if not sorteo.activo:
         raise ErrorServicio(400, f"El sorteo {sorteo.nombre} está inactivo")
+    # El indicador no escribe hora_cierre ni dias_activos: solo omite
+    # la regla de horario. Un sorteo inactivo sigue cerrado.
+    if modo_desarrollo():
+        return sorteo
     dias = {d.strip() for d in (sorteo.dias_activos or "").split(",") if d.strip()}
     if str(momento.isoweekday()) not in dias:
         raise ErrorServicio(400, f"El sorteo {sorteo.nombre} no juega hoy")
