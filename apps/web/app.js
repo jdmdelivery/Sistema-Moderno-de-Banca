@@ -486,6 +486,23 @@ async function cargarReportes() {
   const hoy = hoyISO();
   if (!$("#rep-desde").value) { $("#rep-desde").value = hoy; $("#rep-hasta").value = hoy; }
   if (!$("#pen-desde").value) { $("#pen-desde").value = hoy; $("#pen-hasta").value = hoy; }
+  if (!$("#ven-desde").value) { $("#ven-desde").value = hoy; $("#ven-hasta").value = hoy; }
+  const usuarios = await api("/usuarios");
+  $("#ven-usuario").innerHTML = opciones(usuarios, (u) => u.id,
+    (u) => `${u.nombre} (${u.usuario})`, '<option value="">Todos los usuarios</option>');
+}
+async function verVentas() {
+  try {
+    const usu = $("#ven-usuario").value;
+    const r = await api(`/reportes/ventas?desde=${$("#ven-desde").value}&hasta=${$("#ven-hasta").value}${usu ? `&usuario_id=${usu}` : ""}`);
+    $("#ven-salida").innerHTML =
+      `<p class="nota">Tickets: <b>${r.total_tickets}</b> · Total vendido: <b>${fmt(r.total_vendido)}</b> · Premios: <b>${fmt(r.total_premios)}</b></p>`;
+    tabla("#ven-tabla", ["Ticket", "Serial", "Banca", "Operador", "Fecha", "Total", "Estado", "Premio"],
+      r.tickets.map((t) => `<tr><td>${t.id}</td><td>${esc(t.serial)}</td><td>${esc(t.banca)}</td>
+        <td>${esc(t.operador)} (${esc(t.operador_usuario)})</td><td>${esc(t.vendido_en || t.fecha)}</td>
+        <td>${fmt(t.total)}</td><td><span class="pill ${esc(t.estado)}">${esc(t.estado)}</span></td><td>${fmt(t.premio_total)}</td></tr>`));
+    msg("#ven-msg", "Ventas listas ✔");
+  } catch (e) { msg("#ven-msg", e.message, false); }
 }
 function tablaTickets(contenedor, tickets) {
   tabla(contenedor, ["Ticket", "Serial", "Banca", "Fecha", "Total", "Estado", "Premio"],
@@ -582,6 +599,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-caj-cuadre").addEventListener("click", entregarCuadre);
   $("#caj-sucursal").addEventListener("change", () => { cargarCuadres().catch(() => {}); });
   $("#btn-rep-ver").addEventListener("click", verResumen);
+  $("#btn-ven-ver").addEventListener("click", verVentas);
   $("#btn-pen-ver").addEventListener("click", verPendientes);
   $("#btn-pen-texto").addEventListener("click", verPendientesTexto);
   $("#btn-pen-imprimir").addEventListener("click", imprimirPendientes);

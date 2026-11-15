@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import conectate, servicios
-from .comun import D, ErrorServicio, modo_desarrollo
+from .comun import D, ErrorServicio
 from .db import configurar, init_db, nueva_sesion
 from .models import (
     Auditoria,
@@ -196,12 +196,7 @@ def _fecha(texto):
 # ------------------------------------------------------------------- salud
 @app.get("/health")
 def salud():
-    return {
-        "ok": True,
-        "servicio": "sistema-de-banca-moderna",
-        "hora": servicios.ahora_local().isoformat(),
-        "modo_desarrollo": modo_desarrollo(),
-    }
+    return {"ok": True, "servicio": "sistema-de-banca-moderna", "hora": servicios.ahora_local().isoformat()}
 
 
 # ------------------------------------------------------------- autenticación
@@ -753,6 +748,13 @@ def listar_cuadres(sucursal_id: int | None = None, fecha: str | None = None,
 def reporte_resumen(desde: str, hasta: str, vista: str = "final", sucursal_id: int | None = None,
                     db=Depends(get_db), usuario=Depends(panel_actual)):
     return servicios.reporte_resumen(db, _fecha(desde), _fecha(hasta), vista, sucursal_id)
+
+
+@app.get("/reportes/ventas")
+def reporte_ventas(desde: str, hasta: str, usuario_id: int | None = None,
+                   sucursal_id: int | None = None, limite: int = 500,
+                   db=Depends(get_db), usuario=Depends(panel_actual)):
+    return servicios.reporte_ventas(db, _fecha(desde), _fecha(hasta), usuario_id, sucursal_id, limite)
 
 
 @app.get("/reportes/pendientes")

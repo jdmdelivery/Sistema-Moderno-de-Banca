@@ -8,7 +8,7 @@ from datetime import timedelta
 from sqlalchemy import func, update
 
 from . import motor
-from .comun import D, ErrorServicio, ahora_local, modo_desarrollo
+from .comun import D, ErrorServicio, ahora_local
 from .models import (
     Auditoria,
     Consorcio,
@@ -131,10 +131,6 @@ def _verificar_sorteo_abierto(sorteo, momento):
         raise ErrorServicio(400, "El sorteo indicado no existe")
     if not sorteo.activo:
         raise ErrorServicio(400, f"El sorteo {sorteo.nombre} está inactivo")
-    # El indicador no escribe hora_cierre ni dias_activos: solo omite
-    # la regla de horario. Un sorteo inactivo sigue cerrado.
-    if modo_desarrollo():
-        return sorteo
     dias = {d.strip() for d in (sorteo.dias_activos or "").split(",") if d.strip()}
     if str(momento.isoweekday()) not in dias:
         raise ErrorServicio(400, f"El sorteo {sorteo.nombre} no juega hoy")
@@ -794,6 +790,41 @@ def _ticket_resumen(db, t):
         "estado": t.estado,
         "premio_total": str(D(t.premio_total)),
         "pago": ticket_a_dict(db, t).get("pago"),
+    }
+
+
+def reporte_ventas(db, desde, hasta, usuario_id=None, sucursal_id=None, limite=500):
+    """Todas las ventas del rango con el usuario que vendió cada ticket
+    (la vista del consorcio para ver todo lo que vendió cada cajera).
+    El total vendido excluye los anulados: ese dinero volvió al cliente."""
+    q = db.query(Ticket).filter(Ticket.fecha >= desde, Ticket.fecha <= hasta)
+    if usuario_id:
+        q = q.filter(Ticket.usuario_id == usuario_id)
+    if sucursal_id:
+        q = q.filter(Ticket.sucursal_vendedora_id == sucursal_id)
+    tickets = q.order_by(Ticket.id.desc()).limit(min(limite, 1000)).all()
+    nombres = {}
+    filas = []
+    total_vendido = D(0)
+    total_premios = D(0)
+    for t in tickets:
+        if t.usuario_id not in nombres:
+            u = db.get(Usuario, t.usuario_id) if t.usuario_id else None
+            nombres[t.usuario_id] = (u.nombre, u.usuario) if u else ("—", "—")
+        nombre, login = nombres[t.usuario_id]
+        fila = _ticket_resumen(db, t)
+        fila["operador"] = nombre
+        fila["operador_usuario"] = login
+        fila["vendido_en"] = t.vendido_en.isoformat(sep=" ") if t.vendido_en else None
+        filas.append(fila)
+        if t.estado != "anulado":
+            total_vendido += D(t.total)
+        if t.estado in ("ganador", "pagado"):
+            total_premios += D(t.premio_total)
+    return {
+        "desde": desde.isoformat(), "hasta": hasta.isoformat(),
+        "tickets": filas, "total_tickets": len(filas),
+        "total_vendido": str(total_vendido), "total_premios": str(total_premios),
     }
 
 
