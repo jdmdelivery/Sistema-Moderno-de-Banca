@@ -1,34 +1,65 @@
-"""Datos iniciales: consorcio, usuario admin, sorteos observados en los videos,
-tipos de jugada QN/PL/SP y una tabla de pagos inicial (todo editable del panel).
+"""Datos iniciales: consorcio, usuario admin, los 40 sorteos, tipos QN/PL/SP
+y una tabla de pagos inicial (todo editable del panel).
 """
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 from .comun import D, modo_desarrollo
 from .models import Consorcio, Sorteo, TablaPagos, TipoJugada, Usuario
 from .security import hash_clave
 
-# (nombre, hora del sorteo, hora de cierre) — horas típicas del mercado,
-# editables desde el panel. Orden = orden en la lista DISP de la terminal.
+
+def cierre_cinco_minutos(hora):
+    """El cierre es exactamente cinco minutos antes de la hora del sorteo."""
+    base = datetime(2026, 1, 1, hora.hour, hora.minute, hora.second)
+    return (base - timedelta(minutes=5)).time()
+
+
+# Nombre y hora del sorteo, en el orden del catálogo. El cierre se calcula.
+HORAS_CATALOGO = [
+    ("Florida 2:30 PM", time(14, 30)),
+    ("Florida 10:45 PM", time(22, 45)),
+    ("Haiti Bolet 9:30 AM", time(9, 30)),
+    ("Haiti Bolet 10:30 AM", time(10, 30)),
+    ("Haiti Bolet 11:30 AM", time(11, 30)),
+    ("Haiti Bolet 5:30 PM", time(17, 30)),
+    ("Haiti Bolet 6:30 PM", time(18, 30)),
+    ("Haiti Bolet 7:30 PM", time(19, 30)),
+    ("King Lottery 12:30 PM", time(12, 30)),
+    ("King Lottery 7:30 PM", time(19, 30)),
+    ("La Anguila 8:00 AM", time(8, 0)),
+    ("La Anguila 9:00 AM", time(9, 0)),
+    ("La Anguila 10:00 AM", time(10, 0)),
+    ("La Anguila 11:00 AM", time(11, 0)),
+    ("La Anguila 12:00 PM", time(12, 0)),
+    ("La Anguila 1:00 PM", time(13, 0)),
+    ("La Anguila 2:00 PM", time(14, 0)),
+    ("La Anguila 3:00 PM", time(15, 0)),
+    ("La Anguila 4:00 PM", time(16, 0)),
+    ("La Anguila 5:00 PM", time(17, 0)),
+    ("La Anguila 6:00 PM", time(18, 0)),
+    ("La Anguila 7:00 PM", time(19, 0)),
+    ("La Anguila 8:00 PM", time(20, 0)),
+    ("La Anguila 9:00 PM", time(21, 0)),
+    ("La Anguila 10:00 PM", time(22, 0)),
+    ("La Primera 12:00 PM", time(12, 0)),
+    ("La Primera 7:00 PM", time(19, 0)),
+    ("La Suerte Dominicana 12:30 PM", time(12, 30)),
+    ("La Suerte Dominicana 6:00 PM", time(18, 0)),
+    ("Leidsa 3:55 PM", time(15, 55)),
+    ("Leidsa 8:55 PM", time(20, 55)),
+    ("Lotedom 12:00 PM", time(12, 0)),
+    ("Loteka 7:55 PM", time(19, 55)),
+    ("Lotería Nacional 2:30 PM", time(14, 30)),
+    ("Lotería Nacional 6:00 PM", time(18, 0)),
+    ("Lotería Nacional 9:00 PM", time(21, 0)),
+    ("Lotería Real Noche 8:00 PM", time(20, 0)),
+    ("New York 3:30 PM", time(15, 30)),
+    ("New York 11:30 PM", time(23, 30)),
+    ("Quiniela Real 12:55 PM", time(12, 55)),
+]
+
 SORTEOS_SEMILLA = [
-    ("La Primera 12", time(11, 55), time(11, 50)),
-    ("La Suerte 12:30", time(12, 30), time(12, 25)),
-    ("King 12PM", time(12, 30), time(12, 25)),
-    ("Real Tarde", time(12, 55), time(12, 50)),
-    ("Florida Día", time(13, 30), time(13, 25)),
-    ("Anguilla 1PM", time(13, 0), time(12, 55)),
-    ("NY Tarde", time(14, 30), time(14, 25)),
-    ("Nacional Tarde", time(14, 55), time(14, 50)),
-    ("LOTEDOM", time(15, 55), time(15, 50)),
-    ("La Primera 8PM", time(19, 55), time(19, 50)),
-    ("La Suerte 6PM", time(18, 0), time(17, 55)),
-    ("Anguilla 6PM", time(18, 0), time(17, 55)),
-    ("LOTEKA", time(19, 55), time(19, 50)),
-    ("King 07PM", time(19, 30), time(19, 25)),
-    ("Nacional Noche", time(20, 55), time(20, 50)),
-    ("QP Noche", time(21, 0), time(20, 55)),
-    ("Anguilla 9PM", time(21, 0), time(20, 55)),
-    ("Florida Noche", time(21, 45), time(21, 40)),
-    ("NY Noche", time(22, 30), time(22, 25)),
+    (nombre, hora, cierre_cinco_minutos(hora)) for nombre, hora in HORAS_CATALOGO
 ]
 
 # Factores iniciales por cada $1 apostado (valores típicos del mercado
@@ -95,6 +126,41 @@ def sembrar_si_vacio(db):
                     vigente_desde=desde,
                 )
             )
+    db.commit()
+
+
+def aplicar_catalogo_sorteos(db):
+    """Deja exactamente los 40 sorteos activos, sin borrar filas ni tickets.
+
+    Si el nombre ya existe, actualiza su horario. Si un sorteo anterior no
+    está en el catálogo, se archiva (activo = false) y sus tickets siguen
+    apuntando a esa fila. Llamarla dos veces no crea duplicados.
+    """
+    nombres = set()
+    for orden, (nombre, hora_sorteo, hora_cierre) in enumerate(SORTEOS_SEMILLA, start=1):
+        nombres.add(nombre)
+        fila = db.query(Sorteo).filter_by(nombre=nombre).first()
+        if fila is None:
+            db.add(
+                Sorteo(
+                    nombre=nombre,
+                    hora_sorteo=hora_sorteo,
+                    hora_cierre=hora_cierre,
+                    dias_activos="1,2,3,4,5,6,7",
+                    activo=True,
+                    orden=orden * 10,
+                )
+            )
+        else:
+            fila.hora_sorteo = hora_sorteo
+            fila.hora_cierre = hora_cierre
+            fila.dias_activos = "1,2,3,4,5,6,7"
+            fila.activo = True
+            fila.orden = orden * 10
+    db.flush()
+    for fila in db.query(Sorteo).all():
+        if fila.nombre not in nombres and fila.activo:
+            fila.activo = False
     db.commit()
 
 

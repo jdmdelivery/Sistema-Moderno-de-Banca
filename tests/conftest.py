@@ -16,6 +16,28 @@ from apps.api.main import app
 AHORA_FIJO = datetime(2026, 11, 14, 10, 0, 0)  # sábado 10:00 a. m.
 FECHA = "2026-11-14"
 
+# Los tests antiguos nombran el catálogo previo. La venta usa el sorteo activo nuevo.
+_NOMBRES_ACTUALES = {
+    "La Primera 12": "La Primera 12:00 PM",
+    "La Suerte 12:30": "La Suerte Dominicana 12:30 PM",
+    "King 12PM": "King Lottery 12:30 PM",
+    "Real Tarde": "Quiniela Real 12:55 PM",
+    "Florida Día": "Florida 2:30 PM",
+    "Anguilla 1PM": "La Anguila 1:00 PM",
+    "NY Tarde": "New York 3:30 PM",
+    "Nacional Tarde": "Lotería Nacional 2:30 PM",
+    "LOTEDOM": "Lotedom 12:00 PM",
+    "La Primera 8PM": "La Primera 7:00 PM",
+    "La Suerte 6PM": "La Suerte Dominicana 6:00 PM",
+    "Anguilla 6PM": "La Anguila 6:00 PM",
+    "LOTEKA": "Loteka 7:55 PM",
+    "King 07PM": "King Lottery 7:30 PM",
+    "Nacional Noche": "Lotería Nacional 9:00 PM",
+    "Anguilla 9PM": "La Anguila 9:00 PM",
+    "Florida Noche": "Florida 10:45 PM",
+    "NY Noche": "New York 11:30 PM",
+}
+
 
 class Entorno:
     def __init__(self, client):
@@ -27,8 +49,9 @@ class Entorno:
 
     # ------------------------------------------------------------ catálogos
     def sorteo_id(self, nombre):
+        nombre = _NOMBRES_ACTUALES.get(nombre, nombre)
         for s in self.c.get("/sorteos", headers=self.admin).json():
-            if s["nombre"] == nombre:
+            if s["nombre"] == nombre and s["activo"]:
                 return s["id"]
         raise AssertionError(f"Sorteo no encontrado: {nombre}")
 

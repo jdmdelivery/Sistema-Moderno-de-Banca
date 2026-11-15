@@ -119,7 +119,7 @@ def test_qn_pl_sp_pago_unico_y_correccion(entorno, monkeypatch, fijar_hora):
     assert consulta["veredicto"] == "TICKET GANADOR — PENDIENTE DE PAGO — NO OFICIAL"
     assert consulta["puede_pagar"] is True
     assert float(consulta["premio_total"]) == 600
-    assert consulta["jugadas"][0]["loterias"] == ["LOTEDOM"]
+    assert consulta["jugadas"][0]["loterias"] == ["Lotedom 12:00 PM"]
     assert consulta["jugadas"][0]["numeros"] == "25"
     assert float(consulta["jugadas"][0]["monto"]) == 10
     assert consulta["jugadas"][0]["detalle_eval"] == "1ro"

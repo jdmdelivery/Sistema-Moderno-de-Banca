@@ -59,7 +59,7 @@ def test_porcentajes_distintos_cambio_anulados_y_entrega(entorno, fijar_hora):
     cambio = _poner(entorno, jose, 15)
     assert cambio["porcentaje_anterior"] == "10"
     assert cambio["creado_en"].startswith("2026-11-14 15:00")
-    tarde = entorno.sorteo_id("LOTEDOM")
+    tarde = entorno.sorteo_id("Leidsa 3:55 PM")
     entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [tarde], "numeros": "13", "monto": 50}])
     entorno.vender_ok(otra["headers"], [{"tipo": "QN", "sorteos": [tarde], "numeros": "21", "monto": 80}])
 
@@ -159,7 +159,7 @@ def test_premio_imprime_comprobante_solo_si_el_servidor_confirma(entorno, monkey
     assert "PRUEBA — NO OFICIAL" in texto
     assert f"Ticket: {ticket['id']}" in texto
     assert f"Serial: {ticket['serial']}" in texto
-    assert "Lotería: LOTEDOM" in texto
+    assert "Lotería: Lotedom 12:00 PM" in texto
     assert "Jugada: QUINIELA 25" in texto
     assert "Monto jugado: RD$10.00" in texto
     assert "PREMIO PAGADO: RD$600.00" in texto

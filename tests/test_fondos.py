@@ -29,8 +29,8 @@ def test_aporte_de_prueba_no_toca_la_caja_general_ni_la_venta(entorno, monkeypat
     entorno.operador("ana", "prueba123", b["sucursal"]["id"])
     ana = entorno.login_terminal("ana", "prueba123")
     sorteo = entorno.sorteo_id("LOTEDOM")
-    horas = next(s for s in entorno.c.get("/sorteos", headers=entorno.admin).json() if s["nombre"] == "LOTEDOM")
-    assert len(entorno.c.get("/sorteos", headers=entorno.admin).json()) == 19
+    horas = next(s for s in entorno.c.get("/sorteos", headers=entorno.admin).json() if s["nombre"] == "Lotedom 12:00 PM")
+    assert len(entorno.c.get("/sorteos", headers=entorno.admin).json()) == 40
     entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [sorteo], "numeros": "25", "monto": 10}])
     jose = _cajera(entorno, "jose")
     ana_id = _cajera(entorno, "ana")["id"]
@@ -64,9 +64,9 @@ def test_aporte_de_prueba_no_toca_la_caja_general_ni_la_venta(entorno, monkeypat
     assert float(fila["saldo_actual"]) == 5764
     assert float(fila["consolidado_cajas"]["cajas_prueba"]) == 1010
     assert float(fila["saldo_actual"]) + float(fila["consolidado_cajas"]["cajas_prueba"]) != 5764 + 1010 + 1000
-    despues = next(s for s in entorno.c.get("/sorteos", headers=entorno.admin).json() if s["nombre"] == "LOTEDOM")
+    despues = next(s for s in entorno.c.get("/sorteos", headers=entorno.admin).json() if s["nombre"] == "Lotedom 12:00 PM")
     assert despues["hora_cierre"] == horas["hora_cierre"] and despues["hora_sorteo"] == horas["hora_sorteo"]
-    assert len(entorno.c.get("/sorteos", headers=entorno.admin).json()) == 19
+    assert len(entorno.c.get("/sorteos", headers=entorno.admin).json()) == 40
 
 
 def test_el_cajero_no_asigna_ni_consulta_fondos(entorno, monkeypatch):

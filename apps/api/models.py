@@ -262,6 +262,45 @@ class Resultado(Base):
     sorteo = relationship("Sorteo")
 
 
+class ObservacionResultado(Base):
+    """Lecturas idénticas del widget antes de confirmar. Sobrevive a un reinicio."""
+
+    __tablename__ = "observaciones_resultado"
+    __table_args__ = (UniqueConstraint("sorteo_id", "fecha"),)
+    id = Column(Integer, primary_key=True)
+    sorteo_id = Column(Integer, ForeignKey("sorteos.id"), nullable=False)
+    fecha = Column(Date, nullable=False, index=True)
+    premio1 = Column(Integer)
+    premio2 = Column(Integer)
+    premio3 = Column(Integer)
+    lecturas = Column(Integer, nullable=False, default=0)
+    primera_en = Column(DateTime)
+    ultima_en = Column(DateTime)
+    fuente = Column(String(20), nullable=False, default="conectate")
+    bloqueado = Column(Boolean, nullable=False, default=False)
+
+
+class CandadoConsulta(Base):
+    """Una sola consulta a la vez, aunque Render levante el proceso dos veces."""
+
+    __tablename__ = "candado_consulta"
+    id = Column(Integer, primary_key=True)
+    tomado_en = Column(DateTime)
+    pid = Column(Integer)
+
+
+class ColaPremio(Base):
+    """Un sorteo confirmado entra una sola vez. No paga: solo calcula."""
+
+    __tablename__ = "cola_premios"
+    id = Column(Integer, primary_key=True)
+    resultado_id = Column(Integer, ForeignKey("resultados.id"), nullable=False, unique=True)
+    estado = Column(String(20), nullable=False, default="pendiente")
+    creado_en = Column(DateTime, nullable=False, default=ahora_local)
+    procesado_en = Column(DateTime)
+    nota = Column(String(200))
+
+
 class ResultadoVersion(Base):
     """Historial de cada versión recibida. La anterior no se borra."""
 

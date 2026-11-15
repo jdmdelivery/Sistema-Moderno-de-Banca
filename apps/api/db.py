@@ -69,13 +69,14 @@ def nueva_sesion():
 def init_db():
     """Crea las tablas si no existen y siembra los datos iniciales."""
     from . import models  # noqa: F401  (registra los modelos)
-    from .seed import sembrar_si_vacio, sembrar_sucursal_prueba
+    from .seed import aplicar_catalogo_sorteos, sembrar_si_vacio, sembrar_sucursal_prueba
 
     Base.metadata.create_all(engine())
     _columnas_faltantes()
     db = nueva_sesion()
     try:
         sembrar_si_vacio(db)
+        aplicar_catalogo_sorteos(db)
         sembrar_sucursal_prueba(db)
     finally:
         db.close()

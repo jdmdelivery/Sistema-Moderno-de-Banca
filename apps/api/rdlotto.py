@@ -26,29 +26,53 @@ TOLERANCIA_MINUTOS = 10
 INTERVALO_SEGUNDOS = 90
 
 # nombre interno, game, session, hora publicada por RDLotto (America/Santo_Domingo)
+# Solo entran juegos cuyo identificador y hora ya estaban comprobados.
+# Un horario parecido no autoriza a copiar los números de otro sorteo.
 CONEXIONES = (
-    ("La Primera 12", "la-primera-quiniela", "dia", "12:00"),
-    ("La Suerte 12:30", "la-suerte-quiniela", "dia", "12:30"),
-    ("King 12PM", "king-lottery-quiniela", "dia", "12:30"),
-    ("Real Tarde", "quiniela-real", "dia", "12:55"),
-    ("Anguilla 1PM", "anguila-medio-dia", "dia", "13:00"),
-    ("La Suerte 6PM", "la-suerte-quiniela", "noche", "18:00"),
-    ("Anguilla 6PM", "anguila-tarde", "dia", "18:00"),
-    ("King 07PM", "king-lottery-quiniela", "noche", "19:30"),
-    ("LOTEKA", "quiniela-loteka", "noche", "19:55"),
-    ("Nacional Noche", "nacional-noche", "noche", "20:55"),
-    ("Anguilla 9PM", "anguila-noche", "noche", "21:00"),
+    ("La Primera 12:00 PM", "la-primera-quiniela", "dia", "12:00"),
+    ("La Suerte Dominicana 12:30 PM", "la-suerte-quiniela", "dia", "12:30"),
+    ("King Lottery 12:30 PM", "king-lottery-quiniela", "dia", "12:30"),
+    ("Quiniela Real 12:55 PM", "quiniela-real", "dia", "12:55"),
+    ("La Anguila 1:00 PM", "anguila-medio-dia", "dia", "13:00"),
+    ("La Suerte Dominicana 6:00 PM", "la-suerte-quiniela", "noche", "18:00"),
+    ("La Anguila 6:00 PM", "anguila-tarde", "dia", "18:00"),
+    ("King Lottery 7:30 PM", "king-lottery-quiniela", "noche", "19:30"),
+    ("Loteka 7:55 PM", "quiniela-loteka", "noche", "19:55"),
+    ("La Anguila 9:00 PM", "anguila-noche", "noche", "21:00"),
 )
 
+_SIN_FUENTE = "Sin fuente RDLotto comprobada para este horario."
 SIN_CONEXION = (
-    ("Florida Día", "La hora interna es 13:30 y RDLotto publica Florida día a las 14:30."),
-    ("NY Tarde", "La hora interna es 14:30 y RDLotto publica New York día a las 15:30."),
-    ("Nacional Tarde", "RDLotto no publica una quiniela Nacional a las 14:55. Gana Más es otro juego, a las 14:30."),
-    ("LOTEDOM", "La hora interna es 15:55 y RDLotto publica Quiniela LoteDom a las 12:00."),
-    ("La Primera 8PM", "La hora interna es 19:55 y RDLotto publica La Primera noche a las 19:00."),
-    ("QP Noche", "No hay un identificador QP. La quiniela de Leidsa es otro nombre y sale a las 20:55."),
-    ("Florida Noche", "La hora interna es 21:45 y RDLotto publica Florida noche a las 22:45."),
-    ("NY Noche", "La hora interna es 22:30 y RDLotto publica New York noche a las 23:30."),
+    ("Florida 2:30 PM", "RDLotto publica Florida día a las 14:30, pero no hay un identificador de juego comprobado."),
+    ("Florida 10:45 PM", "RDLotto publica Florida noche a las 22:45, pero no hay un identificador de juego comprobado."),
+    ("Haiti Bolet 9:30 AM", _SIN_FUENTE),
+    ("Haiti Bolet 10:30 AM", _SIN_FUENTE),
+    ("Haiti Bolet 11:30 AM", _SIN_FUENTE),
+    ("Haiti Bolet 5:30 PM", _SIN_FUENTE),
+    ("Haiti Bolet 6:30 PM", _SIN_FUENTE),
+    ("Haiti Bolet 7:30 PM", _SIN_FUENTE),
+    ("La Anguila 8:00 AM", _SIN_FUENTE),
+    ("La Anguila 9:00 AM", _SIN_FUENTE),
+    ("La Anguila 10:00 AM", _SIN_FUENTE),
+    ("La Anguila 11:00 AM", _SIN_FUENTE),
+    ("La Anguila 12:00 PM", _SIN_FUENTE),
+    ("La Anguila 2:00 PM", _SIN_FUENTE),
+    ("La Anguila 3:00 PM", _SIN_FUENTE),
+    ("La Anguila 4:00 PM", _SIN_FUENTE),
+    ("La Anguila 5:00 PM", _SIN_FUENTE),
+    ("La Anguila 7:00 PM", _SIN_FUENTE),
+    ("La Anguila 8:00 PM", _SIN_FUENTE),
+    ("La Anguila 10:00 PM", _SIN_FUENTE),
+    ("La Primera 7:00 PM", "RDLotto publica La Primera noche a las 19:00, pero la sesión de noche no está comprobada."),
+    ("Leidsa 3:55 PM", "No hay un identificador Leidsa comprobado."),
+    ("Leidsa 8:55 PM", "No hay un identificador Leidsa comprobado. nacional-noche es otro sorteo y no se usa aquí."),
+    ("Lotedom 12:00 PM", "RDLotto publica Quiniela LoteDom a las 12:00, pero no hay un identificador de juego comprobado."),
+    ("Lotería Nacional 2:30 PM", _SIN_FUENTE),
+    ("Lotería Nacional 6:00 PM", _SIN_FUENTE),
+    ("Lotería Nacional 9:00 PM", "nacional-noche está publicado a las 20:55, no a las 21:00. No se asignan esos números."),
+    ("Lotería Real Noche 8:00 PM", _SIN_FUENTE),
+    ("New York 3:30 PM", "RDLotto publica New York día a las 15:30, pero no hay un identificador de juego comprobado."),
+    ("New York 11:30 PM", "RDLotto publica New York noche a las 23:30, pero no hay un identificador de juego comprobado."),
 )
 
 _POR_GAME = {(game, session): (nombre, hora) for nombre, game, session, hora in CONEXIONES}
@@ -174,6 +198,13 @@ def aplicar_documento(db, fecha, documento, usuario_id=None):
         fila = db.query(Resultado).filter_by(sorteo_id=sorteo.id, fecha=fecha).first()
         if fila is not None and fila.fuente == "simulado":
             alertas.append(f"{nombre}: hay un resultado simulado; RDLotto no lo reemplaza")
+            continue
+        if fila is not None and fila.fuente == "conectate":
+            actual = (fila.premio1, fila.premio2, fila.premio3)
+            if actual != tuple(premios):
+                alertas.append(f"{nombre}: Conéctate y RDLotto no coinciden; no se reemplazó")
+            else:
+                alertas.append(f"{nombre}: RDLotto repite el resultado de Conéctate; no se duplicó")
             continue
         if fila is not None and fila.estado in ("confirmado", "liquidado"):
             actual = (fila.premio1, fila.premio2, fila.premio3)

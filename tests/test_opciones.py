@@ -49,7 +49,7 @@ def test_anular_exige_estado_valido_guarda_motivo_y_no_borra(entorno):
 
 def test_aplicar_limite_para_todas_respeta_los_individuales(entorno):
     catalogo = entorno.c.get("/sorteos", headers=entorno.admin).json()
-    primera = next(s for s in catalogo if s["nombre"] == "La Primera 12")
+    primera = next(s for s in catalogo if s["nombre"] == "La Primera 12:00 PM")
     vista = entorno.c.post("/limites/aplicar-todas", json={
         "tipo": "PL", "numeros": "26-58", "monto_max_acumulado": 1000, "aplicar": False,
     }, headers=entorno.admin)

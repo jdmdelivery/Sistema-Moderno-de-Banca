@@ -33,25 +33,24 @@ _UA = (
 # La ocurrencia 0 es la primera aparición del alias (tanda del mediodía) y la
 # 1 la segunda (tanda de la noche) cuando la página no distingue con nombre.
 ALIAS_CONECTATE = {
-    "La Primera 12": [("La Primera Día", 0), ("La Primera", 0)],
-    "La Primera 8PM": [("La Primera Noche", 0), ("La Primera", 1)],
-    "La Suerte 12:30": [("La Suerte", 0)],
-    "La Suerte 6PM": [("La Suerte", 1), ("La Suerte Tarde", 0)],
-    "Real Tarde": [("Lotería Real", 0), ("Real", 0)],
-    "Nacional Tarde": [("Nacional Tarde", 0), ("Lotería Nacional", 0)],
-    "Nacional Noche": [("Nacional Noche", 0), ("Lotería Nacional", 1)],
-    "LOTEKA": [("Loteka", 0)],
-    "LOTEDOM": [("Lotedom", 0), ("Loto Dom", 0)],
-    "King 12PM": [("King Lottery", 0), ("King", 0)],
-    "King 07PM": [("King Lottery", 1), ("King", 1)],
-    "Anguilla 1PM": [("Anguilla 1", 0), ("Anguilla", 0)],
-    "Anguilla 6PM": [("Anguilla 6", 0), ("Anguilla", 1)],
-    "Anguilla 9PM": [("Anguilla 9", 0), ("Anguilla", 2)],
-    "NY Tarde": [("New York Tarde", 0), ("New York", 0), ("NY", 0)],
-    "NY Noche": [("New York Noche", 0), ("New York", 1), ("NY", 1)],
-    "Florida Día": [("Florida Día", 0), ("Florida", 0)],
-    "Florida Noche": [("Florida Noche", 0), ("Florida", 1)],
-    "QP Noche": [("Quiniela Palé", 0), ("QP", 0)],
+    "La Primera 12:00 PM": [("La Primera Día", 0), ("La Primera", 0)],
+    "La Primera 7:00 PM": [("La Primera Noche", 0), ("La Primera", 1)],
+    "La Suerte Dominicana 12:30 PM": [("La Suerte", 0)],
+    "La Suerte Dominicana 6:00 PM": [("La Suerte", 1), ("La Suerte Tarde", 0)],
+    "Quiniela Real 12:55 PM": [("Lotería Real", 0), ("Real", 0)],
+    "Lotería Nacional 2:30 PM": [("Nacional Tarde", 0), ("Lotería Nacional", 0)],
+    "Lotería Nacional 9:00 PM": [("Nacional Noche", 0), ("Lotería Nacional", 1)],
+    "Loteka 7:55 PM": [("Loteka", 0)],
+    "Lotedom 12:00 PM": [("Lotedom", 0), ("Loto Dom", 0)],
+    "King Lottery 12:30 PM": [("King Lottery", 0), ("King", 0)],
+    "King Lottery 7:30 PM": [("King Lottery", 1), ("King", 1)],
+    "La Anguila 1:00 PM": [("Anguilla 1", 0), ("Anguilla", 0)],
+    "La Anguila 6:00 PM": [("Anguilla 6", 0), ("Anguilla", 1)],
+    "La Anguila 9:00 PM": [("Anguilla 9", 0), ("Anguilla", 2)],
+    "New York 3:30 PM": [("New York Tarde", 0), ("New York", 0), ("NY", 0)],
+    "New York 11:30 PM": [("New York Noche", 0), ("New York", 1), ("NY", 1)],
+    "Florida 2:30 PM": [("Florida Día", 0), ("Florida", 0)],
+    "Florida 10:45 PM": [("Florida Noche", 0), ("Florida", 1)],
 }
 
 
@@ -170,6 +169,12 @@ def importar_resultados(db, fecha, usuario, url=URL_CONECTATE, html=None):
         existente = db.query(Resultado).filter_by(sorteo_id=sorteo.id, fecha=fecha).first()
         if existente is not None and existente.estado in ("confirmado", "liquidado"):
             detalle.append(f"{nombre}: ya confirmado/liquidado, no se tocó")
+            continue
+        if existente is not None and (existente.premio1, existente.premio2, existente.premio3) == tuple(numeros):
+            detalle.append(f"{nombre}: resultado repetido, no se duplicó")
+            continue
+        if existente is not None:
+            detalle.append(f"{nombre}: resultado contradictorio, no se reemplazó")
             continue
         guardar_resultado(db, sorteo.id, fecha, *numeros, usuario, fuente="conectate")
         propuestos += 1

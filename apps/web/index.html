@@ -7,12 +7,10 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<div id="aviso-prueba" class="aviso-prueba" hidden>MODO DESARROLLO — LOTERÍAS ABIERTAS 24 HORAS</div>
 <div id="login" class="login-overlay">
   <div class="login-box">
     <h1>🎰 Sistema de Banca Moderna</h1>
     <p class="sub">Panel del Consorcio</p>
-    <p id="aviso-login" class="aviso-prueba" hidden>MODO DESARROLLO — LOTERÍAS ABIERTAS 24 HORAS</p>
     <label>Usuario<input id="login-usuario" autocomplete="username"></label>
     <label>Clave<input id="login-clave" type="password" autocomplete="current-password"></label>
     <button id="btn-login" class="btn primario">ENTRAR</button>
@@ -47,9 +45,22 @@
 
 <main>
 <section id="sec-inicio" class="seccion activo">
-  <h2>Resumen de hoy</h2>
-  <div id="inicio-cards" class="cards"></div>
-  <p class="nota">Ventas, premios y comisión del día en curso, calculados por el servidor.</p>
+  <h2>Resumen</h2>
+  <div class="form">
+    <button type="button" id="ini-hoy" class="btn">HOY</button>
+    <button type="button" id="ini-ayer" class="btn">AYER</button>
+    <button type="button" id="ini-quince" class="btn">15 DÍAS</button>
+    <label>DESDE<input id="ini-desde" type="date"></label>
+    <label>HASTA<input id="ini-hasta" type="date"></label>
+    <button type="button" id="ini-consultar" class="btn primario">CONSULTAR</button>
+    <p id="inicio-msg" class="msg"></p>
+  </div>
+  <p id="inicio-periodo" class="nota"></p>
+  <h3>REALES</h3>
+  <div id="inicio-reales" class="cards"></div>
+  <h3>PRUEBA</h3>
+  <div id="inicio-prueba" class="cards"></div>
+  <p class="nota">Las ventas usan la fecha de la venta. Los premios pagados usan la fecha del pago. Los pendientes son ganadores de ese período que siguen sin pagar. La comisión es el porcentaje vigente de cada cajera sobre las ventas no anuladas. PRUEBA no entra en REALES.</p>
   <p class="nota">PostgreSQL está en el plan gratuito de Render. Ese plan vence y no hace respaldos por sí solo. Exporte una copia de la base antes del vencimiento y antes de usar dinero real. No es un archivo permanente sin límite.</p>
 </section>
 

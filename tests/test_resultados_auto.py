@@ -28,11 +28,17 @@ def _doc(*draws):
 
 
 def test_la_cobertura_no_mezcla_sorteos_parecidos():
-    nombres = {fila["sorteo"] for fila in rdlotto.cobertura() if fila["conectada"]}
-    assert "Nacional Noche" in nombres
-    assert "La Primera 12" in nombres
-    for fuera in ("Nacional Tarde", "LOTEDOM", "QP Noche", "La Primera 8PM",
-                  "Florida Día", "Florida Noche", "NY Tarde", "NY Noche"):
+    cobertura = rdlotto.cobertura()
+    assert len(cobertura) == 40
+    nombres = {fila["sorteo"] for fila in cobertura if fila["conectada"]}
+    assert nombres == {
+        "La Primera 12:00 PM", "La Suerte Dominicana 12:30 PM", "King Lottery 12:30 PM",
+        "Quiniela Real 12:55 PM", "La Anguila 1:00 PM", "La Suerte Dominicana 6:00 PM",
+        "La Anguila 6:00 PM", "King Lottery 7:30 PM", "Loteka 7:55 PM", "La Anguila 9:00 PM",
+    }
+    for fuera in ("Lotedom 12:00 PM", "Leidsa 8:55 PM", "La Primera 7:00 PM",
+                  "Florida 2:30 PM", "Florida 10:45 PM", "New York 3:30 PM", "New York 11:30 PM",
+                  "Haiti Bolet 9:30 AM", "Lotería Nacional 9:00 PM"):
         assert fuera not in nombres
 
 
@@ -66,9 +72,9 @@ def test_un_resultado_verificado_no_liquida_hasta_confirmarlo(entorno):
 
 def test_un_resultado_provisional_no_se_puede_confirmar(entorno):
     b = entorno.banca()
-    s = entorno.sorteo_id("Nacional Noche")
+    s = entorno.sorteo_id("La Anguila 9:00 PM")
     entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "86", "monto": 5}])
-    doc = _doc(_draw("nacional-noche", "noche", "20:55", ["86", "38", "37"], status="live"))
+    doc = _doc(_draw("anguila-noche", "noche", "21:00", ["86", "38", "37"], status="live"))
     rdlotto.sincronizar(dbmod.nueva_sesion(), date(2026, 11, 14), documento=doc)
     db = dbmod.nueva_sesion()
     fila = db.query(Resultado).filter_by(sorteo_id=s).one()
@@ -88,7 +94,7 @@ def test_no_guarda_un_sorteo_de_otra_hora_ni_inventa_si_falla(entorno, monkeypat
     assert resumen["guardados"] == 1
     db = dbmod.nueva_sesion()
     assert db.query(Resultado).count() == 1
-    assert db.query(Resultado).one().sorteo.nombre == "Real Tarde"
+    assert db.query(Resultado).one().sorteo.nombre == "Quiniela Real 12:55 PM"
     db.close()
 
     def falla(fecha):
@@ -209,11 +215,12 @@ def test_el_pago_descuenta_la_caja_de_quien_paga_una_sola_vez(entorno):
     assert entorno.saldo(pagadora["sucursal"]["id"]) == 4400
 
 
-def test_fuera_de_ventana_no_consulta_la_fuente(entorno, monkeypatch):
+def test_el_ciclo_no_consulta_rdlotto(entorno, monkeypatch):
     def prohibido(fecha):
-        raise AssertionError("no debía consultar la fuente")
+        raise AssertionError("RDLotto no debe consultarse")
 
     monkeypatch.setattr(rdlotto, "descargar", prohibido)
-    monkeypatch.setattr(resultados_auto, "ahora_local", lambda: datetime(2026, 11, 14, 10, 0))
-    resumen = resultados_auto.ciclo(forzar=False)
-    assert resumen["omitido"] == "ningún sorteo conectado está en su ventana"
+    resumen = resultados_auto.ciclo(forzar=False, payload=[])
+    assert resumen["ok"] is True
+    assert resumen["rdlotto"] is False
+    assert resumen["confirmados"] == 0

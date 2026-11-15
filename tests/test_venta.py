@@ -19,8 +19,8 @@ def test_venta_valida_sp_y_qn(entorno):
     assert "saldo_restante" not in t
     assert entorno.saldo(b["sucursal"]["id"]) == 1015.00
     sp, qn = t["jugadas"]
-    assert sp["loterias"] == ["Real Tarde", "La Primera 12"] and sp["numeros"] == "26-58"
-    assert qn["loterias"] == ["La Primera 12"]
+    assert sp["loterias"] == ["Quiniela Real 12:55 PM", "La Primera 12:00 PM"] and sp["numeros"] == "26-58"
+    assert qn["loterias"] == ["La Primera 12:00 PM"]
     # La venta SUMÓ a la caja y quedó en el historial de movimientos
     movs = entorno.c.get(f"/sucursales/{b['sucursal']['id']}/movimientos", headers=entorno.admin).json()
     venta = [m for m in movs if m["tipo"] == "venta"]
@@ -146,7 +146,7 @@ def test_venta_sin_jugadas(entorno):
     assert r.status_code == 400
 
 
-def test_modo_desarrollo_vende_cerrados_sin_cambiar_horarios(entorno, fijar_hora, monkeypatch):
+def test_modo_desarrollo_no_abre_sorteos_cerrados(entorno, fijar_hora, monkeypatch):
     monkeypatch.setenv("MODO_DESARROLLO", "true")
     monkeypatch.setenv("LOTERIAS_ABIERTAS_DESARROLLO", "SI")
     b = entorno.banca(saldo=0)
@@ -155,22 +155,20 @@ def test_modo_desarrollo_vende_cerrados_sin_cambiar_horarios(entorno, fijar_hora
         s["nombre"]: (s["hora_sorteo"], s["hora_cierre"], s["dias_activos"], s["activo"])
         for s in catalogo
     }
-    primera = next(s["id"] for s in catalogo if s["nombre"] == "La Primera 12")
-    real = next(s["id"] for s in catalogo if s["nombre"] == "Real Tarde")
+    primera = next(s["id"] for s in catalogo if s["nombre"] == "La Primera 12:00 PM")
+    fijar_hora(datetime(2026, 11, 14, 10, 0))
+    headers = entorno.login_terminal()
+    abierta = entorno.vender_ok(headers, [{"tipo": "QN", "sorteos": [primera], "numeros": "19", "monto": 10}])
+    assert abierta["es_prueba"] is True
+    assert entorno.saldo(b["sucursal"]["id"]) == 0.00
     fijar_hora(datetime(2026, 11, 14, 23, 30))
     headers = entorno.login_terminal()
     lista = entorno.c.get("/terminal/sorteos", headers=headers)
     assert lista.status_code == 200
     sorteos = lista.json()["sorteos"]
-    assert len(sorteos) == 19 and all(s["abierto"] for s in sorteos)
-    t = entorno.vender_ok(headers, [
-        {"tipo": "QN", "sorteos": [primera], "numeros": "19", "monto": 10},
-        {"tipo": "PL", "sorteos": [primera], "numeros": "26-58", "monto": 20},
-        {"tipo": "SP", "sorteos": [primera, real], "numeros": "07-11", "monto": 10},
-    ])
-    assert float(t["total"]) == 40.00
-    assert t["es_prueba"] is True
-    assert "saldo_restante" not in t
+    assert len(sorteos) == 40 and all(s["abierto"] is False for s in sorteos)
+    cerrada = entorno.vender(headers, [{"tipo": "QN", "sorteos": [primera], "numeros": "19", "monto": 10}])
+    assert cerrada.status_code == 400 and "cerró" in cerrada.json()["detail"]
     admin = entorno.c.post("/auth/login", json={"usuario": "admin", "clave": "admin123"})
     assert admin.status_code == 200
     entorno.admin = {"Authorization": f"Bearer {admin.json()['token']}"}
@@ -182,8 +180,8 @@ def test_modo_desarrollo_vende_cerrados_sin_cambiar_horarios(entorno, fijar_hora
     assert despues == antes
     salud = entorno.c.get("/health").json()
     assert salud["modo_desarrollo"] is True
-    assert salud["loterias_abiertas_desarrollo"] is True
-    assert salud["leyenda_loterias"] == "MODO DESARROLLO — LOTERÍAS ABIERTAS 24 HORAS"
+    assert salud["loterias_abiertas_desarrollo"] is False
+    assert salud["leyenda_loterias"] == ""
 
 
 def test_sin_loterias_abiertas_el_horario_vuelve_a_cerrar(entorno, fijar_hora, monkeypatch):
@@ -195,11 +193,11 @@ def test_sin_loterias_abiertas_el_horario_vuelve_a_cerrar(entorno, fijar_hora, m
         s["nombre"]: (s["hora_sorteo"], s["hora_cierre"], s["dias_activos"], s["activo"])
         for s in catalogo
     }
-    primera = next(s["id"] for s in catalogo if s["nombre"] == "La Primera 12")
+    primera = next(s["id"] for s in catalogo if s["nombre"] == "La Primera 12:00 PM")
     fijar_hora(datetime(2026, 11, 14, 23, 30))
     headers = entorno.login_terminal()
     lista = entorno.c.get("/terminal/sorteos", headers=headers).json()["sorteos"]
-    assert len(lista) == 19
+    assert len(lista) == 40
     assert all(s["abierto"] is False for s in lista)
     venta = entorno.vender(headers, [{"tipo": "QN", "sorteos": [primera], "numeros": "19", "monto": 10}])
     assert venta.status_code == 400 and "cerró" in venta.json()["detail"]
@@ -220,7 +218,7 @@ def test_modo_desarrollo_mantiene_inactivo_cerrado(entorno, monkeypatch):
     b = entorno.banca(saldo=0)
     s = entorno.sorteo_id("La Primera 12")
     r = entorno.c.put("/sorteos/" + str(s), json={
-        "nombre": "La Primera 12", "hora_sorteo": "11:55", "hora_cierre": "11:50",
+        "nombre": "La Primera 12:00 PM", "hora_sorteo": "12:00", "hora_cierre": "11:55",
         "dias_activos": [1, 2, 3, 4, 5, 6, 7], "activo": False, "orden": 10,
     }, headers=entorno.admin)
     assert r.status_code == 200 and r.json()["activo"] is False

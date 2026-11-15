@@ -70,7 +70,7 @@ def test_resumen_final_y_por_loteria(entorno):
     assert float(r["comision_total"]) == 15.00  # 10% de $150
     r = entorno.c.get("/reportes/resumen?desde=2026-11-14&hasta=2026-11-14&vista=por_loteria",
                       headers=entorno.admin).json()
-    fila = [f for f in r["filas"] if f["sorteo"] == "La Primera 12"][0]
+    fila = [f for f in r["filas"] if f["sorteo"] == "La Primera 12:00 PM"][0]
     assert float(fila["ventas"]) == 150.00 and float(fila["premios"]) == 6000.00 and fila["jugadas"] == 2
 
 

@@ -137,18 +137,58 @@ async function cargarCatalogos() {
 }
 
 /* ------------------------------------------------------------------- inicio */
-async function cargarInicio() {
-  const hoy = hoyISO();
-  const r = await api(`/reportes/resumen?desde=${hoy}&hasta=${hoy}&vista=final`);
-  const tarjetas = [
-    [fmt(r.ventas), "Ventas de hoy"],
-    [r.total_tickets, "Tickets de hoy"],
-    [fmt(r.premios_pagados), "Premios pagados hoy"],
-    [fmt(r.premios_pendientes), "Premios por pagar"],
-    [fmt(r.neto), "Neto (ventas − premios pagados)"],
-    [fmt(r.comision_total), "Comisión de las bancas"],
+let INICIO_HOY = null;
+
+function sumarDias(iso, dias) {
+  const [anio, mes, dia] = iso.split("-").map(Number);
+  const fecha = new Date(Date.UTC(anio, mes - 1, dia));
+  fecha.setUTCDate(fecha.getUTCDate() + dias);
+  const p = (x) => String(x).padStart(2, "0");
+  return `${fecha.getUTCFullYear()}-${p(fecha.getUTCMonth() + 1)}-${p(fecha.getUTCDate())}`;
+}
+
+function tarjetasInicio(bloque) {
+  const filas = [
+    [fmt(bloque.ventas), "Ventas"],
+    [bloque.tickets, "Tickets vendidos"],
+    [fmt(bloque.premios_pagados), "Premios pagados"],
+    [fmt(bloque.premios_pendientes), "Premios por pagar"],
+    [fmt(bloque.neto), "Neto (ventas − premios pagados)"],
+    [fmt(bloque.comision), "Comisión"],
   ];
-  $("#inicio-cards").innerHTML = tarjetas.map(([n, l]) => `<div class="card"><div class="num">${esc(n)}</div><div class="lbl">${esc(l)}</div></div>`).join("");
+  return filas.map(([n, l]) => `<div class="card"><div class="num">${esc(n)}</div><div class="lbl">${esc(l)}</div></div>`).join("");
+}
+
+async function cargarInicio(desde, hasta) {
+  if (!desde && !hasta && $("#ini-desde").value && $("#ini-hasta").value) {
+    desde = $("#ini-desde").value;
+    hasta = $("#ini-hasta").value;
+  }
+  if (desde && hasta && hasta < desde) {
+    msg("#inicio-msg", "HASTA no puede ser anterior a DESDE", false);
+    return;
+  }
+  const q = new URLSearchParams();
+  if (desde) q.set("desde", desde);
+  if (hasta) q.set("hasta", hasta);
+  const r = await api("/reportes/inicio" + (q.toString() ? `?${q}` : ""));
+  INICIO_HOY = r.hoy;
+  $("#ini-desde").value = r.desde;
+  $("#ini-hasta").value = r.hasta;
+  $("#inicio-periodo").textContent = `DESDE ${r.desde}  HASTA ${r.hasta}  ·  ${r.zona}`;
+  $("#inicio-reales").innerHTML = tarjetasInicio(r.reales);
+  $("#inicio-prueba").innerHTML = tarjetasInicio(r.prueba);
+  msg("#inicio-msg", "");
+}
+
+function consultarPeriodo(tipo) {
+  const hoy = INICIO_HOY || hoyISO();
+  const rango = tipo === "ayer"
+    ? [sumarDias(hoy, -1), sumarDias(hoy, -1)]
+    : tipo === "quince"
+      ? [sumarDias(hoy, -14), hoy]
+      : [hoy, hoy];
+  return cargarInicio(rango[0], rango[1]);
 }
 
 /* --------------------------------------------------------------- sucursales */
@@ -805,7 +845,6 @@ async function verVentas() {
     const usu = $("#ven-usuario").value;
     const r = await api(`/reportes/ventas?desde=${$("#ven-desde").value}&hasta=${$("#ven-hasta").value}${usu ? `&usuario_id=${usu}` : ""}`);
     $("#ven-salida").innerHTML =
-      `${r.aviso ? `<p class="aviso-prueba">${esc(r.aviso)}</p>` : ""}` +
       `<p class="nota">Tickets: <b>${r.total_tickets}</b> · Total vendido: <b>${fmt(r.total_vendido)}</b> · Premios: <b>${fmt(r.total_premios)}</b></p>`;
     tabla("#ven-tabla", ["Ticket", "Serial", "Banca", "Operador", "Fecha", "Total", "Estado", "Premio"],
       r.tickets.map((t) => `<tr><td>${t.id}</td><td>${esc(t.serial)}</td><td>${esc(t.banca)}</td>
@@ -881,26 +920,16 @@ async function verAuditoria() {
 async function marcarDesarrollo() {
   try {
     const salud = await fetch("/health").then((r) => r.json());
-    const lineas = [];
-    if (salud.loterias_abiertas_desarrollo) {
-      lineas.push("MODO DESARROLLO — LOTERÍAS ABIERTAS 24 HORAS");
-    }
     window.MODO_DESARROLLO = !!salud.modo_desarrollo;
-    if (salud.modo_desarrollo) {
-      lineas.push("MODO DESARROLLO — DATOS DE PRUEBA");
-    }
-    const texto = lineas.join(" · ");
-    for (const id of ["#aviso-prueba", "#aviso-login"]) {
-      const nodo = $(id);
-      if (!nodo) continue;
-      nodo.hidden = texto.length === 0;
-      if (texto) nodo.textContent = texto;
-    }
   } catch {}
 }
 
 document.addEventListener("DOMContentLoaded", () => {
   marcarDesarrollo();
+  $("#ini-hoy").addEventListener("click", () => consultarPeriodo("hoy").catch((e) => msg("#inicio-msg", e.message, false)));
+  $("#ini-ayer").addEventListener("click", () => consultarPeriodo("ayer").catch((e) => msg("#inicio-msg", e.message, false)));
+  $("#ini-quince").addEventListener("click", () => consultarPeriodo("quince").catch((e) => msg("#inicio-msg", e.message, false)));
+  $("#ini-consultar").addEventListener("click", () => cargarInicio($("#ini-desde").value, $("#ini-hasta").value).catch((e) => msg("#inicio-msg", e.message, false)));
   $("#btn-login").addEventListener("click", entrar);
   $("#login-clave").addEventListener("keydown", (e) => { if (e.key === "Enter") entrar(); });
   $("#btn-salir").addEventListener("click", salir);

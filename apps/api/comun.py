@@ -33,10 +33,12 @@ def modo_desarrollo() -> bool:
 
 
 def loterias_abiertas_desarrollo() -> bool:
-    """Con LOTERIAS_ABIERTAS_DESARROLLO, las loterías activas se pueden
-    vender las 24 horas. No reescribe hora de sorteo, hora de cierre ni
-    días. Apagada, el cierre vuelve a usar el horario guardado."""
-    return _indicador("LOTERIAS_ABIERTAS_DESARROLLO")
+    """La excepción de ventas 24 horas quedó retirada.
+
+    El horario guardado de cada sorteo manda, también en modo de prueba.
+    La variable de entorno ya no abre sorteos cerrados.
+    """
+    return False
 
 
 class ErrorServicio(Exception):

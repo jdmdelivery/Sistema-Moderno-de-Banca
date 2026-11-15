@@ -29,25 +29,25 @@ def _fila(datos, nombre):
 
 def test_el_dia_cambia_a_medianoche_y_el_resultado_nuevo_reemplaza_al_anterior(entorno, monkeypatch):
     b = entorno.banca(saldo=5764)
-    s = entorno.sorteo_id("La Primera 12")
+    s = entorno.sorteo_id("La Primera 12:00 PM")
     vendido = entorno.vender_ok(b["headers"], [
         {"tipo": "QN", "sorteos": [s], "numeros": "19", "monto": 10},
     ])
     antes = entorno.saldo(b["sucursal"]["id"])
-    _guardar("La Primera 12", datetime(2026, 11, 14).date(), (19, 3, 45), "en_verificacion")
+    _guardar("La Primera 12:00 PM", datetime(2026, 11, 14).date(), (19, 3, 45), "en_verificacion")
 
     hoy = entorno.c.get("/terminal/resultados", headers=b["headers"])
     assert hoy.status_code == 200, hoy.text
-    primera = _fila(hoy.json(), "La Primera 12")
+    primera = _fila(hoy.json(), "La Primera 12:00 PM")
     assert primera["vigente"] is True
     assert primera["confirmado"] is False
     assert primera["premio1"] == "19"
     assert primera["premio2"] == "03"
     assert primera["premio3"] == "45"
     assert primera["estado"] == "en_verificacion"
-    florida = _fila(hoy.json(), "Florida Día")
-    lottedom = _fila(hoy.json(), "LOTEDOM")
-    nacional = _fila(hoy.json(), "Nacional Tarde")
+    florida = _fila(hoy.json(), "Florida 2:30 PM")
+    lottedom = _fila(hoy.json(), "Lotedom 12:00 PM")
+    nacional = _fila(hoy.json(), "Lotería Nacional 2:30 PM")
     for fuera in (florida, lottedom, nacional):
         assert fuera["pendiente"] is True
         assert fuera["premio1"] is None
@@ -64,14 +64,14 @@ def test_el_dia_cambia_a_medianoche_y_el_resultado_nuevo_reemplaza_al_anterior(e
     gris = entorno.c.get("/terminal/resultados", headers=b["headers"]).json()
     assert gris["hoy"] == "2026-11-15"
     assert gris["zona"] == "America/Santo_Domingo"
-    anterior = _fila(gris, "La Primera 12")
+    anterior = _fila(gris, "La Primera 12:00 PM")
     assert anterior["fecha"] == "2026-11-14"
     assert anterior["vigente"] is False
     assert anterior["premio1"] == "19"
     assert anterior["premio3"] == "45"
 
-    _guardar("La Primera 12", datetime(2026, 11, 15).date(), (7, 11, 22), "en_verificacion")
-    nuevo = _fila(entorno.c.get("/terminal/resultados", headers=b["headers"]).json(), "La Primera 12")
+    _guardar("La Primera 12:00 PM", datetime(2026, 11, 15).date(), (7, 11, 22), "en_verificacion")
+    nuevo = _fila(entorno.c.get("/terminal/resultados", headers=b["headers"]).json(), "La Primera 12:00 PM")
     assert nuevo["fecha"] == "2026-11-15"
     assert nuevo["vigente"] is True
     assert nuevo["premio1"] == "07"
@@ -89,9 +89,9 @@ def test_el_dia_cambia_a_medianoche_y_el_resultado_nuevo_reemplaza_al_anterior(e
 
 def test_un_error_de_fuente_no_tapa_el_ultimo_resultado_util(entorno):
     b = entorno.banca()
-    _guardar("Real Tarde", datetime(2026, 11, 13).date(), (10, 20, 30), "liquidado")
-    _guardar("Real Tarde", datetime(2026, 11, 14).date(), (1, 2, 3), "error_fuente")
-    fila = _fila(entorno.c.get("/terminal/resultados", headers=b["headers"]).json(), "Real Tarde")
+    _guardar("Quiniela Real 12:55 PM", datetime(2026, 11, 13).date(), (10, 20, 30), "liquidado")
+    _guardar("Quiniela Real 12:55 PM", datetime(2026, 11, 14).date(), (1, 2, 3), "error_fuente")
+    fila = _fila(entorno.c.get("/terminal/resultados", headers=b["headers"]).json(), "Quiniela Real 12:55 PM")
     assert fila["fecha"] == "2026-11-13"
     assert fila["vigente"] is False
     assert fila["confirmado"] is True

@@ -12,19 +12,19 @@ FIXTURE = Path(__file__).parent / "fixtures" / "conectate_ejemplo.html"
 FECHA = date(2026, 11, 14)
 
 ESPERADO = {
-    "Nacional Tarde": (19, 3, 45),
-    "Nacional Noche": (11, 22, 33),
-    "LOTEKA": (5, 23, 87),
-    "La Primera 12": (26, 58, 10),
-    "La Primera 8PM": (7, 14, 21),
-    "Real Tarde": (40, 41, 42),
-    "Anguilla 1PM": (1, 2, 3),
-    "Anguilla 6PM": (4, 5, 6),
-    "Anguilla 9PM": (7, 8, 9),
-    "King 12PM": (30, 31, 32),
-    "King 07PM": (33, 34, 35),
-    "NY Tarde": (50, 51, 52),
-    "Florida Día": (60, 61, 62),
+    "Lotería Nacional 2:30 PM": (19, 3, 45),
+    "Lotería Nacional 9:00 PM": (11, 22, 33),
+    "Loteka 7:55 PM": (5, 23, 87),
+    "La Primera 12:00 PM": (26, 58, 10),
+    "La Primera 7:00 PM": (7, 14, 21),
+    "Quiniela Real 12:55 PM": (40, 41, 42),
+    "La Anguila 1:00 PM": (1, 2, 3),
+    "La Anguila 6:00 PM": (4, 5, 6),
+    "La Anguila 9:00 PM": (7, 8, 9),
+    "King Lottery 12:30 PM": (30, 31, 32),
+    "King Lottery 7:30 PM": (33, 34, 35),
+    "New York 3:30 PM": (50, 51, 52),
+    "Florida 2:30 PM": (60, 61, 62),
 }
 
 
@@ -64,7 +64,7 @@ def test_importar_no_toca_un_resultado_liquidado(entorno):
     try:
         resumen = conectate.importar_resultados(db, FECHA, _admin(db), html=html)
         assert resumen["ok"] is True
-        assert any("LOTEKA" in d and "no se tocó" in d for d in resumen["detalle"])
+        assert any("Loteka 7:55 PM" in d and "no se tocó" in d for d in resumen["detalle"])
         r = db.query(Resultado).filter_by(sorteo_id=s_loteka, fecha=FECHA).first()
         assert (r.premio1, r.premio2, r.premio3) == (1, 2, 3)  # intacto
         assert r.estado == "liquidado"

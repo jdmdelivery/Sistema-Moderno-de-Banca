@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import conectate, resultados_auto, rdlotto, servicios
+from . import conectate, conectate_widget, resultados_auto, servicios
 from .comun import D, ErrorServicio, loterias_abiertas_desarrollo, modo_desarrollo
 from .db import configurar, engine, init_db, nueva_sesion
 from .models import (
@@ -728,17 +728,54 @@ def importar_resultados(datos: ImportarIn, db=Depends(get_db),
     return conectate.importar_resultados(db, fecha, usuario)
 
 
+@app.get("/resultados/tablero")
+def tablero_resultados(db=Depends(get_db), usuario=Depends(panel_actual)):
+    return servicios.tablero_resultados(db, servicios.ahora_local().date())
+
+
+@app.get("/movil/admin")
+def movil_admin(seccion: str = "inicio", desde: str | None = None, hasta: str | None = None,
+                sucursal_id: int | None = None, usuario_id: int | None = None, q: str = "",
+                db=Depends(get_db), usuario=Depends(requiere_rol("admin", "supervisor"))):
+    hoy = servicios.ahora_local().date()
+    inicio = _fecha(desde) if desde else hoy
+    fin = _fecha(hasta) if hasta else hoy
+    return servicios.panel_movil(db, usuario, seccion, inicio, fin, sucursal_id, usuario_id, q)
+
+
 @app.get("/fuente-resultados")
 def cobertura_resultados(db=Depends(get_db), usuario=Depends(panel_actual)):
     return {
-        "fuente": "rdlotto",
-        "documentacion": "https://rdlotto.com/api-docs",
-        "aviso": "RDLotto publica información, no el resultado oficial del operador. "
-                 "Un resultado verificado queda en verificación y no habilita pagos.",
-        "intervalo_segundos": rdlotto.INTERVALO_SEGUNDOS,
+        "fuente": "conectate",
+        "url": conectate_widget.URL_WIDGET,
+        "aviso": "Solo el widget público de Conéctate. Tres lecturas iguales y 10 minutos "
+                 "antes de confirmar. No paga solo. RDLotto no se consulta.",
+        "intervalo_segundos": resultados_auto.INTERVALO_SEGUNDOS,
         "trabajador": resultados_auto.estado(),
-        "sorteos": rdlotto.cobertura(),
+        "sorteos": [
+            {
+                "sorteo": s.nombre,
+                "hora": s.hora_sorteo.strftime("%H:%M"),
+                "conectada": s.nombre in conectate_widget.RECONOCIDOS,
+                "motivo": None if s.nombre in conectate_widget.RECONOCIDOS else conectate_widget.motivo_sin_fuente(s.nombre),
+            }
+            for s in db.query(Sorteo).filter_by(activo=True).order_by(Sorteo.hora_sorteo, Sorteo.nombre)
+        ],
     }
+
+
+@app.get("/fuente-resultados/probar")
+def probar_widget(usuario=Depends(requiere_rol("admin", "supervisor"))):
+    """Consulta el widget desde este proceso. No guarda ni confirma."""
+    datos, error = conectate_widget.descargar()
+    if error:
+        return {"ok": False, "motivo": error, "cantidad": 0, "titulos": []}
+    titulos = []
+    if isinstance(datos, list):
+        for item in datos:
+            if isinstance(item, dict):
+                titulos.append(str(item.get("game_title") or item.get("title") or ""))
+    return {"ok": True, "motivo": None, "cantidad": len(titulos), "titulos": titulos}
 
 
 @app.post("/fuente-resultados/sincronizar")
@@ -866,6 +903,15 @@ def listar_cuadres(sucursal_id: int | None = None, fecha: str | None = None,
 
 
 # ------------------------------------------------------------------ reportes
+@app.get("/reportes/inicio")
+def reporte_inicio(desde: str | None = None, hasta: str | None = None,
+                   db=Depends(get_db), usuario=Depends(panel_actual)):
+    hoy = servicios.ahora_local().date()
+    return servicios.resumen_inicio(
+        db, _fecha(desde) if desde else hoy, _fecha(hasta) if hasta else hoy,
+    )
+
+
 @app.get("/reportes/resumen")
 def reporte_resumen(desde: str, hasta: str, vista: str = "final", sucursal_id: int | None = None,
                     db=Depends(get_db), usuario=Depends(panel_actual)):
@@ -927,11 +973,27 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
     if (
         usuario is None
         or not usuario.activo
-        or usuario.rol not in ("operador", "supervisor")
         or not usuario.clave_hash
         or not verificar_clave(datos.clave, usuario.clave_hash)
     ):
         raise ErrorServicio(401, "Usuario o contraseña incorrectos")
+    if usuario.rol == "admin":
+        token = servicios.crear_sesion(db, usuario, tipo="panel")
+        servicios.auditar(
+            db, "usuario", usuario.id, "login_admin_movil", usuario_id=usuario.id,
+            detalle={"dispositivo": datos.dispositivo_id or "", "version": datos.version_app or ""},
+        )
+        db.commit()
+        return {
+            "token": token,
+            "rol": "admin",
+            "operador": usuario_dict(usuario),
+            "sucursal": None,
+            "mi_caja": "0.00",
+            **_entorno_publico(),
+        }
+    if usuario.rol not in ("operador", "supervisor"):
+        raise ErrorServicio(403, "Su rol no puede entrar a la terminal")
     if usuario.sucursal_id is None:
         raise ErrorServicio(
             403,
@@ -952,6 +1014,7 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
     db.commit()
     return {
         "token": token,
+        "rol": usuario.rol,
         "operador": usuario_dict(usuario),
         "sucursal": sucursal_dict(sucursal, con_saldo=False),
         "mi_caja": str(servicios.mi_caja_de(usuario)),
@@ -970,7 +1033,7 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
 @app.get("/terminal/resultados")
 def terminal_resultados(db=Depends(get_db), terminal=Depends(terminal_actual),
                         operador=Depends(operador_actual)):
-    return servicios.consulta_resultados(db, servicios.ahora_local().date())
+    return servicios.tablero_resultados(db, servicios.ahora_local().date())
 
 
 @app.get("/terminal/sorteos")
@@ -979,14 +1042,12 @@ def terminal_sorteos(db=Depends(get_db), terminal=Depends(terminal_actual),
     ahora = servicios.ahora_local()
     salida = []
     for s in db.query(Sorteo).filter_by(activo=True).order_by(Sorteo.orden).all():
-        try:
-            servicios._verificar_sorteo_abierto(s, ahora)
-            abierto, motivo = True, ""
-        except ErrorServicio as e:
-            abierto, motivo = False, e.mensaje
+        info = servicios.estado_sorteo(s, ahora)
         d = sorteo_dict(s)
-        d["abierto"] = abierto
-        d["motivo_cierre"] = motivo
+        d["abierto"] = info["abierto"]
+        d["estado"] = info["estado"]
+        d["motivo_cierre"] = info["motivo"]
+        d["segundos_para_cierre"] = info["segundos_para_cierre"]
         salida.append(d)
     datos = {
         "sorteos": salida,

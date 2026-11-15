@@ -4,13 +4,13 @@ las rutas (main.py) solo traducen HTTP <-> servicio.
 """
 import calendar
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
-from sqlalchemy import func, update
+from sqlalchemy import func, or_, update
 from sqlalchemy.exc import IntegrityError
 
 from . import motor
-from .comun import D, ErrorServicio, ahora_local, loterias_abiertas_desarrollo, modo_desarrollo
+from .comun import D, ErrorServicio, ZONA, ahora_local, modo_desarrollo
 from .models import (
     Auditoria,
     Consorcio,
@@ -31,6 +31,7 @@ from .models import (
     Terminal,
     Entrega,
     FondoAsignado,
+    Importacion,
     Ticket,
     TipoJugada,
     TransaccionCaja,
@@ -189,16 +190,52 @@ def _tabla_vigente(db, tipo_id, momento):
     return {f.clave: D(f.factor) for f in filas}
 
 
-def _verificar_sorteo_abierto(sorteo, momento):
+APERTURA_VENTAS = time(6, 0)
+AVISO_CIERRE_SEGUNDOS = 5 * 60
+
+
+def estado_sorteo(sorteo, momento):
+    """El servidor decide si se puede vender. El reloj del teléfono no cuenta."""
     if sorteo is None:
-        raise ErrorServicio(400, "El sorteo indicado no existe")
+        return {"estado": "cerrada", "abierto": False, "motivo": "El sorteo indicado no existe",
+                "segundos_para_cierre": None}
     if not sorteo.activo:
-        raise ErrorServicio(400, f"El sorteo {sorteo.nombre} está inactivo")
+        return {"estado": "cerrada", "abierto": False,
+                "motivo": f"El sorteo {sorteo.nombre} está inactivo",
+                "segundos_para_cierre": None}
     dias = {d.strip() for d in (sorteo.dias_activos or "").split(",") if d.strip()}
     if str(momento.isoweekday()) not in dias:
-        raise ErrorServicio(400, f"El sorteo {sorteo.nombre} no juega hoy")
-    if momento.time() >= sorteo.hora_cierre and not loterias_abiertas_desarrollo():
-        raise ErrorServicio(400, f"El sorteo {sorteo.nombre} ya cerró (cierre {sorteo.hora_cierre.strftime('%H:%M')})")
+        return {"estado": "cerrada", "abierto": False,
+                "motivo": f"El sorteo {sorteo.nombre} no juega hoy",
+                "segundos_para_cierre": None}
+    if momento.time() < APERTURA_VENTAS:
+        return {"estado": "cerrada", "abierto": False,
+                "motivo": "Las ventas abren a las 6:00 AM",
+                "segundos_para_cierre": None}
+    cierre = datetime.combine(momento.date(), sorteo.hora_cierre)
+    segundos = int((cierre - momento).total_seconds())
+    if segundos <= 0:
+        return {
+            "estado": "cerrada",
+            "abierto": False,
+            "motivo": (
+                f"El sorteo {sorteo.nombre} ya cerró "
+                f"(cierre {sorteo.hora_cierre.strftime('%H:%M')}). Vuelve a abrir a las 6:00 AM."
+            ),
+            "segundos_para_cierre": 0,
+        }
+    return {
+        "estado": "proxima" if segundos <= AVISO_CIERRE_SEGUNDOS else "abierta",
+        "abierto": True,
+        "motivo": "",
+        "segundos_para_cierre": segundos,
+    }
+
+
+def _verificar_sorteo_abierto(sorteo, momento):
+    info = estado_sorteo(sorteo, momento)
+    if not info["abierto"]:
+        raise ErrorServicio(400, info["motivo"])
     return sorteo
 
 
@@ -361,6 +398,16 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
                 tope.monto_max_acumulado, ya, extra,
             )
             acumulado_cajera[llave] = extra
+
+    # El cierre se vuelve a leer en esta misma transacción, antes de consumir
+    # un número de ticket. Si uno de los sorteos ya cerró, no se guarda nada.
+    momento_cierre = ahora_local()
+    if momento_cierre.date() != fecha:
+        raise ErrorServicio(400, "La venta no se completó: cambió el día de operación. No se guardó el ticket.")
+    for e in expandidas:
+        _verificar_sorteo_abierto(e["sorteo"], momento_cierre)
+        if e["sorteo2"] is not None:
+            _verificar_sorteo_abierto(e["sorteo2"], momento_cierre)
 
     # Consecutivo GLOBAL del consorcio (incremento atómico dentro de la venta)
     db.execute(
@@ -951,7 +998,7 @@ def guardar_resultado(db, sorteo_id, fecha, p1, p2, p3, usuario, fuente="manual"
         raise ErrorServicio(400, "Los tres premios deben ser números diferentes")
     premios = tuple(int(n) for n in numeros)
     r = db.query(Resultado).filter_by(sorteo_id=sorteo_id, fecha=fecha).first()
-    if r is not None and (r.fuente == "rdlotto" or r.externo):
+    if simulado and r is not None and (r.fuente in ("rdlotto", "conectate") or r.externo):
         raise ErrorServicio(
             409,
             "Esa lotería ya tiene un resultado de RDLotto. El resultado simulado no lo reemplaza.",
@@ -994,6 +1041,9 @@ def guardar_resultado(db, sorteo_id, fecha, p1, p2, p3, usuario, fuente="manual"
             detalle={"sorteo": sorteo.nombre, "fecha": str(fecha),
                      "numeros": [f"{n:02d}" for n in premios], "fuente": fuente,
                      "leyenda": "RESULTADO SIMULADO — NO OFICIAL" if simulado else ""})
+    if not simulado and fuente == "manual":
+        from .estabilizacion import bloquear_manual
+        bloquear_manual(db, sorteo_id, fecha)
     db.commit()
     db.refresh(r)
     r._tickets_prueba = 0
@@ -1055,6 +1105,52 @@ def revertir_resultado(db, resultado_id, usuario):
 
 _RESULTADOS_VISIBLES = ("propuesto", "en_verificacion", "recibido", "confirmado", "liquidado")
 _RESULTADOS_CONFIRMADOS = ("confirmado", "liquidado")
+
+
+def _estado_panel(sorteo, resultado, hoy, momento, fallo):
+    from .conectate_widget import RECONOCIDOS, motivo_sin_fuente
+
+    if sorteo.nombre not in RECONOCIDOS:
+        return "SIN FUENTE", motivo_sin_fuente(sorteo.nombre)
+    if resultado is not None and resultado.fecha == hoy and resultado.estado != "error_fuente":
+        if resultado.estado in ("confirmado", "liquidado"):
+            return "RESULTADO RECIBIDO", resultado.fuente or ""
+        return "EN REVISIÓN", "PROVISIONAL. Faltan tres lecturas iguales o los 10 minutos."
+    if fallo and momento.time() >= sorteo.hora_cierre:
+        return "ERROR DE CONSULTA", fallo
+    return "PENDIENTE", "Todavía no hay tres números. La fuente es el widget de Conéctate."
+
+
+def tablero_resultados(db, hoy=None):
+    """Los 40 sorteos con el estado de su resultado. No confirma ni paga."""
+    hoy = hoy or ahora_local().date()
+    momento = ahora_local()
+    ultima = (
+        db.query(Importacion)
+        .filter(Importacion.fecha_objetivo == hoy)
+        .order_by(Importacion.id.desc())
+        .first()
+    )
+    fallo = None
+    if ultima is not None and not ultima.ok:
+        fallo = ultima.detalle or "La última consulta falló"
+    datos = consulta_resultados(db, hoy)
+    por_id = {fila["id"]: fila for fila in datos["sorteos"]}
+    sorteos = db.query(Sorteo).filter_by(activo=True).order_by(Sorteo.orden, Sorteo.id).all()
+    filas = []
+    for sorteo in sorteos:
+        resultado = (
+            db.query(Resultado)
+            .filter(Resultado.sorteo_id == sorteo.id, Resultado.fecha == hoy, Resultado.estado != "error_fuente")
+            .order_by(Resultado.id.desc())
+            .first()
+        )
+        estado, motivo = _estado_panel(sorteo, resultado, hoy, momento, fallo)
+        base = por_id.get(sorteo.id, {})
+        base["estado_panel"] = estado
+        base["motivo_fuente"] = motivo
+        filas.append(base)
+    return {"hoy": hoy.isoformat(), "zona": "America/Santo_Domingo", "sorteos": filas}
 
 
 def consulta_resultados(db, hoy):
@@ -2405,6 +2501,149 @@ def _lineas_bloque(bloque):
     return lineas
 
 
+def _dia_guardado(momento):
+    """La hora guardada es la de República Dominicana. Si viniera con zona, se convierte."""
+    if momento is None:
+        return None
+    if momento.tzinfo is not None:
+        return momento.astimezone(ZONA).date()
+    return momento.date()
+
+
+def _premio_pendiente_valido(db, ticket):
+    """Un pendiente es un ganador sin pagar cuyo resultado sigue respaldando el premio.
+
+    Un resultado simulado solo respalda un ticket de prueba. Un ticket real
+    exige un resultado confirmado o liquidado, y nunca uno simulado.
+    """
+    if ticket.estado != "ganador" or D(ticket.premio_total) <= 0:
+        return False
+    jugadas = [
+        j for j in ticket.jugadas
+        if j.evaluada and j.premio is not None and D(j.premio) > 0
+    ]
+    if not jugadas:
+        return False
+    for jugada in jugadas:
+        sorteos = [jugada.sorteo_id]
+        if jugada.sorteo2_id:
+            sorteos.append(jugada.sorteo2_id)
+        for sorteo_id in sorteos:
+            fila = db.query(Resultado).filter_by(sorteo_id=sorteo_id, fecha=jugada.fecha).first()
+            if fila is None or fila.estado == "error_fuente":
+                return False
+            if fila.fuente == "simulado":
+                if not ticket.es_prueba or fila.estado not in (
+                    "propuesto", "en_verificacion", "confirmado", "liquidado",
+                ):
+                    return False
+            elif not ticket.es_prueba and fila.estado not in ("confirmado", "liquidado"):
+                return False
+    return True
+
+
+def _bloque_periodo(db, desde, hasta, prueba, sucursal_id=None, usuario_id=None):
+    """Ventas por fecha de venta, premios pagados por fecha de pago, sin mezclar el otro grupo."""
+    vendidos = (
+        db.query(Ticket)
+        .filter(
+            Ticket.fecha >= desde,
+            Ticket.fecha <= hasta,
+            Ticket.es_prueba.is_(prueba),
+            Ticket.estado != "anulado",
+        )
+        .order_by(Ticket.id)
+        .all()
+    )
+    vistos = set()
+    ventas = D(0)
+    grupos = {}
+    tickets = []
+    for ticket in vendidos:
+        if ticket.id in vistos:
+            continue
+        if sucursal_id is not None and ticket.sucursal_vendedora_id != sucursal_id:
+            continue
+        if usuario_id is not None and ticket.usuario_id != usuario_id:
+            continue
+        vistos.add(ticket.id)
+        tickets.append(ticket)
+        ventas += D(ticket.total)
+        momento = ticket.vendido_en or datetime.combine(ticket.fecha, datetime.min.time())
+        pct = _porcentaje_vigente(db, ticket.usuario_id, momento)
+        clave = (ticket.usuario_id, str(pct))
+        grupos[clave] = grupos.get(clave, D(0)) + D(ticket.total)
+    comision = D(0)
+    for (_, pct), ventas_grupo in grupos.items():
+        comision += D(ventas_grupo * D(pct) / D(100))
+    pagados = (
+        db.query(Ticket)
+        .filter(
+            Ticket.estado == "pagado",
+            Ticket.es_prueba.is_(prueba),
+            Ticket.pagado_en.isnot(None),
+        )
+        .all()
+    )
+    premios_pagados = D(0)
+    pagados_vistos = set()
+    for ticket in pagados:
+        if ticket.id in pagados_vistos:
+            continue
+        pagados_vistos.add(ticket.id)
+        if sucursal_id is not None and ticket.sucursal_vendedora_id != sucursal_id:
+            continue
+        if usuario_id is not None and ticket.usuario_id != usuario_id:
+            continue
+        if desde <= _dia_guardado(ticket.pagado_en) <= hasta:
+            premios_pagados += D(ticket.premio_total)
+    candidatos = (
+        db.query(Ticket)
+        .filter(
+            Ticket.estado == "ganador",
+            Ticket.es_prueba.is_(prueba),
+            Ticket.fecha >= desde,
+            Ticket.fecha <= hasta,
+        )
+        .order_by(Ticket.id)
+        .all()
+    )
+    premios_pendientes = D(0)
+    pendientes_vistos = set()
+    for ticket in candidatos:
+        if ticket.id in pendientes_vistos:
+            continue
+        if sucursal_id is not None and ticket.sucursal_vendedora_id != sucursal_id:
+            continue
+        if usuario_id is not None and ticket.usuario_id != usuario_id:
+            continue
+        pendientes_vistos.add(ticket.id)
+        if _premio_pendiente_valido(db, ticket):
+            premios_pendientes += D(ticket.premio_total)
+    return {
+        "ventas": str(D(ventas)),
+        "tickets": len(tickets),
+        "premios_pagados": str(D(premios_pagados)),
+        "premios_pendientes": str(D(premios_pendientes)),
+        "neto": str(D(ventas - premios_pagados)),
+        "comision": str(D(comision)),
+    }
+
+
+def resumen_inicio(db, desde, hasta):
+    """Resumen del panel. Reales y prueba viajan separados y esta lectura no escribe."""
+    if hasta < desde:
+        raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+    return {
+        "zona": "America/Santo_Domingo",
+        "hoy": ahora_local().date().isoformat(),
+        "desde": desde.isoformat(),
+        "hasta": hasta.isoformat(),
+        "reales": _bloque_periodo(db, desde, hasta, False),
+        "prueba": _bloque_periodo(db, desde, hasta, True),
+    }
+
+
 def reporte_resumen(db, desde, hasta, vista, sucursal_id=None, usuario_id=None):
     tickets = _tickets_rango(db, desde, hasta, sucursal_id, usuario_id)
     base = {"vista": vista, "desde": desde.isoformat(), "hasta": hasta.isoformat()}
@@ -2512,3 +2751,294 @@ def pendientes_texto(db, desde, hasta, sucursal_id, terminal=None, usuario_id=No
         f"Total: ${total:.2f}",
     ]
     return "\n".join(lineas)
+
+
+def _alcance_admin(usuario, sucursal_id):
+    if usuario is None or usuario.rol not in ("admin", "supervisor"):
+        raise ErrorServicio(403, "Su rol no puede consultar la administración")
+    if usuario.rol == "supervisor":
+        if not usuario.sucursal_id:
+            raise ErrorServicio(403, "El supervisor no tiene sucursal asignada")
+        if sucursal_id is not None and int(sucursal_id) != usuario.sucursal_id:
+            raise ErrorServicio(403, "Solo puede consultar su sucursal")
+        return usuario.sucursal_id
+    return sucursal_id
+
+
+def _ultima_actividad(db, usuario_id):
+    venta = db.query(func.max(Ticket.vendido_en)).filter(Ticket.usuario_id == usuario_id).scalar()
+    movimiento = db.query(func.max(MovimientoCajera.creado_en)).filter(MovimientoCajera.usuario_id == usuario_id).scalar()
+    momentos = [m for m in (venta, movimiento) if m is not None]
+    if not momentos:
+        return None
+    return max(momentos).isoformat(sep=" ")
+
+
+def _lineas_periodo(bloque):
+    return [
+        f"Vendido RD${bloque['ventas']}",
+        f"Tickets {bloque['tickets']}",
+        f"Premios pagados RD${bloque['premios_pagados']}",
+        f"Premios pendientes RD${bloque['premios_pendientes']}",
+        f"Neto RD${bloque['neto']}",
+        f"Comisión RD${bloque['comision']}",
+    ]
+
+
+def panel_movil(db, usuario, seccion, desde, hasta, sucursal_id=None, usuario_id=None, texto=""):
+    """Lectura del administrador en el teléfono. No vende, no paga y no mezcla las cajas."""
+    if hasta < desde:
+        raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+    sucursal_id = _alcance_admin(usuario, sucursal_id)
+    seccion = (seccion or "inicio").strip().lower()
+    if seccion not in ("inicio", "ventas", "cajeras", "tickets", "premios", "caja", "reportes", "resultados"):
+        raise ErrorServicio(400, "Sección desconocida")
+    reales = _bloque_periodo(db, desde, hasta, False, sucursal_id, usuario_id)
+    prueba = _bloque_periodo(db, desde, hasta, True, sucursal_id, usuario_id)
+    base = {
+        "seccion": seccion,
+        "desde": desde.isoformat(),
+        "hasta": hasta.isoformat(),
+        "reales": reales,
+        "prueba": prueba,
+    }
+    if seccion in ("inicio", "ventas", "reportes"):
+        jugadas_reales = _contar_jugadas(db, desde, hasta, False, sucursal_id, usuario_id)
+        jugadas_prueba = _contar_jugadas(db, desde, hasta, True, sucursal_id, usuario_id)
+        base["jugadas_reales"] = jugadas_reales
+        base["jugadas_prueba"] = jugadas_prueba
+        base["por_cajera"] = _ventas_por_cajera(db, desde, hasta, sucursal_id)
+        base["por_sucursal"] = _ventas_por_sucursal(db, desde, hasta, sucursal_id)
+        base["lineas"] = (
+            [f"{desde.isoformat()} a {hasta.isoformat()}", "REALES"]
+            + _lineas_periodo(reales)
+            + [f"Jugadas {jugadas_reales}", "PRUEBA"]
+            + _lineas_periodo(prueba)
+            + [f"Jugadas {jugadas_prueba}"]
+        )
+        return base
+    if seccion == "resultados":
+        from . import estabilizacion, resultados_auto
+        from .models import Ticket
+
+        observaciones = estabilizacion.resumen_observaciones(db, hasta)
+        proceso = resultados_auto.estado()
+        pendientes = (
+            db.query(Ticket)
+            .filter(Ticket.estado == "ganador", Ticket.premio_total > 0)
+            .count()
+        )
+        lineas = [
+            f"Proceso {'activo' if proceso.get('activo') else 'detenido'}",
+            f"Última consulta {proceso.get('ultimo_intento') or '—'}",
+            f"Último acierto {proceso.get('ultimo_ok') or '—'}",
+            f"Error {proceso.get('ultimo_error') or 'ninguno'}",
+            f"Premios pendientes {pendientes}",
+        ]
+        for fila in observaciones:
+            numero = fila["confirmado"] or fila["provisional"] or "—"
+            lineas.append(
+                f"{fila['sorteo']} · {fila['estado']} · {numero} · "
+                f"lecturas {fila['lecturas']} · {fila['fuente'] or 'sin fuente'}"
+            )
+        base["observaciones"] = observaciones
+        base["proceso"] = proceso
+        base["premios_detectados"] = pendientes
+        base["lineas"] = lineas
+        return base
+    if seccion == "cajeras":
+        gente = []
+        consulta = db.query(Usuario).filter(Usuario.rol == "operador").order_by(Usuario.nombre)
+        if sucursal_id is not None:
+            consulta = consulta.filter(Usuario.sucursal_id == sucursal_id)
+        if usuario_id is not None:
+            consulta = consulta.filter(Usuario.id == usuario_id)
+        for cajera in consulta.all():
+            sucursal = db.get(Sucursal, cajera.sucursal_id) if cajera.sucursal_id else None
+            propios_reales = _bloque_periodo(db, desde, hasta, False, cajera.sucursal_id, cajera.id)
+            propios_prueba = _bloque_periodo(db, desde, hasta, True, cajera.sucursal_id, cajera.id)
+            gente.append({
+                "id": cajera.id,
+                "nombre": cajera.nombre,
+                "usuario": cajera.usuario,
+                "sucursal": sucursal.nombre if sucursal else "",
+                "activo": bool(cajera.activo),
+                "vendido_real": propios_reales["ventas"],
+                "tickets_reales": propios_reales["tickets"],
+                "premios_pagados_reales": propios_reales["premios_pagados"],
+                "saldo_caja": str(D(cajera.saldo_caja or 0)),
+                "saldo_caja_prueba": str(D(cajera.saldo_caja_prueba or 0)),
+                "vendido_prueba": propios_prueba["ventas"],
+                "tickets_prueba": propios_prueba["tickets"],
+                "ultima_actividad": _ultima_actividad(db, cajera.id),
+            })
+        base["cajeras"] = gente
+        base["lineas"] = [
+            f"{c['nombre']} · {c['sucursal']} · {'activa' if c['activo'] else 'inactiva'} · "
+            f"real RD${c['vendido_real']} · prueba RD${c['vendido_prueba']} · "
+            f"caja RD${c['saldo_caja']} · prueba RD${c['saldo_caja_prueba']}"
+            for c in gente
+        ]
+        return base
+    if seccion == "tickets":
+        filas = _buscar_tickets(db, desde, hasta, sucursal_id, usuario_id, texto)
+        base["tickets"] = filas
+        base["lineas"] = [
+            f"#{t['id']} {t['serial']} {t['cajera']} {t['sucursal']} {t['estado']} RD${t['total']}"
+            + (" PRUEBA" if t["es_prueba"] else "")
+            for t in filas
+        ]
+        return base
+    if seccion == "premios":
+        premios = listar_ganadores(db, sucursal_id=sucursal_id, usuario_id=usuario_id)
+        base["premios"] = premios
+        base["lineas"] = [
+            "REALES pendientes RD$" + premios["premios_pendientes"],
+            "REALES pagados RD$" + premios["premios_pagados"],
+            "PRUEBA " + str(len(premios["prueba"])) + " tickets",
+        ]
+        return base
+    fondos = listar_fondos(db, sucursal_id, usuario_id)
+    entregas = listar_entregas(db, usuario, sucursal_id)
+    comisiones = resumen_comisiones(db, desde, hasta, sucursal_id, usuario_id)
+    cuadres = db.query(Cuadre).order_by(Cuadre.id.desc())
+    if sucursal_id is not None:
+        cuadres = cuadres.filter(Cuadre.sucursal_id == sucursal_id)
+    cuadres = [cuadre_a_dict(c) for c in cuadres.limit(20).all()]
+    sucursales = []
+    consulta_suc = db.query(Sucursal).order_by(Sucursal.codigo)
+    if sucursal_id is not None:
+        consulta_suc = consulta_suc.filter(Sucursal.id == sucursal_id)
+    for sucursal in consulta_suc.all():
+        cajas = consolidado_cajas(db, sucursal.id)
+        sucursales.append({
+            "id": sucursal.id,
+            "nombre": sucursal.nombre,
+            "caja_general": str(D(sucursal.saldo_actual)),
+            "cajas_reales": cajas["cajas_reales"],
+            "cajas_prueba": cajas["cajas_prueba"],
+        })
+    base["sucursales"] = sucursales
+    base["fondos"] = fondos
+    base["entregas"] = entregas
+    base["comisiones"] = comisiones
+    base["cuadres"] = cuadres
+    lineas = []
+    for sucursal in sucursales:
+        lineas.append(
+            f"{sucursal['nombre']} general RD${sucursal['caja_general']} · "
+            f"cajeras RD${sucursal['cajas_reales']} · prueba RD${sucursal['cajas_prueba']}"
+        )
+    lineas.append(f"Fondos {len(fondos)}")
+    lineas.append(f"Entregas {len(entregas['reales']) + len(entregas['prueba'])}")
+    for cuadre in cuadres:
+        if cuadre["diferencia"] is not None:
+            lineas.append(f"Cuadre {cuadre['fecha']} diferencia RD${cuadre['diferencia']}")
+    base["lineas"] = lineas
+    return base
+
+
+def _contar_jugadas(db, desde, hasta, prueba, sucursal_id, usuario_id):
+    consulta = (
+        db.query(Jugada)
+        .join(Ticket, Jugada.ticket_id == Ticket.id)
+        .filter(
+            Ticket.fecha >= desde,
+            Ticket.fecha <= hasta,
+            Ticket.es_prueba.is_(prueba),
+            Ticket.estado != "anulado",
+        )
+    )
+    if sucursal_id is not None:
+        consulta = consulta.filter(Ticket.sucursal_vendedora_id == sucursal_id)
+    if usuario_id is not None:
+        consulta = consulta.filter(Ticket.usuario_id == usuario_id)
+    return consulta.count()
+
+
+def _ventas_por_cajera(db, desde, hasta, sucursal_id):
+    consulta = db.query(Usuario).filter(Usuario.rol == "operador").order_by(Usuario.nombre)
+    if sucursal_id is not None:
+        consulta = consulta.filter(Usuario.sucursal_id == sucursal_id)
+    filas = []
+    for cajera in consulta.all():
+        reales = _bloque_periodo(db, desde, hasta, False, cajera.sucursal_id, cajera.id)
+        prueba = _bloque_periodo(db, desde, hasta, True, cajera.sucursal_id, cajera.id)
+        filas.append({
+            "usuario_id": cajera.id,
+            "nombre": cajera.nombre,
+            "real": reales["ventas"],
+            "prueba": prueba["ventas"],
+            "tickets_reales": reales["tickets"],
+            "tickets_prueba": prueba["tickets"],
+        })
+    return filas
+
+
+def _ventas_por_sucursal(db, desde, hasta, sucursal_id):
+    consulta = db.query(Sucursal).order_by(Sucursal.codigo)
+    if sucursal_id is not None:
+        consulta = consulta.filter(Sucursal.id == sucursal_id)
+    filas = []
+    for sucursal in consulta.all():
+        reales = _bloque_periodo(db, desde, hasta, False, sucursal.id, None)
+        prueba = _bloque_periodo(db, desde, hasta, True, sucursal.id, None)
+        filas.append({
+            "sucursal_id": sucursal.id,
+            "nombre": sucursal.nombre,
+            "real": reales["ventas"],
+            "prueba": prueba["ventas"],
+        })
+    return filas
+
+
+def _buscar_tickets(db, desde, hasta, sucursal_id, usuario_id, texto):
+    consulta = db.query(Ticket).filter(Ticket.fecha >= desde, Ticket.fecha <= hasta)
+    if sucursal_id is not None:
+        consulta = consulta.filter(Ticket.sucursal_vendedora_id == sucursal_id)
+    if usuario_id is not None:
+        consulta = consulta.filter(Ticket.usuario_id == usuario_id)
+    texto = (texto or "").strip()
+    if texto.isdigit():
+        consulta = consulta.filter(Ticket.id == int(texto))
+    elif texto:
+        like = f"%{texto.lower()}%"
+        consulta = (
+            consulta.outerjoin(Usuario, Ticket.usuario_id == Usuario.id)
+            .outerjoin(Sucursal, Ticket.sucursal_vendedora_id == Sucursal.id)
+            .filter(or_(
+                func.lower(Ticket.serial).like(like),
+                func.lower(Usuario.nombre).like(like),
+                func.lower(Sucursal.nombre).like(like),
+            ))
+        )
+    filas = []
+    for ticket in consulta.order_by(Ticket.id.desc()).limit(80).all():
+        cajera = db.get(Usuario, ticket.usuario_id) if ticket.usuario_id else None
+        sucursal = ticket.sucursal_vendedora
+        jugadas = []
+        for jugada in ticket.jugadas:
+            loterias = [jugada.sorteo.nombre] if jugada.sorteo else []
+            if jugada.sorteo2 is not None:
+                loterias.append(jugada.sorteo2.nombre)
+            jugadas.append({
+                "tipo": jugada.tipo.codigo if jugada.tipo else "",
+                "numeros": jugada.numeros,
+                "monto": str(D(jugada.monto)),
+                "loterias": loterias,
+                "premio": str(D(jugada.premio or 0)),
+            })
+        filas.append({
+            "id": ticket.id,
+            "serial": ticket.serial,
+            "cajera": cajera.nombre if cajera else "",
+            "sucursal": sucursal.nombre if sucursal else "",
+            "vendido_en": ticket.vendido_en.isoformat(sep=" ") if ticket.vendido_en else "",
+            "fecha": ticket.fecha.isoformat(),
+            "total": str(D(ticket.total)),
+            "estado": ticket.estado,
+            "premio_total": str(D(ticket.premio_total)),
+            "es_prueba": bool(ticket.es_prueba),
+            "jugadas": jugadas,
+        })
+    return filas
