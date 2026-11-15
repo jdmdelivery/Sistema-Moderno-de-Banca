@@ -2361,8 +2361,8 @@ def _texto_resumen(datos):
     lineas = [
         datos["sucursal"].upper(),
         "RESUMEN DE VENTAS Y PAGOS",
-        f"DEL DÍA: {datos['desde']}",
-        f"AL DÍA: {datos['hasta']}",
+        f"DESDE: {datos['desde']}",
+        f"HASTA: {datos['hasta']}",
         f"IMPRESO: {datos['impreso']}",
         f"Sucursal: {datos['sucursal']}",
         f"Terminal: {datos['terminal']}",

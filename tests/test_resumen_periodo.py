@@ -40,8 +40,8 @@ def test_hoy_ayer_y_rango_imprimen_el_periodo_sin_alterar_saldos(entorno, monkey
     assert "Sucursal: BANCA CASTILLO" in hoy["texto"]
     assert "Terminal:" in hoy["texto"]
     assert "Cajero: Operador vend1" in hoy["texto"]
-    assert "DEL DÍA: 14-11-2026" in hoy["texto"]
-    assert "AL DÍA: 14-11-2026" in hoy["texto"]
+    assert "DESDE: 14-11-2026" in hoy["texto"]
+    assert "HASTA: 14-11-2026" in hoy["texto"]
     assert "IMPRESO:" in hoy["texto"]
     assert "VENTAS: RD$ 10.00" in hoy["texto"]
     assert entorno.saldo(b["sucursal"]["id"]) == antes
@@ -49,15 +49,15 @@ def test_hoy_ayer_y_rango_imprimen_el_periodo_sin_alterar_saldos(entorno, monkey
     ayer = _resumen(entorno, b["headers"], "2026-11-13", "2026-11-13")
     assert ayer["real"]["ventas"] == "0.00"
     assert ayer["real"]["neto"] == "0.00"
-    assert "DEL DÍA: 13-11-2026" in ayer["texto"]
-    assert "AL DÍA: 13-11-2026" in ayer["texto"]
+    assert "DESDE: 13-11-2026" in ayer["texto"]
+    assert "HASTA: 13-11-2026" in ayer["texto"]
     assert "VENTAS: RD$ 0.00" in ayer["texto"]
 
     rango = _resumen(entorno, b["headers"], "2026-11-13", "2026-11-14")
     assert rango["real"]["ventas"] == "10.00"
     assert rango["real"]["neto"] == "10.00"
-    assert "DEL DÍA: 13-11-2026" in rango["texto"]
-    assert "AL DÍA: 14-11-2026" in rango["texto"]
+    assert "DESDE: 13-11-2026" in rango["texto"]
+    assert "HASTA: 14-11-2026" in rango["texto"]
 
     entrega = entorno.c.post(
         "/terminal/entregas",
@@ -74,6 +74,8 @@ def test_hoy_ayer_y_rango_imprimen_el_periodo_sin_alterar_saldos(entorno, monkey
     assert db.query(Entrega).count() == 1
     db.close()
 
+    invertido = entorno.c.get("/terminal/reportes/dia?desde=2026-11-14&hasta=2026-11-13", headers=b["headers"])
+    assert invertido.status_code == 400
     propio = entorno.c.get("/terminal/reportes/dia?desde=2026-11-14&hasta=2026-11-14&alcance=sucursal", headers=b["headers"])
     assert propio.status_code == 403
 
@@ -87,10 +89,12 @@ def test_hoy_ayer_y_rango_imprimen_el_periodo_sin_alterar_saldos(entorno, monkey
     assert medianoche["desde"] == "15-11-2026"
     assert medianoche["hasta"] == "15-11-2026"
     assert medianoche["real"]["ventas"] == "0.00"
-    assert "DEL DÍA: 15-11-2026" in medianoche["texto"]
+    assert "DESDE: 15-11-2026" in medianoche["texto"]
+    assert "HASTA: 15-11-2026" in medianoche["texto"]
     conservado = _resumen(entorno, b["headers"], "2026-11-14", "2026-11-14")
     assert conservado["real"]["ventas"] == "10.00"
-    assert "DEL DÍA: 14-11-2026" in conservado["texto"]
+    assert "DESDE: 14-11-2026" in conservado["texto"]
+    assert "HASTA: 14-11-2026" in conservado["texto"]
     assert entorno.saldo(b["sucursal"]["id"]) == antes
 
 
