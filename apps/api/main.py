@@ -751,7 +751,7 @@ def cobertura_resultados(db=Depends(get_db), usuario=Depends(panel_actual)):
         "aviso": "Solo el widget público de Conéctate. Tres lecturas iguales y 10 minutos "
                  "antes de confirmar. No paga solo. RDLotto no se consulta.",
         "intervalo_segundos": resultados_auto.INTERVALO_SEGUNDOS,
-        "trabajador": resultados_auto.estado(),
+        "trabajador": resultados_auto.estado_reloj(db),
         "sorteos": [
             {
                 "sorteo": s.nombre,

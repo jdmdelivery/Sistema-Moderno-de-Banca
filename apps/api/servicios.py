@@ -2821,18 +2821,37 @@ def panel_movil(db, usuario, seccion, desde, hasta, sucursal_id=None, usuario_id
         from . import estabilizacion, resultados_auto
         from .models import Ticket
 
+        from datetime import timedelta
+        from .models import Resultado
+
         observaciones = estabilizacion.resumen_observaciones(db, hasta)
-        proceso = resultados_auto.estado()
+        momento = ahora_local()
+        proceso = resultados_auto.estado_reloj(db, momento)
         pendientes = (
             db.query(Ticket)
             .filter(Ticket.estado == "ganador", Ticket.premio_total > 0)
             .count()
         )
+        recientes = (
+            db.query(Resultado)
+            .filter(
+                Resultado.fuente == "conectate",
+                Resultado.fecha.in_([momento.date(), momento.date() - timedelta(days=1)]),
+            )
+            .all()
+        )
+        provisionales = sum(1 for fila in recientes if fila.estado not in ("confirmado", "liquidado"))
+        confirmados = sum(1 for fila in recientes if fila.estado in ("confirmado", "liquidado"))
+        sin_resultado = sum(1 for fila in observaciones if fila["estado"] == "PENDIENTE")
+        errores = proceso.get("errores_recientes") or []
         lineas = [
-            f"Proceso {'activo' if proceso.get('activo') else 'detenido'}",
-            f"Última consulta {proceso.get('ultimo_intento') or '—'}",
-            f"Último acierto {proceso.get('ultimo_ok') or '—'}",
-            f"Error {proceso.get('ultimo_error') or 'ninguno'}",
+            f"Reloj {proceso['reloj']}",
+            f"Última ejecución {proceso.get('ultima_ejecucion') or '—'}",
+            f"Última consulta exitosa {proceso.get('ultima_consulta_ok') or '—'}",
+            f"Próxima estimada {proceso.get('proxima_estimada') or '—'}",
+            f"Recibidos {len(recientes)} · provisionales {provisionales} · confirmados {confirmados}",
+            f"Sin resultado {sin_resultado}",
+            f"Errores {errores[0] if errores else 'ninguno'}",
             f"Premios pendientes {pendientes}",
         ]
         for fila in observaciones:

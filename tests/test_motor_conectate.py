@@ -196,7 +196,7 @@ def test_el_ciclo_usa_el_widget_y_no_confirma_si_falla(entorno, monkeypatch):
     db = dbmod.nueva_sesion()
     assert db.query(Resultado).count() == 0
     db.close()
-    bien = resultados_auto.ciclo(payload=[
+    bien = resultados_auto.ciclo(forzar=True, payload=[
         _item("La Primera Día", (19, 3, 45)),
         _item("Primera Noche", (1, 2, 3)),
         _item("Quiniela Loteka Día", (8, 9, 10)),
@@ -229,6 +229,46 @@ def test_la_seccion_movil_lista_los_cuarenta(entorno):
     panel = entorno.c.get("/movil/admin?seccion=resultados", headers=entorno.admin)
     assert panel.status_code == 200, panel.text
     texto = "\n".join(panel.json()["lineas"])
+    assert texto.startswith("Reloj DETENIDO")
+    assert "Reloj DETENIDO" in texto
     assert "La Primera 12:00 PM" in texto
     assert "Haiti Bolet 9:30 AM" in texto
     assert texto.count("·") >= 40
+
+
+def test_el_reloj_se_lee_desde_postgresql(entorno, fijar_hora):
+    from apps.api.models import Importacion
+
+    base = datetime(2026, 11, 14, 12, 0)
+    fijar_hora(base)
+    db = dbmod.nueva_sesion()
+    assert resultados_auto.estado_reloj(db, base)["reloj"] == "DETENIDO"
+    db.add(Importacion(
+        fuente="conectate", url="https://api.conectate.com.do/conectate/api/widget",
+        fecha_objetivo=base.date(), ok=True, detalle="ok", creado_en=base,
+    ))
+    db.commit()
+    assert resultados_auto.estado_reloj(db, base)["reloj"] == "ACTIVO"
+    assert resultados_auto.estado_reloj(db, base.replace(minute=10))["reloj"] == "RETRASADO"
+    assert resultados_auto.estado_reloj(db, base.replace(minute=30))["reloj"] == "DETENIDO"
+    db.add(Importacion(
+        fuente="conectate", url="https://api.conectate.com.do/conectate/api/widget",
+        fecha_objetivo=base.date(), ok=False, detalle="HTTP 403", creado_en=base.replace(minute=31),
+    ))
+    db.commit()
+    marca = resultados_auto.estado_reloj(db, base.replace(minute=32))
+    assert marca["reloj"] == "ERROR"
+    assert "403" in marca["ultimo_error"]
+    db.close()
+
+
+def test_dos_procesos_no_registran_dos_lecturas(entorno):
+    payload = [_item("La Primera Día", (19, 3, 45))]
+    primero = resultados_auto.ciclo(payload=payload)
+    segundo = resultados_auto.ciclo(payload=[_item("La Primera Día", (19, 3, 45))])
+    assert primero["ok"] is True and primero.get("omitido") is None
+    assert segundo["omitido"] == "otra consulta ya corrió en este intervalo"
+    db = dbmod.nueva_sesion()
+    from apps.api.models import ObservacionResultado
+    assert db.query(ObservacionResultado).one().lecturas == 1
+    db.close()

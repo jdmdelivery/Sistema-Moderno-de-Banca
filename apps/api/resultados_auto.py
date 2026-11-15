@@ -4,9 +4,9 @@ No abre una pantalla y no llama a RDLotto. El hilo es uno solo. Si otro
 proceso ya tomó el candado, esta pasada se omite. Al reiniciar, las
 lecturas siguen en la base: no vuelven a cero.
 
-En el plan gratuito de Render el proceso duerme cuando no hay tráfico.
-El ciclo corre cada vez que el proceso está despierto y retoma el conteo
-desde PostgreSQL. No se crea un segundo trabajador.
+El estado que ve el administrador sale de PostgreSQL, no de que el
+proceso acabe de arrancar. Una segunda pasada dentro del mismo intervalo
+no crea otra lectura.
 """
 import os
 import threading
@@ -19,6 +19,10 @@ from .db import nueva_sesion
 from .models import CandadoConsulta, Importacion, Sorteo
 
 INTERVALO_SEGUNDOS = 240
+# Una ejecución cuenta como reciente si llegó dentro del intervalo más un margen.
+_VENTANA_ACTIVO = timedelta(minutes=6)
+# Pasado este tiempo sin filas nuevas, el reloj está detenido, no solo retrasado.
+_VENTANA_RETRASO = timedelta(minutes=20)
 _hilo = None
 _estado = {
     "activo": False,
@@ -36,8 +40,75 @@ def activo():
 
 
 def estado():
+    """Estado en memoria de este proceso. No sirve para decir si el reloj vive."""
     with _candado:
         return dict(_estado)
+
+
+def _sin_zona(marca):
+    if marca is not None and getattr(marca, "tzinfo", None) is not None:
+        return marca.replace(tzinfo=None)
+    return marca
+
+
+def _edad(momento, fila):
+    if fila is None or fila.creado_en is None:
+        return None
+    return momento - _sin_zona(fila.creado_en)
+
+
+def estado_reloj(db, momento=None):
+    """ACTIVO, RETRASADO, ERROR o DETENIDO según las filas guardadas.
+
+    Sobrevive a un reinicio: no mira si el hilo acaba de arrancar.
+    """
+    momento = momento or servicios.ahora_local()
+    consulta = db.query(Importacion).filter(Importacion.fuente == "conectate")
+    ultima = consulta.order_by(Importacion.id.desc()).first()
+    ultima_ok = (
+        consulta.filter(Importacion.ok.is_(True)).order_by(Importacion.id.desc()).first()
+    )
+    errores = (
+        consulta.filter(Importacion.ok.is_(False))
+        .order_by(Importacion.id.desc())
+        .limit(3)
+        .all()
+    )
+    edad = _edad(momento, ultima)
+    if ultima is None or edad is None or edad > _VENTANA_RETRASO:
+        marca = "DETENIDO"
+    elif not ultima.ok:
+        marca = "ERROR"
+    elif edad <= _VENTANA_ACTIVO:
+        marca = "ACTIVO"
+    else:
+        marca = "RETRASADO"
+    proxima = None
+    if ultima is not None and ultima.creado_en is not None and marca != "DETENIDO":
+        proxima = _sin_zona(ultima.creado_en) + timedelta(seconds=INTERVALO_SEGUNDOS)
+    return {
+        "reloj": marca,
+        "ultima_ejecucion": None if ultima is None or ultima.creado_en is None else _sin_zona(ultima.creado_en).isoformat(sep=" ", timespec="minutes"),
+        "ultima_consulta_ok": None if ultima_ok is None or ultima_ok.creado_en is None else _sin_zona(ultima_ok.creado_en).isoformat(sep=" ", timespec="minutes"),
+        "proxima_estimada": None if proxima is None else proxima.isoformat(sep=" ", timespec="minutes"),
+        "ultimo_error": None if not errores else (errores[0].detalle or "la consulta falló"),
+        "errores_recientes": [fila.detalle for fila in errores if fila.detalle],
+        "fuente": "conectate",
+    }
+
+
+def _demasiado_pronto(db, momento):
+    """Otra pasada de este intervalo ya quedó registrada. Evita un segundo reloj."""
+    ultima = (
+        db.query(Importacion)
+        .filter(Importacion.fuente == "conectate")
+        .order_by(Importacion.id.desc())
+        .first()
+    )
+    edad = _edad(momento, ultima)
+    if edad is None:
+        return False
+    return edad < timedelta(seconds=INTERVALO_SEGUNDOS - 30)
 
 
 def _tomar(db, momento):
@@ -74,7 +145,14 @@ def ciclo(forzar=False, payload=None):
         with _candado:
             _estado["ultimo_intento"] = momento.isoformat(sep=" ")
         if not _tomar(db, momento):
-            return {"ok": True, "omitido": "otro proceso ya está consultando"}
+            return {"ok": True, "omitido": "otro proceso ya está consultando", "rdlotto": False}
+        if not forzar and _demasiado_pronto(db, momento):
+            return {
+                "ok": True,
+                "omitido": "otra consulta ya corrió en este intervalo",
+                "rdlotto": False,
+                "confirmados": 0,
+            }
         datos = payload
         error = None
         if datos is None:
@@ -83,6 +161,7 @@ def ciclo(forzar=False, payload=None):
             db.add(Importacion(
                 fuente="conectate", url=conectate_widget.URL_WIDGET,
                 fecha_objetivo=momento.date(), ok=False, detalle=error[:500],
+                creado_en=momento,
             ))
             db.commit()
             with _candado:
@@ -93,6 +172,7 @@ def ciclo(forzar=False, payload=None):
             db.add(Importacion(
                 fuente="conectate", url=conectate_widget.URL_WIDGET,
                 fecha_objetivo=momento.date(), ok=False, detalle=forma,
+                creado_en=momento,
             ))
             db.commit()
             return {"ok": False, "motivo": forma, "confirmados": 0, "rdlotto": False}
@@ -110,6 +190,7 @@ def ciclo(forzar=False, payload=None):
             fecha_objetivo=momento.date(), ok=True, estado_http=200,
             encontrados=len(encontrados),
             detalle=f"confirmados {confirmados}; premios {premios}",
+            creado_en=momento,
         ))
         db.commit()
         with _candado:
@@ -124,6 +205,15 @@ def ciclo(forzar=False, payload=None):
         }
     except Exception as exc:
         db.rollback()
+        try:
+            db.add(Importacion(
+                fuente="conectate", url=conectate_widget.URL_WIDGET,
+                fecha_objetivo=servicios.ahora_local().date(), ok=False,
+                detalle=str(exc)[:500], creado_en=servicios.ahora_local(),
+            ))
+            db.commit()
+        except Exception:
+            db.rollback()
         with _candado:
             _estado["ultimo_error"] = str(exc)
         return {"ok": False, "motivo": str(exc), "confirmados": 0, "rdlotto": False}
