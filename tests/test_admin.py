@@ -13,7 +13,7 @@ def test_sin_token_no_hay_panel(entorno):
 
 
 def test_operador_no_entra_al_panel(entorno):
-    entorno.banca()  # crea el operador vend1 con PIN, sin clave de panel
+    entorno.banca()  # crea el operador vend1 con su contraseña de terminal
     r = entorno.c.post("/auth/login", json={"usuario": "vend1", "clave": "1234"})
     assert r.status_code == 401
 
@@ -30,17 +30,17 @@ def test_terminal_revocada_no_opera_y_reactivada_si(entorno):
     r = entorno.c.post(f"/terminales/{ter['id']}/revocar", headers=entorno.admin)
     assert r.status_code == 200 and r.json()["activa"] is False and r.json()["tiene_token"] is False
     # Con el token revocado ni siquiera puede iniciar sesión
-    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "pin": "1234"},
+    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "clave": "1234"},
                        headers={"X-Terminal-Serial": ter["serial"], "X-Terminal-Token": ter["token"]})
     assert r.status_code == 401
     # Al reactivar nace un token NUEVO; el viejo sigue muerto
     r = entorno.c.post(f"/terminales/{ter['id']}/reactivar", headers=entorno.admin)
     nuevo = r.json()["token"]
     assert nuevo and nuevo != ter["token"]
-    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "pin": "1234"},
+    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "clave": "1234"},
                        headers={"X-Terminal-Serial": ter["serial"], "X-Terminal-Token": ter["token"]})
     assert r.status_code == 401
-    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "pin": "1234"},
+    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "clave": "1234"},
                        headers={"X-Terminal-Serial": ter["serial"], "X-Terminal-Token": nuevo})
     assert r.status_code == 200
 
@@ -49,15 +49,15 @@ def test_operador_de_otra_sucursal_no_entra_en_la_terminal(entorno):
     b1 = entorno.banca(saldo=100, codigo="1301", usuario="vend1")
     b2 = entorno.banca(saldo=100, codigo="2200", nombre="BANCA PEGUERO", usuario="vend2")
     ter1 = b1["terminal"]
-    r = entorno.c.post("/terminal/login", json={"usuario": "vend2", "pin": "1234"},
+    r = entorno.c.post("/terminal/login", json={"usuario": "vend2", "clave": "1234"},
                        headers={"X-Terminal-Serial": ter1["serial"], "X-Terminal-Token": ter1["token"]})
     assert r.status_code == 403
 
 
-def test_pin_incorrecto(entorno):
+def test_clave_incorrecta(entorno):
     b = entorno.banca(saldo=100)
     ter = b["terminal"]
-    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "pin": "9999"},
+    r = entorno.c.post("/terminal/login", json={"usuario": "vend1", "clave": "no-es-esta"},
                        headers={"X-Terminal-Serial": ter["serial"], "X-Terminal-Token": ter["token"]})
     assert r.status_code == 401
 
@@ -126,14 +126,14 @@ def test_limite_upsert(entorno):
     assert len(filas) == 1 and float(filas[0]["monto_max_acumulado"]) == 300.00
 
 
-def test_usuario_operador_sin_pin_y_pin_corto(entorno):
+def test_usuario_operador_necesita_contrasena(entorno):
     s = entorno.sucursal()
     r = entorno.c.post("/usuarios", json={"nombre": "X", "usuario": "x1", "rol": "operador",
                                           "sucursal_id": s["id"]}, headers=entorno.admin)
     assert r.status_code == 400
     r = entorno.c.post("/usuarios", json={"nombre": "X", "usuario": "x1", "rol": "operador",
-                                          "sucursal_id": s["id"], "pin": "12"}, headers=entorno.admin)
-    assert r.status_code == 400
+                                          "sucursal_id": s["id"], "clave": "su-clave"}, headers=entorno.admin)
+    assert r.status_code == 201
 
 
 def test_auditoria_registra_venta_pago_y_es_solo_admin(entorno):

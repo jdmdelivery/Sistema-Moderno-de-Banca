@@ -242,10 +242,10 @@ function editarUsuario(id) {
   const u = (window._usuarios || []).find((x) => x.id === id); if (!u) return;
   $("#usu-id").value = u.id; $("#usu-nombre").value = u.nombre; $("#usu-usuario").value = u.usuario;
   $("#usu-rol").value = u.rol; $("#usu-sucursal").value = u.sucursal_id || "";
-  $("#usu-clave").value = ""; $("#usu-pin").value = ""; $("#usu-activo").checked = u.activo;
+  $("#usu-clave").value = ""; $("#usu-activo").checked = u.activo;
 }
 function limpiarUsuario() {
-  ["#usu-id", "#usu-nombre", "#usu-usuario", "#usu-clave", "#usu-pin"].forEach((i) => $(i).value = "");
+  ["#usu-id", "#usu-nombre", "#usu-usuario", "#usu-clave"].forEach((i) => $(i).value = "");
   $("#usu-activo").checked = true;
 }
 async function guardarUsuario() {
@@ -253,7 +253,7 @@ async function guardarUsuario() {
   const body = {
     nombre: $("#usu-nombre").value.trim(), usuario: $("#usu-usuario").value.trim(),
     rol: $("#usu-rol").value, sucursal_id: $("#usu-sucursal").value ? parseInt($("#usu-sucursal").value) : null,
-    clave: $("#usu-clave").value || null, pin: $("#usu-pin").value || null, activo: $("#usu-activo").checked,
+    clave: $("#usu-clave").value || null, activo: $("#usu-activo").checked,
   };
   try {
     if (id) await put(`/usuarios/${id}`, body); else await post("/usuarios", body);

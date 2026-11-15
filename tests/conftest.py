@@ -70,30 +70,30 @@ class Entorno:
         datos = r.json()
         return {"id": datos["id"], "serial": serial, "token": datos["token"], "sucursal_id": sucursal_id}
 
-    def operador(self, usuario, pin, sucursal_id):
+    def operador(self, usuario, clave, sucursal_id):
         r = self.c.post(
             "/usuarios",
             json={"nombre": f"Operador {usuario}", "usuario": usuario, "rol": "operador",
-                  "sucursal_id": sucursal_id, "pin": pin},
+                  "sucursal_id": sucursal_id, "clave": clave},
             headers=self.admin,
         )
         assert r.status_code == 201, r.text
         return r.json()
 
-    def login_terminal(self, terminal, usuario="vend1", pin="1234"):
+    def login_terminal(self, terminal, usuario="vend1", clave="1234"):
         headers = {"X-Terminal-Serial": terminal["serial"], "X-Terminal-Token": terminal["token"]}
-        r = self.c.post("/terminal/login", json={"usuario": usuario, "pin": pin}, headers=headers)
+        r = self.c.post("/terminal/login", json={"usuario": usuario, "clave": clave}, headers=headers)
         assert r.status_code == 200, r.text
         return {**headers, "Authorization": f"Bearer {r.json()['token']}"}
 
-    def banca(self, saldo=100000, codigo="1301", nombre="BANCA CASTILLO", usuario="vend1", pin="1234"):
+    def banca(self, saldo=100000, codigo="1301", nombre="BANCA CASTILLO", usuario="vend1", clave="1234"):
         """Sucursal + terminal + operador + sesión, lista para vender."""
         suc = self.sucursal(codigo=codigo, nombre=nombre)
         if saldo:
             self.recargar(suc["id"], saldo)
         ter = self.terminal(suc["id"])
-        self.operador(usuario, pin, suc["id"])
-        headers = self.login_terminal(ter, usuario, pin)
+        self.operador(usuario, clave, suc["id"])
+        headers = self.login_terminal(ter, usuario, clave)
         return {"sucursal": suc, "terminal": ter, "headers": headers}
 
     # ---------------------------------------------------------------- venta

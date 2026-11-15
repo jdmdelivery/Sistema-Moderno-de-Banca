@@ -23,7 +23,7 @@ Habla con la API de terminal del **Sistema de Banca Moderna**
    (`https://sistema-de-banca-moderna.onrender.com`, editable) +
    serial SUNMI + token de terminal (los que emite el panel).
    Botón «Probar conexión» contra `/health`.
-2. **Inicio de sesión** del operador (usuario + PIN) contra
+2. **Inicio de sesión** del operador (usuario + contraseña) contra
    `POST /terminal/login`.
 3. **Venta** fiel a la especificación: botón **DISP** con selección
    múltiple de los sorteos abiertos (los cerrados se muestran
@@ -74,7 +74,7 @@ caja/cuadre y reportes desde la terminal.
 3. En la app: pantalla **Configuración de la terminal** → la URL ya
    viene precargada → escribir el **Serial SUNMI** y el **token** →
    «Probar conexión» debe decir «Servidor alcanzado ✔» → **Guardar**.
-4. Volver e **iniciar sesión** con el usuario y PIN de un operador
+4. Volver e **iniciar sesión** con el usuario y la contraseña de un operador
    creado en el panel para esa sucursal. Si el serial/token no
    coinciden con el panel, el servidor responde «Terminal no
    autorizada» y la app lo muestra tal cual.

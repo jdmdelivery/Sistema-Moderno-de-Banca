@@ -53,7 +53,7 @@ apps/api/motor.py      Motor de ganadores (QN/PL/SP) y liquidación/reversión
 apps/api/conectate.py  Importador de resultados de Conectate (ver abajo)
 apps/api/models.py     Modelo de datos (especificación §5)
 apps/api/seed.py       Datos iniciales
-apps/api/security.py   Hash PBKDF2 de claves/PIN, tokens, seriales de ticket
+apps/api/security.py   Hash PBKDF2 de claves, tokens, seriales de ticket
 apps/web/              Panel web en español (index.html, app.js, style.css)
 tests/                 Suite pytest (venta, motor, pago, anulación, cuadre,
                        conectate, administración y cableado del panel)

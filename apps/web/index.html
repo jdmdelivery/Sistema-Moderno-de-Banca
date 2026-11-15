@@ -105,13 +105,12 @@
     <label>Nombre<input id="usu-nombre"></label>
     <label>Usuario<input id="usu-usuario"></label>
     <label>Rol<select id="usu-rol">
-      <option value="operador">Operador (terminal, con PIN)</option>
+      <option value="operador">Operador (terminal)</option>
       <option value="supervisor">Supervisor (panel)</option>
       <option value="admin">Administrador (panel)</option>
     </select></label>
     <label>Sucursal<select id="usu-sucursal"></select></label>
-    <label>Clave del panel<input id="usu-clave" type="password" placeholder="(sin cambio si se deja vacío)"></label>
-    <label>PIN de terminal (4-6 dígitos)<input id="usu-pin" inputmode="numeric" placeholder="(sin cambio si se deja vacío)"></label>
+    <label>Contraseña<input id="usu-clave" type="password" placeholder="(sin cambio si se deja vacío)"></label>
     <label class="check"><input id="usu-activo" type="checkbox" checked> Activo</label>
     <button id="btn-usu-guardar" class="btn primario">GUARDAR</button>
     <button id="btn-usu-limpiar" class="btn">Limpiar</button>

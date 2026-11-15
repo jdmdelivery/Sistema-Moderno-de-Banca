@@ -13,11 +13,11 @@ import org.json.JSONObject;
 
 /**
  * Inicio de sesión del operador (especificación §2.1): la terminal ya
- * está activada (serial + token); el operador entra con usuario y PIN
- * contra POST /terminal/login.
+ * está activada (serial + token); el operador entra con usuario y
+ * contraseña contra POST /terminal/login.
  */
 public class LoginActivity extends Activity {
-    private EditText usuarioTxt, pinTxt;
+    private EditText usuarioTxt, claveTxt;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -32,9 +32,9 @@ public class LoginActivity extends Activity {
         usuarioTxt = Ui.campo(this, "Usuario del operador", InputType.TYPE_CLASS_TEXT);
         root.addView(usuarioTxt);
 
-        pinTxt = Ui.campo(this, "PIN",
-                InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        root.addView(pinTxt);
+        claveTxt = Ui.campo(this, "Contraseña",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        root.addView(claveTxt);
 
         Button entrar = Ui.boton(this, "ENTRAR");
         entrar.setOnClickListener(v -> entrar());
@@ -53,16 +53,16 @@ public class LoginActivity extends Activity {
 
     private void entrar() {
         String usuario = usuarioTxt.getText().toString().trim();
-        String pin = pinTxt.getText().toString().trim();
-        if (usuario.isEmpty() || pin.isEmpty()) {
-            Ui.toast(this, "Escriba su usuario y su PIN.");
+        String clave = claveTxt.getText().toString().trim();
+        if (usuario.isEmpty() || clave.isEmpty()) {
+            Ui.toast(this, "Escriba su usuario y su contraseña.");
             return;
         }
         Prefs prefs = new Prefs(this);
         Ui.async(() -> {
                     JSONObject body = new JSONObject();
                     body.put("usuario", usuario);
-                    body.put("pin", pin);
+                    body.put("clave", clave);
                     return new ApiClient(prefs).post("/terminal/login", body);
                 },
                 (JSONObject r) -> {

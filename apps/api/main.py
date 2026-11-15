@@ -206,7 +206,8 @@ class LoginIn(BaseModel):
 @app.post("/auth/login")
 def login(datos: LoginIn, db=Depends(get_db)):
     usuario = db.query(Usuario).filter_by(usuario=datos.usuario.strip()).first()
-    if usuario is None or not usuario.activo or not usuario.clave_hash or not verificar_clave(datos.clave, usuario.clave_hash):
+    if (usuario is None or not usuario.activo or usuario.rol not in ("admin", "supervisor")
+            or not usuario.clave_hash or not verificar_clave(datos.clave, usuario.clave_hash)):
         raise ErrorServicio(401, "Usuario o clave incorrectos")
     token = servicios.crear_sesion(db, usuario, tipo="panel")
     db.commit()
@@ -390,7 +391,6 @@ class UsuarioIn(BaseModel):
     rol: str = "operador"
     sucursal_id: int | None = None
     clave: str | None = None
-    pin: str | None = None
     activo: bool = True
 
 
@@ -407,15 +407,12 @@ def crear_usuario(datos: UsuarioIn, db=Depends(get_db), usuario=Depends(requiere
         raise ErrorServicio(409, f"Ya existe el usuario {datos.usuario}")
     if datos.rol in ("admin", "supervisor") and not datos.clave:
         raise ErrorServicio(400, "Un admin/supervisor necesita una clave para el panel")
-    if datos.rol == "operador" and not datos.pin:
-        raise ErrorServicio(400, "Un operador necesita un PIN para la terminal")
-    if datos.pin and not (datos.pin.isdigit() and 4 <= len(datos.pin) <= 6):
-        raise ErrorServicio(400, "El PIN debe tener de 4 a 6 dígitos")
+    if datos.rol == "operador" and not datos.clave:
+        raise ErrorServicio(400, "Un operador necesita una contraseña para entrar en la terminal")
     u = Usuario(
         nombre=datos.nombre.strip(), usuario=datos.usuario.strip(), rol=datos.rol,
         sucursal_id=datos.sucursal_id, activo=datos.activo,
         clave_hash=hash_clave(datos.clave) if datos.clave else None,
-        pin_hash=hash_clave(datos.pin) if datos.pin else None,
     )
     db.add(u)
     db.flush()
@@ -434,10 +431,6 @@ def editar_usuario(usuario_id: int, datos: UsuarioIn, db=Depends(get_db),
     u.nombre, u.rol, u.sucursal_id, u.activo = datos.nombre.strip(), datos.rol, datos.sucursal_id, datos.activo
     if datos.clave:
         u.clave_hash = hash_clave(datos.clave)
-    if datos.pin:
-        if not (datos.pin.isdigit() and 4 <= len(datos.pin) <= 6):
-            raise ErrorServicio(400, "El PIN debe tener de 4 a 6 dígitos")
-        u.pin_hash = hash_clave(datos.pin)
     servicios.auditar(db, "usuario", u.id, "edicion", usuario_id=usuario.id, detalle={})
     db.commit()
     db.refresh(u)
@@ -794,7 +787,7 @@ def listar_auditoria(entidad: str | None = None, accion: str | None = None, limi
 # ============================================================ API DE TERMINAL
 class TerminalLoginIn(BaseModel):
     usuario: str
-    pin: str
+    clave: str
 
 
 @app.post("/terminal/login")
@@ -804,10 +797,10 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db), terminal=Depends(
         usuario is None
         or not usuario.activo
         or usuario.rol not in ("operador", "supervisor")
-        or not usuario.pin_hash
-        or not verificar_clave(datos.pin, usuario.pin_hash)
+        or not usuario.clave_hash
+        or not verificar_clave(datos.clave, usuario.clave_hash)
     ):
-        raise ErrorServicio(401, "Usuario o PIN incorrectos")
+        raise ErrorServicio(401, "Usuario o contraseña incorrectos")
     if usuario.sucursal_id is not None and usuario.sucursal_id != terminal.sucursal_id:
         raise ErrorServicio(403, "Este operador no pertenece a la sucursal de esta terminal")
     token = servicios.crear_sesion(db, usuario, tipo="terminal", terminal_id=terminal.id)

@@ -1,4 +1,4 @@
-"""Seguridad: hash de claves/PIN, tokens de sesión y de terminal, seriales."""
+"""Seguridad: hash de claves, tokens de sesión y de terminal, seriales."""
 import hashlib
 import hmac
 import secrets
