@@ -452,8 +452,9 @@ def main():
         red["llamadas"] += 1
         raise RuntimeError("red prohibida")
 
-    from apps.api import conectate_firmado
+    from apps.api import conectate_firmado, operador_oficial
     conectate_firmado.descargar_ventana = prohibido
+    operador_oficial.confirmar_ventana = prohibido
     firmado = _doc(
         [_juego("Anguila 11:00 AM", "g11", (11, 22, 33))],
         [_juego("Haiti Bolet 11:30 AM", "h11", (19, 3, 45))],
@@ -461,12 +462,20 @@ def main():
         [_juego("Haiti Bolet 11:30 AM", "sh", (4, 5, 6))],
     )
     confirmados = []
+    operador = {
+        "La Anguila 11:00 AM": {
+            "fecha": datetime(2026, 11, 14).date(), "numeros": (11, 22, 33),
+        },
+        "Haiti Bolet 11:30 AM": {
+            "fecha": datetime(2026, 11, 14).date(), "numeros": (19, 3, 45),
+        },
+    }
     for minuto in (0, 4, 10):
         reloj["ahora"] = datetime(2026, 11, 14, 10, minuto)
-        paso = resultados_auto.ciclo(forzar=True, payload=[], firmado=firmado)
+        paso = resultados_auto.ciclo(forzar=True, payload=[], firmado=firmado, operador=operador)
         confirmados.append(paso.get("confirmados"))
     reloj["ahora"] = datetime(2026, 11, 14, 10, 12)
-    omitido = resultados_auto.ciclo(forzar=False, payload=[], firmado=firmado)
+    omitido = resultados_auto.ciclo(forzar=False, payload=[], firmado=firmado, operador=operador)
     dbmod.engine().dispose()
     db = dbmod.nueva_sesion()
     filas = {
@@ -483,8 +492,8 @@ def main():
         "9. Reloj y lecturas firmadas sobreviven en PostgreSQL",
         confirmados == [0, 0, 2] and omitido.get("omitido") == "otra consulta ya corrió en este intervalo"
         and red["llamadas"] == 0 and lecturas == 3 and marca["reloj"] == "ACTIVO"
-        and filas.get("La Anguila 11:00 AM") == (11, 22, 33, "firmado", "liquidado")
-        and filas.get("Haiti Bolet 11:30 AM") == (19, 3, 45, "firmado", "liquidado"),
+        and filas.get("La Anguila 11:00 AM") == (11, 22, 33, "operador", "liquidado")
+        and filas.get("Haiti Bolet 11:30 AM") == (19, 3, 45, "operador", "liquidado"),
         f"confirmados {confirmados} reloj {marca.get('reloj')} lecturas {lecturas}",
     )
 

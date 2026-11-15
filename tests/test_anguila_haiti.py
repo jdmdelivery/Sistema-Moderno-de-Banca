@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 from decimal import Decimal
 
-from apps.api import conectate_firmado, conectate_widget, resultados_auto
+from apps.api import conectate_firmado, conectate_widget, operador_oficial, resultados_auto
 from apps.api import db as dbmod
 from apps.api.models import Jugada, ObservacionResultado, Resultado, Sorteo, TipoJugada
 
@@ -56,6 +56,13 @@ def _par(horas, prefijo, base):
 
 def _widget(titulo, numeros):
     return {"game_title": titulo, "date": "14-11", "score": [str(n) for n in numeros]}
+
+
+def _operador(firmado, fecha=FECHA):
+    return {
+        nombre: {"fecha": fecha, "numeros": dato["numeros"]}
+        for nombre, dato in conectate_firmado.propuestos(firmado, fecha).items()
+    }
 
 
 def _filas():
@@ -135,40 +142,46 @@ def test_tres_lecturas_confirman_los_21_y_dejan_quieta_la_otra_loteria(entorno, 
     base = datetime(2026, 11, 14, 10, 0)
     for minuto in (0, 4):
         fijar_hora(base.replace(minute=minuto))
-        paso = resultados_auto.ciclo(forzar=True, payload=widget, firmado=firmado)
+        paso = resultados_auto.ciclo(
+            forzar=True, payload=widget, firmado=firmado, operador=_operador(firmado),
+        )
         assert paso["ok"] is True and paso["confirmados"] == 0 and paso["rdlotto"] is False
     fijar_hora(base.replace(minute=10))
-    final = resultados_auto.ciclo(forzar=True, payload=widget, firmado=firmado)
+    final = resultados_auto.ciclo(
+        forzar=True, payload=widget, firmado=firmado, operador=_operador(firmado),
+    )
     assert final["confirmados"] == 22
     filas = _filas()
     assert len(filas) == 22
     for nombre, numeros in {**esp_a, **esp_h}.items():
-        assert filas[nombre][:4] == numeros + ("firmado",)
+        assert filas[nombre][:4] == numeros + ("operador",)
         assert filas[nombre][4] == "liquidado"
     assert filas["Leidsa 8:55 PM"][:4] == (19, 3, 45, "widget")
     assert all(fila[:3] != (4, 5, 6) for fila in filas.values())
 
 
-def test_el_horario_firmado_no_borra_el_widget_y_reinicia_si_cambia(entorno, fijar_hora):
+def test_el_widget_no_sustituye_al_operador(entorno, fijar_hora):
     fijar_hora(datetime(2026, 11, 14, 10, 0))
     solo_widget = [_widget("Anguila 10:00 AM", (19, 3, 45))]
     primero = resultados_auto.ciclo(forzar=True, payload=solo_widget, firmado=_doc([], []))
-    assert primero["encontrados"] == 1
-    assert _filas()["La Anguila 10:00 AM"][:4] == (19, 3, 45, "widget")
+    assert primero["encontrados"] == 0
+    assert "La Anguila 10:00 AM" not in _filas()
     firmado = _doc(
         [_juego("Anguila 8:00 AM", "g8", (1, 2, 3)), _juego("Anguila 10:00 AM", "g10", (7, 8, 9))],
         [],
-        [_juego("Anguila 8:00 AM", "s8", (4, 5, 6)), _juego("Anguila 10:00 AM", "s10", (1, 1, 1))],
+        [_juego("Anguila 8:00 AM", "s8", (1, 2, 3)), _juego("Anguila 10:00 AM", "s10", (7, 8, 9))],
         [],
     )
     fijar_hora(datetime(2026, 11, 14, 10, 4))
-    resultados_auto.ciclo(forzar=True, payload=solo_widget, firmado=firmado)
+    resultados_auto.ciclo(
+        forzar=True, payload=solo_widget, firmado=firmado, operador=_operador(firmado),
+    )
     filas = _filas()
-    assert filas["La Anguila 8:00 AM"][:4] == (1, 2, 3, "firmado")
-    assert filas["La Anguila 10:00 AM"][:4] == (7, 8, 9, "firmado")
+    assert filas["La Anguila 8:00 AM"][:4] == (1, 2, 3, "operador")
+    assert filas["La Anguila 10:00 AM"][:4] == (7, 8, 9, "operador")
+    assert (19, 3, 45) not in {fila[:3] for fila in filas.values()}
     db = dbmod.nueva_sesion()
     sorteo = db.query(Sorteo).filter_by(nombre="La Anguila 10:00 AM").one()
-    from apps.api.models import ObservacionResultado
     obs = db.query(ObservacionResultado).filter_by(sorteo_id=sorteo.id, fecha=FECHA).one()
     assert obs.lecturas == 1
     db.close()
@@ -179,6 +192,7 @@ def test_la_prueba_no_abre_el_websocket(entorno, monkeypatch):
         raise AssertionError("no debe consultar la red")
 
     monkeypatch.setattr(conectate_firmado, "descargar_ventana", prohibido)
+    monkeypatch.setattr(operador_oficial, "confirmar_ventana", prohibido)
     monkeypatch.setattr(conectate_widget, "descargar", lambda timeout=20: (None, "HTTP 403"))
     mal = resultados_auto.ciclo()
     assert mal["ok"] is False
@@ -196,14 +210,16 @@ def test_si_el_widget_cae_la_firma_puede_seguir(entorno, monkeypatch):
     )
 
     def falso(hoy):
-        return conectate_firmado.leer(doc, hoy), None
+        candidatos = conectate_firmado.propuestos(doc, hoy)
+        aceptados, difs = operador_oficial.cruzar(candidatos, _operador(doc, hoy), hoy)
+        return aceptados, None, difs
 
-    monkeypatch.setattr(conectate_firmado, "descargar_ventana", falso)
+    monkeypatch.setattr(operador_oficial, "confirmar_ventana", falso)
     paso = resultados_auto.ciclo(forzar=True)
     assert paso["ok"] is True and paso["encontrados"] == 2
     filas = _filas()
     assert set(filas) == {"La Anguila 8:00 AM", "Haiti Bolet 9:30 AM"}
-    assert filas["La Anguila 8:00 AM"][3] == "firmado"
+    assert filas["La Anguila 8:00 AM"][3] == "operador"
 
 
 def _preparar(entorno):
@@ -244,7 +260,9 @@ def test_identifica_quiniela_y_pale_y_no_paga_dos_veces(entorno, fijar_hora, mon
     base = datetime(2026, 11, 14, 10, 0)
     for minuto in (0, 4, 10):
         fijar_hora(base.replace(minute=minuto))
-        resultados_auto.ciclo(forzar=True, payload=widget, firmado=firmado)
+        resultados_auto.ciclo(
+            forzar=True, payload=widget, firmado=firmado, operador=_operador(firmado),
+        )
     consulta = entorno.c.post("/terminal/tickets/consultar", json={
         "id": ticket["id"], "serial": ticket["serial"],
     }, headers=b["headers"])
@@ -329,10 +347,14 @@ def test_el_reloj_de_cuatro_minutos_guarda_la_firma_y_usa_la_foto(entorno, fijar
     base = datetime(2026, 11, 14, 10, 0)
     for minuto in (0, 4, 10):
         fijar_hora(base.replace(minute=minuto))
-        paso = resultados_auto.ciclo(forzar=True, payload=[], firmado=firmado)
+        paso = resultados_auto.ciclo(
+            forzar=True, payload=[], firmado=firmado, operador=_operador(firmado),
+        )
         assert paso["ok"] is True and paso["rdlotto"] is False
     fijar_hora(base.replace(minute=12))
-    repetida = resultados_auto.ciclo(forzar=False, payload=[], firmado=firmado)
+    repetida = resultados_auto.ciclo(
+        forzar=False, payload=[], firmado=firmado, operador=_operador(firmado),
+    )
     assert repetida["omitido"] == "otra consulta ya corrió en este intervalo"
     db = dbmod.nueva_sesion()
     vendidas = db.query(Jugada).filter_by(ticket_id=ticket["id"]).all()
@@ -351,8 +373,8 @@ def test_el_reloj_de_cuatro_minutos_guarda_la_firma_y_usa_la_foto(entorno, fijar
     assert nueva.evaluada is False
     assert obs.lecturas == 3
     filas = _filas()
-    assert filas["La Anguila 11:00 AM"] == (11, 22, 33, "firmado", "liquidado")
-    assert filas["Haiti Bolet 11:30 AM"] == (19, 3, 45, "firmado", "liquidado")
+    assert filas["La Anguila 11:00 AM"] == (11, 22, 33, "operador", "liquidado")
+    assert filas["Haiti Bolet 11:30 AM"] == (19, 3, 45, "operador", "liquidado")
     assert "La Anguila 1:00 PM" not in filas
     assert entorno.saldo(b["sucursal"]["id"]) == 100030
     consulta = entorno.consultar(ticket)

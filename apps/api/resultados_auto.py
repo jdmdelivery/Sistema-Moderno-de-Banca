@@ -13,7 +13,7 @@ import threading
 import time
 from datetime import timedelta
 
-from . import conectate_firmado, conectate_widget, estabilizacion, servicios
+from . import conectate_firmado, conectate_widget, estabilizacion, operador_oficial, servicios
 from .comun import modo_desarrollo
 from .db import nueva_sesion
 from .models import CandadoConsulta, Importacion, Sorteo
@@ -133,16 +133,27 @@ def _soltar(db):
         db.commit()
 
 
-def _especiales(payload, firmado, momento):
-    """La firma solo se abre en el reloj real. Las pruebas traen el documento."""
+def _especiales(payload, firmado, momento, operador):
+    """La firma y el operador solo se abren en el reloj real.
+
+    Las pruebas traen el documento. Sin la coincidencia del operador,
+    La Anguila y Haití Bolet no entran, aunque el widget los traiga.
+    """
     if firmado is not None:
-        return conectate_firmado.leer(firmado, momento.date()), None
+        candidatos = conectate_firmado.propuestos(firmado, momento.date())
+        aceptados, discrepancias = operador_oficial.cruzar(
+            candidatos, operador or {}, momento.date(),
+        )
+        return aceptados, None, discrepancias
     if payload is not None or "PYTEST_CURRENT_TEST" in os.environ:
-        return {}, None
-    return conectate_firmado.descargar_ventana(momento.date())
+        return {}, None, []
+    try:
+        return operador_oficial.confirmar_ventana(momento.date())
+    except Exception:
+        return {}, "operador no disponible", []
 
 
-def ciclo(forzar=False, payload=None, firmado=None):
+def ciclo(forzar=False, payload=None, firmado=None, operador=None):
     """Una pasada. payload y firmado evitan la red en las pruebas. No paga."""
     with _candado:
         if _estado["corriendo"]:
@@ -166,16 +177,29 @@ def ciclo(forzar=False, payload=None, firmado=None):
         error = None
         if datos is None:
             datos, error = conectate_widget.descargar()
-        especiales, aviso_firma = _especiales(payload, firmado, momento)
+        especiales, aviso_firma, discrepancias = _especiales(
+            payload, firmado, momento, operador,
+        )
         if datos is None:
             encontrados, forma = {}, None
         else:
             encontrados, forma = conectate_widget.interpretar(datos, momento.date())
             if forma:
                 encontrados = {}
+        encontrados = {
+            nombre: dato
+            for nombre, dato in encontrados.items()
+            if not conectate_firmado.es_especial(nombre)
+        }
         for nombre, dato in especiales.items():
             if conectate_firmado.es_especial(nombre):
                 encontrados[nombre] = dato
+        for item in discrepancias:
+            sorteo = db.query(Sorteo).filter_by(nombre=item["sorteo"], activo=True).first()
+            servicios.auditar(
+                db, "resultado", sorteo.id if sorteo else 0,
+                "discrepancia_operador", detalle=item,
+            )
         if not encontrados and (error or forma or aviso_firma):
             motivo = error or forma or aviso_firma
             db.add(Importacion(
@@ -200,6 +224,8 @@ def ciclo(forzar=False, payload=None, firmado=None):
                 confirmados += 1
         premios = estabilizacion.procesar_cola(db)
         detalle = f"confirmados {confirmados}; premios {premios}; firmados {len(especiales)}"
+        if discrepancias:
+            detalle += f"; discrepancias {len(discrepancias)}"
         if aviso_firma:
             detalle += "; firma pendiente"
         if error:

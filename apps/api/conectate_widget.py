@@ -71,8 +71,8 @@ RECONOCIDOS = set(_EXACTOS.values()) | set(_ANGUILA_NOMBRES) | set(_HAITI_NOMBRE
     "Lotería Nacional 6:00 PM", "Lotería Nacional 9:00 PM",
 }
 MOTIVO_SIN_WIDGET = (
-    "Este sorteo se lee con la sesión firmada de Conéctate. "
-    "Si la firma falla o el número coincide con el señuelo, queda pendiente."
+    "Este sorteo se confirma cuando el operador y Conéctate coinciden "
+    "en la fecha, la hora y los tres números. El widget no lo sustituye."
 )
 
 

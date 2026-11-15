@@ -204,9 +204,14 @@ def test_las_lecturas_firmadas_siguen_despues_de_cerrar_la_sesion(entorno, fijar
         "senuelo_haiti": {"siteGames": []},
     }
     base = datetime(2026, 11, 14, 10, 0)
+    operador = {
+        "La Anguila 11:00 AM": {
+            "fecha": base.date(), "numeros": (11, 22, 33),
+        },
+    }
     for minuto in (0, 4):
         fijar_hora(base.replace(minute=minuto))
-        resultados_auto.ciclo(forzar=True, payload=[], firmado=firmado)
+        resultados_auto.ciclo(forzar=True, payload=[], firmado=firmado, operador=operador)
         dbmod.engine().dispose()
     db = dbmod.nueva_sesion()
     sorteo_id = entorno.sorteo_id("La Anguila 11:00 AM")
@@ -214,7 +219,7 @@ def test_las_lecturas_firmadas_siguen_despues_de_cerrar_la_sesion(entorno, fijar
     assert obs.lecturas == 2 and (obs.premio1, obs.premio2, obs.premio3) == (11, 22, 33)
     db.close()
     fijar_hora(base.replace(minute=10))
-    final = resultados_auto.ciclo(forzar=True, payload=[], firmado=firmado)
+    final = resultados_auto.ciclo(forzar=True, payload=[], firmado=firmado, operador=operador)
     assert final["confirmados"] == 1
     db = dbmod.nueva_sesion()
     fila = db.query(ObservacionResultado).filter_by(sorteo_id=sorteo_id).one()

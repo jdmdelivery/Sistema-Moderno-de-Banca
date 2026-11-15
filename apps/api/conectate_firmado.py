@@ -1,10 +1,11 @@
 """La Anguila y Haití Bolet por la sesión firmada de Conéctate.
 
 El portal abre un websocket, recibe ws.session y lo manda en
-Accept-Language al leer site-companies. Sin esa firma la API responde
-un señuelo. Un horario entra solo si su triple firmado es de esa fecha,
-tiene exactamente tres números y no coincide con el señuelo de esa
-misma hora. No se usa lastSession ni el listado público de sesiones.
+Accept-Language al leer site-companies. leer() sigue rechazando el
+triple que coincide con el señuelo. El reloj no confirma con eso:
+operador_oficial exige que el operador publique la misma fecha, la
+misma hora y los mismos tres números. No se usa lastSession ni el
+listado público de sesiones.
 """
 import json
 import os
@@ -208,6 +209,29 @@ def leer(documento, fecha):
     for familia, senuelo, _env, _default, _referer in _EMPRESAS:
         horas = aceptados(documento.get(familia), documento.get(senuelo), fecha, familia)
         for hora, numeros in horas.items():
+            nombre = _PREFIJO[familia] + hora
+            if not es_especial(nombre):
+                continue
+            salida[nombre] = {
+                "fecha": fecha,
+                "numeros": numeros,
+                "titulo": nombre,
+                "origen": "firmado",
+            }
+    return salida
+
+
+def propuestos(documento, fecha):
+    """Triples firmados de esa fecha, aunque coincidan con el señuelo.
+
+    Esto no confirma el sorteo. El reloj los guarda solo cuando el
+    operador repite la fecha, la hora y los tres números.
+    """
+    if not isinstance(documento, dict) or not documento.get("firma"):
+        return {}
+    salida = {}
+    for familia, _senuelo, _env, _default, _referer in _EMPRESAS:
+        for hora, numeros in extraer(documento.get(familia), fecha, familia).items():
             nombre = _PREFIJO[familia] + hora
             if not es_especial(nombre):
                 continue

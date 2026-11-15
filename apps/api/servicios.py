@@ -1301,6 +1301,14 @@ def _estado_panel(sorteo, resultado, hoy, momento, fallo):
         return "EN REVISIÓN", "PROVISIONAL. Faltan tres lecturas iguales o los 10 minutos."
     if fallo and momento.time() >= sorteo.hora_cierre:
         return "ERROR DE CONSULTA", fallo
+    from .conectate_firmado import es_especial
+
+    if es_especial(sorteo.nombre):
+        return (
+            "PENDIENTE",
+            "Todavía no hay tres números. Hace falta que el operador y "
+            "Conéctate coincidan en fecha, hora y números.",
+        )
     return "PENDIENTE", "Todavía no hay tres números. La fuente es el widget de Conéctate."
 
 
