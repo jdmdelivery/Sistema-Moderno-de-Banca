@@ -1641,18 +1641,48 @@ def listar_fondos(db, sucursal_id=None, usuario_id=None):
     return [fondo_a_dict(db, fondo) for fondo in q.order_by(FondoAsignado.id.desc()).all()]
 
 
+def ventas_del_dia(db, usuario, momento=None):
+    """Ventas netas de esta cajera en la fecha local de República Dominicana.
+
+    Suma tickets propios no anulados del día (America/Santo_Domingo).
+    Una anulación de un ticket de hoy lo saca del total; anular un ticket
+    de ayer no toca las ventas de hoy. Los premios pagados no restan.
+    La identidad sale de la sesión; no se acepta otro usuario_id.
+    """
+    if usuario is None:
+        return str(D(0))
+    momento = momento or ahora_local()
+    hoy = momento.date() if hasattr(momento, "date") else momento
+    inicio = datetime.combine(hoy, time.min)
+    fin = inicio + timedelta(days=1)
+    prueba = modo_desarrollo()
+    total = db.query(func.coalesce(func.sum(Ticket.total), 0)).filter(
+        Ticket.usuario_id == usuario.id,
+        Ticket.es_prueba.is_(bool(prueba)),
+        Ticket.estado != "anulado",
+        Ticket.vendido_en >= inicio,
+        Ticket.vendido_en < fin,
+    ).scalar()
+    return str(D(total))
+
+
 def indicadores_caja(db, usuario):
     """Cifras del ciclo abierto.
 
-    MI CAJA es el efectivo que queda en el cajón.
-    RECAUDACIÓN es ventas menos anulaciones menos premios pagados.
+    MI CAJA es el efectivo que queda en el cajón (no se reinicia a medianoche).
+    VENTAS DEL DÍA son ventas netas de esta cajera en la fecha local DR.
+    RECAUDACIÓN es ventas menos anulaciones menos premios pagados (ciclo).
     El fondo asignado y las entregas explican la diferencia:
     MI CAJA = fondo asignado + recaudación − entregas del ciclo.
     """
     if usuario is None:
         cero = str(D(0))
+        ahora = ahora_local()
         return {
             "mi_caja": cero,
+            "ventas_dia": cero,
+            "fecha_local": ahora.date().isoformat(),
+            "zona": "America/Santo_Domingo",
             "efectivo_pendiente": cero,
             "entrega_pendiente": cero,
             "recaudacion_ciclo": cero,
@@ -1665,6 +1695,8 @@ def indicadores_caja(db, usuario):
         }
     prueba = modo_desarrollo()
     saldo = mi_caja_de(usuario)
+    ahora = ahora_local()
+    ventas_hoy = ventas_del_dia(db, usuario, ahora)
     if prueba:
         ventas = ("venta_prueba",)
         restas = ("anulacion_prueba", "pago_premio_prueba")
@@ -1700,6 +1732,9 @@ def indicadores_caja(db, usuario):
     cuadre = fondo + recaudacion - entregas
     return {
         "mi_caja": str(saldo),
+        "ventas_dia": ventas_hoy,
+        "fecha_local": ahora.date().isoformat(),
+        "zona": "America/Santo_Domingo",
         "efectivo_pendiente": str(saldo),
         "entrega_pendiente": str(saldo),
         "recaudacion_ciclo": str(recaudacion),
