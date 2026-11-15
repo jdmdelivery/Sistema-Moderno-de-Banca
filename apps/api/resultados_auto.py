@@ -1,8 +1,9 @@
 """Consulta el widget de Conéctate cada 4 minutos.
 
-No abre una pantalla y no llama a RDLotto. El hilo es uno solo. Si otro
-proceso ya tomó el candado, esta pasada se omite. Al reiniciar, las
-lecturas siguen en la base: no vuelven a cero.
+No abre una pantalla y no reactiva RDLotto para el catálogo completo.
+King Lottery consulta RDLotto solo como contraste del operador oficial.
+El hilo es uno solo. Si otro proceso ya tomó el candado, esta pasada se
+omite. Al reiniciar, las lecturas siguen en la base: no vuelven a cero.
 
 El estado que ve el administrador sale de PostgreSQL, no de que el
 proceso acabe de arrancar. Una segunda pasada dentro del mismo intervalo
@@ -13,7 +14,14 @@ import threading
 import time
 from datetime import timedelta
 
-from . import conectate_firmado, conectate_widget, estabilizacion, operador_oficial, servicios
+from . import (
+    conectate_firmado,
+    conectate_widget,
+    estabilizacion,
+    operador_king,
+    operador_oficial,
+    servicios,
+)
 from .comun import modo_desarrollo
 from .db import nueva_sesion
 from .models import CandadoConsulta, Importacion, Sorteo
@@ -153,7 +161,29 @@ def _especiales(payload, firmado, momento, operador):
         return {}, "operador no disponible", []
 
 
-def ciclo(forzar=False, payload=None, firmado=None, operador=None):
+def _king(payload, momento, king_html=None, king_rdlotto=None):
+    """King Lottery: operador oficial cruzado con RDLotto verified.
+
+    No reactiva RDLotto para el resto del catálogo. En pruebas hace falta
+    inyectar html/documento; sin eso King no entra.
+    """
+    if king_html is not None or king_rdlotto is not None:
+        args = {}
+        if king_html is not None:
+            args["html"] = king_html
+        if king_rdlotto is not None:
+            args["documento"] = king_rdlotto
+        return operador_king.confirmar(momento.date(), **args)
+    if payload is not None or "PYTEST_CURRENT_TEST" in os.environ:
+        return {}, None, []
+    try:
+        return operador_king.confirmar_ventana(momento.date())
+    except Exception:
+        return {}, "operador king no disponible", []
+
+
+def ciclo(forzar=False, payload=None, firmado=None, operador=None,
+          king_html=None, king_rdlotto=None):
     """Una pasada. payload y firmado evitan la red en las pruebas. No paga."""
     with _candado:
         if _estado["corriendo"]:
@@ -180,6 +210,10 @@ def ciclo(forzar=False, payload=None, firmado=None, operador=None):
         especiales, aviso_firma, discrepancias = _especiales(
             payload, firmado, momento, operador,
         )
+        king_ok, aviso_king, difs_king = _king(
+            payload, momento, king_html=king_html, king_rdlotto=king_rdlotto,
+        )
+        discrepancias = list(discrepancias) + list(difs_king)
         if datos is None:
             encontrados, forma = {}, None
         else:
@@ -189,10 +223,13 @@ def ciclo(forzar=False, payload=None, firmado=None, operador=None):
         encontrados = {
             nombre: dato
             for nombre, dato in encontrados.items()
-            if not conectate_firmado.es_especial(nombre)
+            if not conectate_firmado.es_especial(nombre) and not operador_king.es_king(nombre)
         }
         for nombre, dato in especiales.items():
             if conectate_firmado.es_especial(nombre):
+                encontrados[nombre] = dato
+        for nombre, dato in king_ok.items():
+            if operador_king.es_king(nombre):
                 encontrados[nombre] = dato
         for item in discrepancias:
             sorteo = db.query(Sorteo).filter_by(nombre=item["sorteo"], activo=True).first()
@@ -200,8 +237,9 @@ def ciclo(forzar=False, payload=None, firmado=None, operador=None):
                 db, "resultado", sorteo.id if sorteo else 0,
                 "discrepancia_operador", detalle=item,
             )
-        if not encontrados and (error or forma or aviso_firma):
-            motivo = error or forma or aviso_firma
+        aviso = aviso_firma or aviso_king
+        if not encontrados and (error or forma or aviso):
+            motivo = error or forma or aviso
             db.add(Importacion(
                 fuente="conectate", url=conectate_widget.URL_WIDGET,
                 fecha_objetivo=momento.date(), ok=False, detalle=str(motivo)[:500],
@@ -223,11 +261,16 @@ def ciclo(forzar=False, payload=None, firmado=None, operador=None):
             if marca == "confirmado":
                 confirmados += 1
         premios = estabilizacion.procesar_cola(db)
-        detalle = f"confirmados {confirmados}; premios {premios}; firmados {len(especiales)}"
+        detalle = (
+            f"confirmados {confirmados}; premios {premios}; "
+            f"firmados {len(especiales)}; king {len(king_ok)}"
+        )
         if discrepancias:
             detalle += f"; discrepancias {len(discrepancias)}"
         if aviso_firma:
             detalle += "; firma pendiente"
+        if aviso_king:
+            detalle += "; king " + str(aviso_king)[:80]
         if error:
             detalle += "; widget " + str(error)[:120]
         db.add(Importacion(
@@ -247,6 +290,7 @@ def ciclo(forzar=False, payload=None, firmado=None, operador=None):
             "confirmados": confirmados,
             "premios": premios,
             "rdlotto": False,
+            "king": len(king_ok),
         }
     except Exception as exc:
         db.rollback()

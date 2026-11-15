@@ -3,7 +3,13 @@ import json
 from datetime import datetime
 from decimal import Decimal
 
-from apps.api import conectate_firmado, conectate_widget, operador_oficial, resultados_auto
+from apps.api import (
+    conectate_firmado,
+    conectate_widget,
+    operador_king,
+    operador_oficial,
+    resultados_auto,
+)
 from apps.api import db as dbmod
 from apps.api.models import Jugada, ObservacionResultado, Resultado, Sorteo, TipoJugada
 
@@ -193,6 +199,7 @@ def test_la_prueba_no_abre_el_websocket(entorno, monkeypatch):
 
     monkeypatch.setattr(conectate_firmado, "descargar_ventana", prohibido)
     monkeypatch.setattr(operador_oficial, "confirmar_ventana", prohibido)
+    monkeypatch.setattr(operador_king, "confirmar_ventana", prohibido)
     monkeypatch.setattr(conectate_widget, "descargar", lambda timeout=20: (None, "HTTP 403"))
     mal = resultados_auto.ciclo()
     assert mal["ok"] is False
@@ -202,6 +209,7 @@ def test_la_prueba_no_abre_el_websocket(entorno, monkeypatch):
 def test_si_el_widget_cae_la_firma_puede_seguir(entorno, monkeypatch):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setattr(conectate_widget, "descargar", lambda timeout=20: (None, "HTTP 403"))
+    monkeypatch.setattr(operador_king, "confirmar_ventana", lambda hoy: ({}, None, []))
     doc = _doc(
         [_juego("Anguila 8:00 AM", "g8", (4, 5, 6))],
         [_juego("Haiti Bolet 9:30 AM", "h9", (7, 8, 9))],

@@ -1309,6 +1309,14 @@ def _estado_panel(sorteo, resultado, hoy, momento, fallo):
             "Todavía no hay tres números. Hace falta que el operador y "
             "Conéctate coincidan en fecha, hora y números.",
         )
+    from . import operador_king
+
+    if operador_king.es_king(sorteo.nombre):
+        return (
+            "PENDIENTE",
+            "Todavía no hay tres números. Hace falta que el operador y "
+            "RDLotto coincidan en fecha, sesión y números.",
+        )
     return "PENDIENTE", "Todavía no hay tres números. La fuente es el widget de Conéctate."
 
 

@@ -76,9 +76,17 @@ MOTIVO_SIN_WIDGET = (
 )
 
 
+_MOTIVO_KING = (
+    "Este sorteo se confirma cuando el operador (kinglotterysxm.com) y "
+    "RDLotto coinciden en la fecha, la sesión y los tres números."
+)
+
+
 def motivo_sin_fuente(nombre):
     if nombre in _HAITI_NOMBRES or nombre.startswith("La Anguila"):
         return MOTIVO_SIN_WIDGET
+    if nombre in ("King Lottery 12:30 PM", "King Lottery 7:30 PM"):
+        return _MOTIVO_KING
     return "El widget público no tiene un título con este nombre y esta hora."
 
 

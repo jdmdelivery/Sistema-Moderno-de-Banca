@@ -7,7 +7,13 @@ import json
 import urllib.error
 from datetime import datetime, timedelta
 
-from apps.api import conectate_firmado, conectate_widget, operador_oficial, resultados_auto
+from apps.api import (
+    conectate_firmado,
+    conectate_widget,
+    operador_king,
+    operador_oficial,
+    resultados_auto,
+)
 from apps.api import db as dbmod
 from apps.api.models import Auditoria, ObservacionResultado, Resultado
 
@@ -242,6 +248,7 @@ def test_la_caida_del_operador_no_detiene_las_demas_loterias(entorno, fijar_hora
         return {}, "operador anguila sin respuesta", []
 
     monkeypatch.setattr(operador_oficial, "confirmar_ventana", caido)
+    monkeypatch.setattr(operador_king, "confirmar_ventana", lambda hoy: ({}, None, []))
     monkeypatch.setattr(
         conectate_widget, "descargar",
         lambda timeout=20: ([{
