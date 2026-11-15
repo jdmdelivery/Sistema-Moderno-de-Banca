@@ -18,15 +18,25 @@ def ahora_local() -> datetime:
     return datetime.now(ZONA).replace(tzinfo=None)
 
 
-def modo_desarrollo() -> bool:
-    """Indicador de pruebas. Encendido, la terminal ve y vende todos los
-    sorteos configurados sin reescribir sus horarios, y esas ventas quedan
-    marcadas como prueba: no mueven la caja ni entran en reportes.
-    Apagado, vuelven las reglas de día y hora de cierre y la contabilidad
-    normal. No debe quedar encendido al operar con dinero real."""
-    return os.environ.get("MODO_DESARROLLO", "").strip().lower() in {
+def _indicador(nombre: str) -> bool:
+    return os.environ.get(nombre, "").strip().lower() in {
         "1", "true", "si", "sí", "yes", "on",
     }
+
+
+def modo_desarrollo() -> bool:
+    """Indicador de pruebas. Encendido, las ventas quedan marcadas como
+    prueba: no mueven la caja real ni entran en los reportes reales.
+    No cambia los horarios guardados. No debe quedar encendido al operar
+    con dinero real."""
+    return _indicador("MODO_DESARROLLO")
+
+
+def loterias_abiertas_desarrollo() -> bool:
+    """Con LOTERIAS_ABIERTAS_DESARROLLO, las loterías activas se pueden
+    vender las 24 horas. No reescribe hora de sorteo, hora de cierre ni
+    días. Apagada, el cierre vuelve a usar el horario guardado."""
+    return _indicador("LOTERIAS_ABIERTAS_DESARROLLO")
 
 
 class ErrorServicio(Exception):

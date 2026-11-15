@@ -633,11 +633,19 @@ async function verAuditoria() {
 async function marcarDesarrollo() {
   try {
     const salud = await fetch("/health").then((r) => r.json());
+    const lineas = [];
+    if (salud.loterias_abiertas_desarrollo) {
+      lineas.push("MODO DESARROLLO — LOTERÍAS ABIERTAS 24 HORAS");
+    }
     if (salud.modo_desarrollo) {
-      const aviso = $("#aviso-prueba");
-      const login = $("#aviso-login");
-      if (aviso) aviso.hidden = false;
-      if (login) login.hidden = false;
+      lineas.push("MODO DESARROLLO — DATOS DE PRUEBA");
+    }
+    const texto = lineas.join(" · ");
+    for (const id of ["#aviso-prueba", "#aviso-login"]) {
+      const nodo = $(id);
+      if (!nodo) continue;
+      nodo.hidden = texto.length === 0;
+      if (texto) nodo.textContent = texto;
     }
   } catch {}
 }

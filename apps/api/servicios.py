@@ -9,7 +9,7 @@ from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 
 from . import motor
-from .comun import D, ErrorServicio, ahora_local, modo_desarrollo
+from .comun import D, ErrorServicio, ahora_local, loterias_abiertas_desarrollo, modo_desarrollo
 from .models import (
     Auditoria,
     Consorcio,
@@ -191,7 +191,7 @@ def _verificar_sorteo_abierto(sorteo, momento):
     dias = {d.strip() for d in (sorteo.dias_activos or "").split(",") if d.strip()}
     if str(momento.isoweekday()) not in dias:
         raise ErrorServicio(400, f"El sorteo {sorteo.nombre} no juega hoy")
-    if momento.time() >= sorteo.hora_cierre and not modo_desarrollo():
+    if momento.time() >= sorteo.hora_cierre and not loterias_abiertas_desarrollo():
         raise ErrorServicio(400, f"El sorteo {sorteo.nombre} ya cerró (cierre {sorteo.hora_cierre.strftime('%H:%M')})")
     return sorteo
 

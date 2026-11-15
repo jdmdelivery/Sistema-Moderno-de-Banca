@@ -28,7 +28,15 @@ def normalizar_url(url):
 
 
 def url_por_defecto():
-    return normalizar_url(os.environ.get("DATABASE_URL", "sqlite:///./sistema_loteria.db"))
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        if os.environ.get("RENDER_SERVICE_ID"):
+            raise RuntimeError(
+                "DATABASE_URL es obligatoria en el servidor publicado. "
+                "No se usa SQLite temporal."
+            )
+        url = "sqlite:///./sistema_loteria.db"
+    return normalizar_url(url)
 
 
 def crear_engine(url):

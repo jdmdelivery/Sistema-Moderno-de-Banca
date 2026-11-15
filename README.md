@@ -12,17 +12,15 @@ terminal aquí implementada.
   gratuito). Repo: `jdmdelivery/Sistema-Moderno-de-Banca`.
 - No hay dinero real ni operaciones reales. Usuarios, sucursales, ventas,
   premios, entregas y balances de este entorno son datos de prueba.
-- La base en vivo es la **SQLite temporal interna** del servicio, por
-  decisión de Jose el 2026-11-14 (Render solo permite una PostgreSQL
-  gratuita por cuenta y la ocupa JDM). **Un reinicio o un nuevo despliegue
-  de Render borra toda la información**: sucursales, usuarios, tickets,
-  premios, entregas y saldos. No sirve como respaldo. Cuando se decida
-  trabajar con dinero real, hay que migrar a una base persistente con
-  copias de seguridad. Hasta entonces basta dejar `MODO_DESARROLLO=true`
-  y no contratar servicios. Conectar PostgreSQL después sigue previsto:
-  fijar `DATABASE_URL` (la app la normaliza al dialecto psycopg 3 que
-  trae `requirements.txt`); el `render.yaml` con el Blueprint original
-  queda en el repo.
+- La base publicada es PostgreSQL de Render, base `sistema de banca
+  moderna`, conectada solo al servicio `sistema-de-banca-moderna` por
+  `DATABASE_URL` interna. El servidor publicado no arranca con SQLite.
+  Los tests locales siguen usando SQLite temporal. Cuando se opere con
+  dinero real hay que mantener copias de seguridad de esta base.
+- `MODO_DESARROLLO=true` marca las ventas como prueba y no mueve la caja
+  real. `LOTERIAS_ABIERTAS_DESARROLLO=SI` deja vender las loterías
+  activas las 24 horas sin reescribir sus horarios. Al quitar esa
+  variable, el cierre vuelve a usar la hora guardada.
 - Con `MODO_DESARROLLO` activo y ninguna sucursal, el arranque crea
   BANCA CASTILLO (PRUEBA), el operador `jose` / `prueba123` y un saldo
   de prueba de RD$5,764.00 marcado como «SALDO DE PRUEBA».

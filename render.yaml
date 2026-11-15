@@ -23,7 +23,11 @@ services:
           property: connectionString
       - key: PYTHON_VERSION
         value: "3.12.3"
-      # Apagar (false) antes de operar con dinero real. No cambia los
-      # horarios guardados: solo omite día y hora de cierre en esta API.
+      # Apagar (false) antes de operar con dinero real. Marca las ventas
+      # como prueba y no reescribe los horarios guardados.
       - key: MODO_DESARROLLO
         value: "true"
+      # Apagar (NO) para que las ventas vuelvan a respetar la hora de
+      # cierre guardada. No modifica horas ni días en la base.
+      - key: LOTERIAS_ABIERTAS_DESARROLLO
+        value: "SI"

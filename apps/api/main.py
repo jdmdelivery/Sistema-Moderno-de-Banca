@@ -13,8 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import conectate, resultados_auto, rdlotto, servicios
-from .comun import D, ErrorServicio, modo_desarrollo
-from .db import configurar, init_db, nueva_sesion
+from .comun import D, ErrorServicio, loterias_abiertas_desarrollo, modo_desarrollo
+from .db import configurar, engine, init_db, nueva_sesion
 from .models import (
     Auditoria,
     LimiteVenta,
@@ -180,6 +180,16 @@ def importacion_dict(i):
     }
 
 
+def _entorno_publico():
+    abiertas = loterias_abiertas_desarrollo()
+    return {
+        "modo_desarrollo": modo_desarrollo(),
+        "loterias_abiertas_desarrollo": abiertas,
+        "leyenda": "MODO DESARROLLO — DATOS DE PRUEBA" if modo_desarrollo() else "",
+        "leyenda_loterias": "MODO DESARROLLO — LOTERÍAS ABIERTAS 24 HORAS" if abiertas else "",
+    }
+
+
 def _hora(texto):
     try:
         return datetime.strptime(texto, "%H:%M").time()
@@ -202,9 +212,9 @@ def salud():
         "ok": True,
         "servicio": "sistema-de-banca-moderna",
         "hora": servicios.ahora_local().isoformat(),
-        "modo_desarrollo": desarrollo,
         "datos": "prueba" if desarrollo else "produccion",
-        "leyenda": "MODO DESARROLLO — DATOS DE PRUEBA" if desarrollo else "",
+        "base": engine().dialect.name,
+        **_entorno_publico(),
     }
 
 
@@ -898,8 +908,7 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
         "sucursal": sucursal_dict(sucursal),
         "saldo": str(D(sucursal.saldo_actual)),
         "mi_caja": str(servicios.mi_caja_de(usuario)),
-        "modo_desarrollo": modo_desarrollo(),
-        "leyenda": "MODO DESARROLLO — DATOS DE PRUEBA" if modo_desarrollo() else "",
+        **_entorno_publico(),
         "terminal": {
             "id": terminal.id,
             "numero": terminal.numero_terminal,
@@ -936,8 +945,7 @@ def terminal_sorteos(db=Depends(get_db), terminal=Depends(terminal_actual),
     datos = {
         "sorteos": salida,
         "saldo": str(D(sucursal.saldo_actual)) if sucursal else "0.00",
-        "modo_desarrollo": modo_desarrollo(),
-        "leyenda": "MODO DESARROLLO — DATOS DE PRUEBA" if modo_desarrollo() else "",
+        **_entorno_publico(),
     }
     datos.update(servicios.indicadores_caja(db, operador))
     return datos
