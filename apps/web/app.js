@@ -212,9 +212,9 @@ async function guardarTerminal() {
     activa: $("#ter-activa").checked,
   };
   try {
-    if (id) { await put(`/terminales/${id}`, body); msg("#ter-msg", "Terminal guardada ✔"); }
-    else { const r = await post("/terminales", body); mostrarToken(r.token); msg("#ter-msg", "Terminal creada ✔ Guarde el token."); }
-    limpiarTerminal(); await cargarTerminales();
+    if (id) { await put(`/terminales/${id}`, body); msg("#ter-msg", "Terminal guardada ✔"); limpiarTerminal(); }
+    else { const r = await post("/terminales", body); limpiarTerminal(); mostrarToken(r.token); msg("#ter-msg", "Terminal creada ✔ Guarde el token."); }
+    await cargarTerminales();
   } catch (e) { msg("#ter-msg", e.message, false); }
 }
 async function revocarTerminal(id) {

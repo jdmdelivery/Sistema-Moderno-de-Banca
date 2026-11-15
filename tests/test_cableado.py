@@ -113,6 +113,25 @@ def test_clase_seccion_visible_coincide_en_js_css_y_html():
         "index.html no trae la clase visible puesta en la sección inicial")
 
 
+def test_el_token_se_muestra_despues_de_limpiar_el_formulario():
+    """En guardarTerminal, mostrarToken debe ir DESPUÉS de limpiarTerminal:
+    limpiarTerminal oculta la caja #ter-token, así que si se llama después
+    de mostrarToken, el token desaparece en el mismo instante en que se
+    crea y el usuario nunca lo ve. (Fallo real 2026-11-14: Jose creó la
+    terminal BANCA CASTILLO y el panel dijo «Guarde el token» sin que el
+    token se viera en pantalla.)"""
+    m = re.search(r"async function guardarTerminal\(\) \{(.*?)\n\}", APP_JS, re.S)
+    assert m, "No se encontró guardarTerminal en app.js"
+    cuerpo = m.group(1)
+    i_mostrar = cuerpo.find("mostrarToken(r.token)")
+    i_limpiar = cuerpo.find("limpiarTerminal()", cuerpo.find("post(\"/terminales\""))
+    assert i_mostrar != -1, "guardarTerminal no muestra el token al crear"
+    assert i_limpiar != -1, "guardarTerminal no limpia el formulario al crear"
+    assert i_limpiar < i_mostrar, (
+        "limpiarTerminal() va después de mostrarToken(): la caja del token "
+        "se oculta al instante y el token nunca se ve")
+
+
 def test_panel_y_estaticos_se_sirven(entorno):
     r = entorno.c.get("/")
     assert r.status_code == 200 and "Sistema de Banca Moderna" in r.text
