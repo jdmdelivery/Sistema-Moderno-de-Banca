@@ -6,15 +6,17 @@ import json
 from datetime import timedelta
 
 from sqlalchemy import func, update
+from sqlalchemy.exc import IntegrityError
 
 from . import motor
-from .comun import D, ErrorServicio, ahora_local
+from .comun import D, ErrorServicio, ahora_local, modo_desarrollo
 from .models import (
     Auditoria,
     Consorcio,
     Cuadre,
     Jugada,
     LimiteVenta,
+    MovimientoCajera,
     MovimientoSaldo,
     Resultado,
     Sesion,
@@ -22,6 +24,7 @@ from .models import (
     Sucursal,
     TablaPagos,
     Terminal,
+    Entrega,
     Ticket,
     TipoJugada,
     TransaccionCaja,
@@ -112,6 +115,60 @@ def terminal_de_sucursal(db, sucursal):
     return t
 
 
+def terminal_para_dispositivo(db, sucursal, dispositivo_id, modelo=None, android=None, version=None):
+    """Cada aparato conserva su propio serial. Sin serial, sigue la terminal
+    única de la sucursal, para no romper las sesiones que ya existían."""
+    if not dispositivo_id or not str(dispositivo_id).strip():
+        terminal = terminal_de_sucursal(db, sucursal)
+        _anotar_terminal(terminal, modelo, android, version)
+        return terminal
+    serial = str(dispositivo_id).strip()[:60]
+    todas = (
+        db.query(Terminal)
+        .filter_by(sucursal_id=sucursal.id)
+        .order_by(Terminal.numero_terminal)
+        .all()
+    )
+    propia = db.query(Terminal).filter_by(serial_sunmi=serial).first()
+    if propia is not None:
+        if propia.sucursal_id != sucursal.id:
+            raise ErrorServicio(403, "Este dispositivo ya está registrado en otra sucursal")
+        if not propia.activa:
+            return None
+        _anotar_terminal(propia, modelo, android, version)
+        return propia
+    activas = [t for t in todas if t.activa]
+    if todas and not activas:
+        return None
+    if len(activas) == 1 and str(activas[0].serial_sunmi).startswith("APP-"):
+        activas[0].serial_sunmi = serial
+        _anotar_terminal(activas[0], modelo, android, version)
+        return activas[0]
+    numero = max((t.numero_terminal for t in todas), default=0) + 1
+    nueva = Terminal(
+        sucursal_id=sucursal.id,
+        numero_terminal=numero,
+        serial_sunmi=serial,
+        activa=True,
+    )
+    db.add(nueva)
+    db.flush()
+    _anotar_terminal(nueva, modelo, android, version)
+    return nueva
+
+
+def _anotar_terminal(terminal, modelo, android, version):
+    if terminal is None:
+        return
+    terminal.ultima_conexion_en = ahora_local()
+    if modelo:
+        terminal.modelo = str(modelo)[:80]
+    if android:
+        terminal.android_api = str(android)[:10]
+    if version:
+        terminal.version_app = str(version)[:30]
+
+
 # --------------------------------------------------------------------- venta
 def _tabla_vigente(db, tipo_id, momento):
     filas = (
@@ -134,13 +191,15 @@ def _verificar_sorteo_abierto(sorteo, momento):
     dias = {d.strip() for d in (sorteo.dias_activos or "").split(",") if d.strip()}
     if str(momento.isoweekday()) not in dias:
         raise ErrorServicio(400, f"El sorteo {sorteo.nombre} no juega hoy")
-    if momento.time() >= sorteo.hora_cierre:
+    if momento.time() >= sorteo.hora_cierre and not modo_desarrollo():
         raise ErrorServicio(400, f"El sorteo {sorteo.nombre} ya cerró (cierre {sorteo.hora_cierre.strftime('%H:%M')})")
     return sorteo
 
 
 def _parse_numeros(codigo_tipo, numeros):
     partes = [p for p in str(numeros).replace(" ", "").split("-") if p != ""]
+    if codigo_tipo != "QN" and len(partes) == 1 and len(partes[0]) == 4 and partes[0].isdigit():
+        partes = [partes[0][:2], partes[0][2:]]
     try:
         nums = [int(p) for p in partes]
     except ValueError:
@@ -154,8 +213,6 @@ def _parse_numeros(codigo_tipo, numeros):
         return nums[0], None
     if len(nums) != 2:
         raise ErrorServicio(400, "Esta jugada lleva dos números (ej. 26-58)")
-    if nums[0] == nums[1]:
-        raise ErrorServicio(400, "Los dos números de la pareja deben ser diferentes")
     return nums[0], nums[1]
 
 
@@ -247,6 +304,7 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
                 Jugada.numeros == clave,
                 Jugada.fecha == fecha,
                 Ticket.estado != "anulado",
+                Ticket.es_prueba.is_(False),
             )
             .scalar()
         )
@@ -273,6 +331,7 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
     while db.query(Ticket).filter_by(serial=serial).first() is not None:
         serial = generar_serial()
 
+    prueba = modo_desarrollo()
     ticket = Ticket(
         id=nuevo_id,
         serial=serial,
@@ -285,6 +344,7 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
         total=total,
         estado="vendido",
         premio_total=D(0),
+        es_prueba=prueba,
     )
     db.add(ticket)
     db.flush()
@@ -303,19 +363,27 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
                 factores_json=json.dumps({k: str(v) for k, v in e["factores"].items()}),
             )
         )
-    sucursal.saldo_actual = D(sucursal.saldo_actual) + total
-    db.add(
-        MovimientoSaldo(
-            sucursal_id=sucursal.id,
-            tipo="venta",
-            monto=total,
-            referencia=f"Ticket {ticket.id}",
-            saldo_resultante=sucursal.saldo_actual,
-            creado_por=operador.id,
+    if not prueba:
+        sucursal.saldo_actual = D(sucursal.saldo_actual) + total
+        db.add(
+            MovimientoSaldo(
+                sucursal_id=sucursal.id,
+                tipo="venta",
+                monto=total,
+                referencia=f"Ticket {ticket.id}",
+                saldo_resultante=sucursal.saldo_actual,
+                creado_por=operador.id,
+            )
         )
-    )
+        mover_caja_cajera(db, operador.id, sucursal.id, "venta", total, f"Ticket {ticket.id}", 1)
+    else:
+        mover_caja_cajera(
+            db, operador.id, sucursal.id, "venta_prueba", total, f"Ticket de prueba {ticket.id}", 1,
+            bolsa="prueba",
+        )
     auditar(db, "ticket", ticket.id, "venta", usuario_id=operador.id, terminal_id=terminal.id,
-            detalle={"total": str(total), "jugadas": len(expandidas), "sucursal": sucursal.codigo})
+            detalle={"total": str(total), "jugadas": len(expandidas), "sucursal": sucursal.codigo,
+                     "es_prueba": prueba})
     db.commit()
     db.refresh(ticket)
     return ticket_a_dict(db, ticket, saldo_restante=D(sucursal.saldo_actual))
@@ -361,6 +429,9 @@ def ticket_a_dict(db, ticket, saldo_restante=None):
         "total": str(D(ticket.total)),
         "estado": ticket.estado,
         "premio_total": str(D(ticket.premio_total)),
+        "es_prueba": bool(ticket.es_prueba),
+        "reimpresiones": int(ticket.reimpresiones or 0),
+        "cajero": db.get(Usuario, ticket.usuario_id).nombre if ticket.usuario_id and db.get(Usuario, ticket.usuario_id) else "",
     }
     if ticket.estado == "pagado":
         datos["pago"] = {
@@ -377,21 +448,33 @@ def ticket_a_dict(db, ticket, saldo_restante=None):
 def consultar_ticket(db, ticket_id, serial):
     ticket = buscar_ticket(db, ticket_id, serial)
     datos = ticket_a_dict(db, ticket)
+    datos["no_oficial"] = bool(ticket.es_prueba)
+    if ticket.es_prueba and not modo_desarrollo():
+        datos["puede_pagar"] = False
+        datos["veredicto"] = "TICKET DE PRUEBA"
+        datos["mensaje"] = "Ticket de prueba: no se paga y no afecta la caja"
+        return datos
     datos["puede_pagar"] = ticket.estado == "ganador"
     if ticket.estado == "ganador":
+        datos["veredicto"] = "TICKET GANADOR — NO OFICIAL" if ticket.es_prueba else "TICKET GANADOR"
         datos["mensaje"] = f"Ticket ganador: pague ${D(ticket.premio_total)}"
     elif ticket.estado == "pagado":
         p = datos["pago"]
+        datos["veredicto"] = "TICKET YA PAGADO — NO OFICIAL" if ticket.es_prueba else "TICKET YA PAGADO"
         datos["mensaje"] = (
             f"Ya pagado en la sucursal {p['sucursal']}, el día {p['fecha_hora']}"
         )
     elif ticket.estado == "no_ganador":
+        datos["veredicto"] = "TICKET NO GANADOR"
         datos["mensaje"] = "El ticket no ganó"
     elif ticket.estado == "anulado":
+        datos["veredicto"] = "TICKET ANULADO"
         datos["mensaje"] = "El ticket está anulado"
     elif ticket.estado == "vencido":
+        datos["veredicto"] = "TICKET VENCIDO"
         datos["mensaje"] = "El ticket está vencido"
     else:
+        datos["veredicto"] = "RESULTADOS PENDIENTES"
         datos["mensaje"] = "Ticket vendido: aún faltan resultados por liquidar"
     return datos
 
@@ -413,7 +496,99 @@ def _error_no_pagable(db, ticket):
     raise ErrorServicio(409, "El ticket aún no es ganador: faltan resultados por liquidar")
 
 
-def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuario_id):
+def reimprimir_ticket(db, ticket_id, serial, usuario_id, terminal_id=None):
+    """Registra una copia. No crea venta, no mueve la caja y no cambia el estado."""
+    ticket = buscar_ticket(db, ticket_id, serial)
+    saldo = None
+    sucursal = db.get(Sucursal, ticket.sucursal_vendedora_id)
+    if sucursal is not None:
+        saldo = D(sucursal.saldo_actual)
+    estado = ticket.estado
+    ticket.reimpresiones = int(ticket.reimpresiones or 0) + 1
+    ticket.ultima_reimpresion_en = ahora_local()
+    auditar(
+        db, "ticket", ticket.id, "reimpresion", usuario_id=usuario_id, terminal_id=terminal_id,
+        detalle={"cantidad": ticket.reimpresiones, "fecha": ticket.ultima_reimpresion_en.isoformat(sep=" "),
+                 "usuario_id": usuario_id},
+    )
+    db.commit()
+    db.refresh(ticket)
+    if ticket.estado != estado or (sucursal is not None and D(sucursal.saldo_actual) != saldo):
+        raise ErrorServicio(500, "La reimpresión no debe cambiar el ticket ni la caja")
+    datos = consultar_ticket(db, ticket_id, serial)
+    datos["reimpresion"] = True
+    datos["leyenda"] = "COPIA — REIMPRESIÓN"
+    return datos
+
+
+def mi_caja_de(usuario):
+    if usuario is None:
+        return D(0)
+    if modo_desarrollo():
+        return D(usuario.saldo_caja_prueba or 0)
+    return D(usuario.saldo_caja or 0)
+
+
+def _pagar_prueba(db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, operacion_id):
+    """Pago simulado. Resta el balance de prueba de quien paga y no toca la caja real."""
+    if ticket.estado != "ganador":
+        _error_no_pagable(db, ticket)
+    sucursal = db.get(Sucursal, sucursal_pagadora_id)
+    cajero = db.get(Usuario, usuario_id)
+    premio = D(ticket.premio_total)
+    caja_real = D(sucursal.saldo_actual) if sucursal is not None else D(0)
+    caja_prueba = D(cajero.saldo_caja_prueba or 0) if cajero is not None else D(0)
+    if cajero is None or caja_prueba < premio:
+        auditar(db, "ticket", ticket.id, "pago_bloqueado", usuario_id=usuario_id,
+                terminal_id=terminal_id,
+                detalle={"motivo": "caja_prueba_insuficiente", "premio": str(premio),
+                         "caja_prueba": str(caja_prueba), "es_prueba": True})
+        db.commit()
+        raise ErrorServicio(
+            409,
+            f"La caja de prueba tiene ${caja_prueba} y el premio simulado es ${premio}. "
+            "No se pagó y la caja real no se tocó.",
+        )
+    ahora = ahora_local()
+    valores = {
+        "estado": "pagado",
+        "pagado_en_sucursal_id": sucursal_pagadora_id,
+        "pagado_por_terminal_id": terminal_id,
+        "pagado_por_usuario_id": usuario_id,
+        "pagado_en": ahora,
+    }
+    if operacion_id:
+        valores["pago_operacion_id"] = str(operacion_id)[:40]
+    filas = (
+        db.execute(
+            update(Ticket)
+            .where(Ticket.id == ticket.id, Ticket.estado == "ganador", Ticket.es_prueba.is_(True))
+            .values(**valores)
+        ).rowcount
+        or 0
+    )
+    if filas != 1:
+        db.rollback()
+        db.expire_all()
+        _error_no_pagable(db, buscar_ticket(db, ticket.id, ticket.serial))
+    mover_caja_cajera(
+        db, usuario_id, sucursal.id, "pago_premio_prueba", premio,
+        f"Pago de prueba ticket {ticket.id}", -1, bolsa="prueba",
+    )
+    if D(sucursal.saldo_actual) != caja_real:
+        db.rollback()
+        raise ErrorServicio(500, "Un pago de prueba no puede cambiar la caja real")
+    auditar(db, "ticket", ticket.id, "pago_prueba", usuario_id=usuario_id, terminal_id=terminal_id,
+            detalle={"monto": str(premio), "no_oficial": True, "sucursal_pagadora": sucursal_pagadora_id})
+    db.commit()
+    db.expire_all()
+    datos = consultar_ticket(db, ticket.id, ticket.serial)
+    datos["mi_caja"] = str(mi_caja_de(db.get(Usuario, usuario_id)))
+    datos["saldo_restante"] = str(D(db.get(Sucursal, sucursal_pagadora_id).saldo_actual))
+    return datos
+
+
+def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuario_id, operacion_id=None):
     """Pago ÚNICO atómico: la transición ganador->pagado es una sola
     actualización condicionada al estado. Dos intentos a la vez = un pago.
     Modelo de CAJA: el premio sale de la caja de la sucursal que paga y se
@@ -422,6 +597,14 @@ def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuar
     y el intento queda en auditoría: el consorcio debe entregar efectivo a
     la sucursal para poder pagarlo."""
     ticket = buscar_ticket(db, ticket_id, serial)
+    if operacion_id:
+        previo = db.query(Ticket).filter_by(pago_operacion_id=str(operacion_id)[:40]).first()
+        if previo is not None and previo.id == ticket.id and previo.estado == "pagado":
+            return consultar_ticket(db, ticket_id, serial)
+    if ticket.es_prueba:
+        if not modo_desarrollo():
+            raise ErrorServicio(409, "Ticket de prueba: no se paga y no afecta la caja")
+        return _pagar_prueba(db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, operacion_id)
     if ticket.estado != "ganador":
         _error_no_pagable(db, ticket)
     sucursal = db.get(Sucursal, sucursal_pagadora_id)
@@ -440,17 +623,20 @@ def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuar
             "efectivo a la sucursal.",
         )
     ahora = ahora_local()
+    valores = {
+        "estado": "pagado",
+        "pagado_en_sucursal_id": sucursal_pagadora_id,
+        "pagado_por_terminal_id": terminal_id,
+        "pagado_por_usuario_id": usuario_id,
+        "pagado_en": ahora,
+    }
+    if operacion_id:
+        valores["pago_operacion_id"] = str(operacion_id)[:40]
     filas = (
         db.execute(
             update(Ticket)
             .where(Ticket.id == ticket.id, Ticket.estado == "ganador")
-            .values(
-                estado="pagado",
-                pagado_en_sucursal_id=sucursal_pagadora_id,
-                pagado_por_terminal_id=terminal_id,
-                pagado_por_usuario_id=usuario_id,
-                pagado_en=ahora,
-            )
+            .values(**valores)
         ).rowcount
         or 0
     )
@@ -469,14 +655,19 @@ def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuar
             creado_por=usuario_id,
         )
     )
+    mover_caja_cajera(db, usuario_id, sucursal.id, "pago_premio", premio, f"Pago ticket {ticket.id}", -1)
     auditar(db, "ticket", ticket.id, "pago", usuario_id=usuario_id, terminal_id=terminal_id,
             detalle={"monto": str(premio), "sucursal_pagadora": sucursal_pagadora_id})
     db.commit()
     db.expire_all()
-    return consultar_ticket(db, ticket_id, serial)
+    datos = consultar_ticket(db, ticket_id, serial)
+    cajero = db.get(Usuario, usuario_id)
+    if cajero is not None:
+        datos["mi_caja"] = str(mi_caja_de(cajero))
+    return datos
 
 
-def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=None):
+def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=None, motivo=None):
     ahora = ahora or ahora_local()
     ticket = buscar_ticket(db, ticket_id, serial)
     if ticket.estado == "anulado":
@@ -496,23 +687,91 @@ def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=Non
     ticket.estado = "anulado"
     ticket.anulado_en = ahora
     ticket.anulado_por = usuario_id
+    motivo_txt = str(motivo or "").strip()[:200]
+    ticket.anulado_motivo = motivo_txt or None
     sucursal = db.get(Sucursal, ticket.sucursal_vendedora_id)
-    sucursal.saldo_actual = D(sucursal.saldo_actual) - D(ticket.total)
-    db.add(
-        MovimientoSaldo(
-            sucursal_id=sucursal.id,
-            tipo="anulacion",
-            monto=D(ticket.total),
-            referencia=f"Anulación ticket {ticket.id}",
-            saldo_resultante=sucursal.saldo_actual,
-            creado_por=usuario_id,
+    if not ticket.es_prueba:
+        sucursal.saldo_actual = D(sucursal.saldo_actual) - D(ticket.total)
+        db.add(
+            MovimientoSaldo(
+                sucursal_id=sucursal.id,
+                tipo="anulacion",
+                monto=D(ticket.total),
+                referencia=f"Anulación ticket {ticket.id}",
+                saldo_resultante=sucursal.saldo_actual,
+                creado_por=usuario_id,
+            )
         )
-    )
+        mover_caja_cajera(
+            db, ticket.usuario_id, sucursal.id, "anulacion", D(ticket.total),
+            f"Anulación ticket {ticket.id}", -1, motivo=ticket.anulado_motivo,
+        )
+    elif modo_desarrollo():
+        mover_caja_cajera(
+            db, ticket.usuario_id, sucursal.id, "anulacion_prueba", D(ticket.total),
+            f"Anulación de prueba ticket {ticket.id}", -1, motivo=ticket.anulado_motivo,
+            bolsa="prueba",
+        )
     auditar(db, "ticket", ticket.id, "anulacion", usuario_id=usuario_id, terminal_id=terminal_id,
-            detalle={"total_devuelto": str(D(ticket.total))})
+            detalle={"total_devuelto": "0.00" if ticket.es_prueba else str(D(ticket.total)),
+                     "motivo": ticket.anulado_motivo, "usuario_id": usuario_id,
+                     "fecha": ahora.isoformat(sep=" "), "es_prueba": bool(ticket.es_prueba)})
     db.commit()
     db.refresh(ticket)
     return ticket_a_dict(db, ticket, saldo_restante=D(sucursal.saldo_actual))
+
+
+def aplicar_limite_todas(db, tipo_codigo, numeros, monto, usuario_id, reemplazar=False, aplicar=False):
+    """Crea el mismo límite en todos los sorteos configurados.
+
+    Con reemplazar en falso conserva el límite individual que ya exista.
+    Sin aplicar solo calcula el resumen y no escribe."""
+    tipo = db.query(TipoJugada).filter_by(codigo=str(tipo_codigo).upper()).first()
+    if tipo is None:
+        raise ErrorServicio(404, "Tipo de jugada no válido")
+    if D(monto) <= D(0):
+        raise ErrorServicio(400, "El monto máximo debe ser mayor que cero")
+    n1, n2 = _parse_numeros(tipo.codigo, numeros)
+    clave = clave_numero(n1, n2)
+    sorteos = db.query(Sorteo).order_by(Sorteo.id).all()
+    creados = []
+    actualizados = []
+    omitidos = []
+    for sorteo in sorteos:
+        existente = db.query(LimiteVenta).filter_by(
+            sorteo_id=sorteo.id, tipo_jugada_id=tipo.id, clave_numero=clave).first()
+        if existente is None:
+            creados.append({"id": sorteo.id, "sorteo": sorteo.nombre})
+            if aplicar:
+                db.add(LimiteVenta(
+                    sorteo_id=sorteo.id, tipo_jugada_id=tipo.id, clave_numero=clave,
+                    monto_max_acumulado=D(monto)))
+        elif reemplazar:
+            actualizados.append({"id": sorteo.id, "sorteo": sorteo.nombre})
+            if aplicar:
+                existente.monto_max_acumulado = D(monto)
+        else:
+            omitidos.append({"id": sorteo.id, "sorteo": sorteo.nombre,
+                             "monto_max_acumulado": str(D(existente.monto_max_acumulado))})
+    if aplicar:
+        db.flush()
+        auditar(db, "limite", clave, "aplicar_todas", usuario_id=usuario_id, detalle={
+            "tipo": tipo.codigo, "clave": clave, "monto": str(D(monto)), "reemplazar": bool(reemplazar),
+            "creados": len(creados), "actualizados": len(actualizados), "omitidos": len(omitidos),
+        })
+        db.commit()
+    return {
+        "tipo": tipo.codigo,
+        "clave": clave,
+        "monto_max_acumulado": str(D(monto)),
+        "sorteos": len(sorteos),
+        "creados": len(creados),
+        "actualizados": len(actualizados),
+        "omitidos": len(omitidos),
+        "reemplazar": bool(reemplazar),
+        "aplicado": bool(aplicar),
+        "detalle_omitidos": omitidos,
+    }
 
 
 # ---------------------------------------------------------------- resultados
@@ -558,6 +817,10 @@ def confirmar_resultado(db, resultado_id, usuario):
         raise ErrorServicio(404, "El resultado no existe")
     if r.estado == "liquidado":
         raise ErrorServicio(409, "Este resultado ya fue confirmado y liquidado")
+    if r.estado == "recibido":
+        raise ErrorServicio(409, "El resultado todavía es provisional. No se habilita el pago.")
+    if r.estado not in ("propuesto", "en_verificacion", "confirmado"):
+        raise ErrorServicio(409, "Este resultado no está listo para confirmarse.")
     ahora = ahora_local()
     r.estado = "confirmado"
     r.confirmado_por = usuario.id
@@ -590,6 +853,70 @@ def revertir_resultado(db, resultado_id, usuario):
     return r, afectados
 
 
+_RESULTADOS_VISIBLES = ("propuesto", "en_verificacion", "recibido", "confirmado", "liquidado")
+_RESULTADOS_CONFIRMADOS = ("confirmado", "liquidado")
+
+
+def consulta_resultados(db, hoy):
+    """Lectura para la terminal. No confirma, no liquida y no mueve dinero.
+
+    Si el sorteo tiene resultado en la fecha consultada, ese es el que se
+    muestra. Si no, se conserva el último anterior. Un error de fuente no
+    cuenta como resultado.
+    """
+    sorteos = db.query(Sorteo).filter_by(activo=True).order_by(Sorteo.orden, Sorteo.id).all()
+    guardados = (
+        db.query(Resultado)
+        .filter(Resultado.estado.in_(_RESULTADOS_VISIBLES))
+        .order_by(Resultado.fecha.desc(), Resultado.id.desc())
+        .all()
+    )
+    por_sorteo = {}
+    for resultado in guardados:
+        por_sorteo.setdefault(resultado.sorteo_id, []).append(resultado)
+    filas = []
+    for sorteo in sorteos:
+        elegido = None
+        for resultado in por_sorteo.get(sorteo.id, []):
+            if resultado.fecha == hoy:
+                elegido = resultado
+                break
+        if elegido is None:
+            for resultado in por_sorteo.get(sorteo.id, []):
+                if resultado.fecha < hoy:
+                    elegido = resultado
+                    break
+        if elegido is None:
+            filas.append({
+                "id": sorteo.id,
+                "nombre": sorteo.nombre,
+                "hora": sorteo.hora_sorteo.strftime("%H:%M"),
+                "fecha": None,
+                "premio1": None,
+                "premio2": None,
+                "premio3": None,
+                "estado": None,
+                "confirmado": False,
+                "vigente": False,
+                "pendiente": True,
+            })
+            continue
+        filas.append({
+            "id": sorteo.id,
+            "nombre": sorteo.nombre,
+            "hora": sorteo.hora_sorteo.strftime("%H:%M"),
+            "fecha": elegido.fecha.isoformat(),
+            "premio1": f"{elegido.premio1:02d}",
+            "premio2": f"{elegido.premio2:02d}",
+            "premio3": f"{elegido.premio3:02d}",
+            "estado": elegido.estado,
+            "confirmado": elegido.estado in _RESULTADOS_CONFIRMADOS,
+            "vigente": elegido.fecha == hoy,
+            "pendiente": False,
+        })
+    return {"hoy": hoy.isoformat(), "zona": "America/Santo_Domingo", "sorteos": filas}
+
+
 def resultado_a_dict(r):
     return {
         "id": r.id,
@@ -601,8 +928,359 @@ def resultado_a_dict(r):
         "premio3": f"{r.premio3:02d}",
         "estado": r.estado,
         "fuente": r.fuente,
+        "version": int(r.version or 1),
+        "externo": r.externo,
         "confirmado_en": r.confirmado_en.isoformat(sep=" ") if r.confirmado_en else None,
         "liquidado_en": r.liquidado_en.isoformat(sep=" ") if r.liquidado_en else None,
+    }
+
+
+def mover_caja_cajera(db, usuario_id, sucursal_id, tipo, monto, referencia, signo, motivo=None, bolsa="real"):
+    """signo 1 suma al cajón de esa persona; signo -1 lo resta. No toca otra cajera.
+
+    bolsa "prueba" mueve solo el balance de desarrollo. La caja real no cambia.
+    """
+    if not usuario_id:
+        return None
+    usuario = db.get(Usuario, usuario_id)
+    if usuario is None or usuario.sucursal_id != sucursal_id:
+        return None
+    monto = D(monto)
+    if bolsa == "prueba":
+        actual = D(usuario.saldo_caja_prueba or 0)
+        usuario.saldo_caja_prueba = actual + monto if signo > 0 else actual - monto
+        resultante = usuario.saldo_caja_prueba
+    else:
+        actual = D(usuario.saldo_caja or 0)
+        usuario.saldo_caja = actual + monto if signo > 0 else actual - monto
+        resultante = usuario.saldo_caja
+    mov = MovimientoCajera(
+        usuario_id=usuario.id,
+        sucursal_id=sucursal_id,
+        tipo=tipo,
+        monto=monto,
+        saldo_resultante=resultante,
+        referencia=referencia,
+        motivo=(motivo or "")[:200] or None,
+    )
+    db.add(mov)
+    return mov
+
+
+_RECAUDACION_REAL = ("venta", "anulacion", "pago_premio")
+_RECAUDACION_PRUEBA = ("venta_prueba", "anulacion_prueba", "pago_premio_prueba")
+
+
+def indicadores_caja(db, usuario):
+    """Cifras del ciclo de caja abierto. No son los acumulados del día."""
+    if usuario is None:
+        cero = str(D(0))
+        return {
+            "mi_caja": cero,
+            "efectivo_pendiente": cero,
+            "entrega_pendiente": cero,
+            "recaudacion_ciclo": cero,
+            "fondo_inicial": None,
+            "es_prueba": modo_desarrollo(),
+        }
+    prueba = modo_desarrollo()
+    saldo = mi_caja_de(usuario)
+    tipos = _RECAUDACION_PRUEBA if prueba else _RECAUDACION_REAL
+    marca = usuario.ciclo_caja_prueba_movimiento_id if prueba else usuario.ciclo_caja_movimiento_id
+    q = db.query(MovimientoCajera).filter(
+        MovimientoCajera.usuario_id == usuario.id,
+        MovimientoCajera.tipo.in_(tipos),
+    )
+    if marca:
+        q = q.filter(MovimientoCajera.id > marca)
+    recaudacion = D(0)
+    for mov in q.all():
+        if str(mov.tipo).startswith("venta"):
+            recaudacion += D(mov.monto)
+        else:
+            recaudacion -= D(mov.monto)
+    return {
+        "mi_caja": str(saldo),
+        "efectivo_pendiente": str(saldo),
+        "entrega_pendiente": str(saldo),
+        "recaudacion_ciclo": str(recaudacion),
+        "fondo_inicial": None,
+        "es_prueba": prueba,
+    }
+
+
+def estado_entrega(db, operador, sucursal, terminal):
+    ahora = ahora_local()
+    datos = {
+        "cajera": operador.nombre,
+        "sucursal": sucursal.nombre if sucursal else "?",
+        "terminal": terminal.serial_sunmi if terminal else "?",
+        "fecha_hora": ahora.strftime("%d-%m-%Y %I:%M %p"),
+    }
+    datos.update(indicadores_caja(db, operador))
+    return datos
+
+
+def entregar_efectivo(db, operador, sucursal, terminal, monto, operacion_id):
+    """Descuenta solo el cajón de esta cajera. No toca la caja de la sucursal."""
+    if not operacion_id or not str(operacion_id).strip():
+        raise ErrorServicio(400, "La entrega necesita un identificador de operación")
+    op = str(operacion_id).strip()[:40]
+    previa = db.query(Entrega).filter_by(operacion_id=op).first()
+    if previa is not None:
+        if previa.usuario_id != operador.id:
+            raise ErrorServicio(409, "Esa operación pertenece a otra cajera")
+        datos = entrega_a_dict(db, previa)
+        datos.update(indicadores_caja(db, db.get(Usuario, operador.id)))
+        return datos
+    monto = D(monto)
+    if monto <= 0:
+        raise ErrorServicio(400, "El monto a entregar debe ser mayor que cero")
+    prueba = modo_desarrollo()
+    usuario = db.get(Usuario, operador.id)
+    if usuario is None:
+        raise ErrorServicio(401, "La cajera de esta sesión no existe")
+    columna = Usuario.saldo_caja_prueba if prueba else Usuario.saldo_caja
+    anterior = D(usuario.saldo_caja_prueba if prueba else usuario.saldo_caja)
+    if monto > anterior:
+        raise ErrorServicio(
+            409,
+            f"No se puede entregar ${monto}. El efectivo disponible de esta cajera es ${anterior}.",
+        )
+    caja_sucursal = D(sucursal.saldo_actual) if sucursal is not None else D(0)
+    otra_bolsa = D(usuario.saldo_caja if prueba else usuario.saldo_caja_prueba or 0)
+    cambiado = (
+        db.execute(
+            update(Usuario).where(Usuario.id == usuario.id, columna >= monto).values({columna: columna - monto})
+        ).rowcount
+        or 0
+    )
+    if cambiado != 1:
+        db.rollback()
+        raise ErrorServicio(409, "No se pudo entregar: el efectivo disponible cambió. Consulte de nuevo.")
+    db.expire(usuario)
+    usuario = db.get(Usuario, operador.id)
+    restante = D(usuario.saldo_caja_prueba if prueba else usuario.saldo_caja)
+    if restante != anterior - monto:
+        db.rollback()
+        raise ErrorServicio(409, "No se pudo entregar: el efectivo disponible cambió. Consulte de nuevo.")
+    if D(sucursal.saldo_actual) != caja_sucursal:
+        db.rollback()
+        raise ErrorServicio(500, "Una entrega de cajera no puede cambiar la caja de la sucursal")
+    if D(usuario.saldo_caja if prueba else usuario.saldo_caja_prueba or 0) != otra_bolsa:
+        db.rollback()
+        raise ErrorServicio(500, "Una entrega no puede mezclar el dinero de prueba con el real")
+    mov = MovimientoCajera(
+        usuario_id=usuario.id,
+        sucursal_id=sucursal.id,
+        tipo="entrega_prueba" if prueba else "entrega",
+        monto=monto,
+        saldo_resultante=restante,
+        referencia=f"Entrega {op}",
+    )
+    db.add(mov)
+    db.flush()
+    if restante == 0:
+        if prueba:
+            usuario.ciclo_caja_prueba_movimiento_id = mov.id
+        else:
+            usuario.ciclo_caja_movimiento_id = mov.id
+    entrega = Entrega(
+        operacion_id=op,
+        usuario_id=usuario.id,
+        sucursal_id=sucursal.id,
+        terminal_id=terminal.id if terminal is not None else None,
+        monto=monto,
+        saldo_anterior=anterior,
+        saldo_restante=restante,
+        es_prueba=prueba,
+        estado="confirmada",
+    )
+    db.add(entrega)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        previa = db.query(Entrega).filter_by(operacion_id=op).first()
+        if previa is not None and previa.usuario_id == operador.id:
+            return entrega_a_dict(db, previa)
+        raise ErrorServicio(409, "Esa entrega ya fue registrada")
+    ahora = ahora_local()
+    entrega.texto = _texto_entrega(sucursal, terminal, usuario.nombre, entrega, ahora, prueba)
+    auditar(db, "entrega", entrega.id, "entrega_cajera", usuario_id=usuario.id,
+            terminal_id=terminal.id if terminal is not None else None,
+            detalle={"monto": str(monto), "saldo_restante": str(restante), "es_prueba": prueba,
+                     "operacion_id": op})
+    db.commit()
+    db.refresh(entrega)
+    datos = entrega_a_dict(db, entrega)
+    datos.update(indicadores_caja(db, usuario))
+    return datos
+
+
+def entrega_por_operacion(db, operador_id, operacion_id):
+    if not operacion_id:
+        raise ErrorServicio(404, "No hay una entrega registrada con esa operación")
+    entrega = db.query(Entrega).filter_by(operacion_id=str(operacion_id).strip()[:40]).first()
+    if entrega is None or entrega.usuario_id != operador_id:
+        raise ErrorServicio(404, "No hay una entrega registrada con esa operación")
+    return entrega_a_dict(db, entrega)
+
+
+def entrega_para_reimprimir(db, operador_id, entrega_id):
+    entrega = db.get(Entrega, int(entrega_id))
+    if entrega is None or entrega.usuario_id != operador_id:
+        raise ErrorServicio(404, "La entrega no existe")
+    return entrega_a_dict(db, entrega)
+
+
+def listar_entregas(db, usuario, sucursal_id=None):
+    if usuario.rol not in ("admin", "supervisor"):
+        raise ErrorServicio(403, "Su rol no puede consultar las entregas")
+    q = db.query(Entrega)
+    if usuario.rol == "supervisor":
+        if sucursal_id and int(sucursal_id) != usuario.sucursal_id:
+            raise ErrorServicio(403, "Solo puede consultar las entregas de su sucursal")
+        q = q.filter(Entrega.sucursal_id == usuario.sucursal_id)
+    elif sucursal_id:
+        q = q.filter(Entrega.sucursal_id == int(sucursal_id))
+    filas = [entrega_a_dict(db, e) for e in q.order_by(Entrega.id.desc()).limit(200).all()]
+    return {
+        "reales": [f for f in filas if not f["es_prueba"]],
+        "prueba": [f for f in filas if f["es_prueba"]],
+    }
+
+
+def recibir_entrega(db, entrega_id, usuario):
+    """Marca la recepción física. No vuelve a descontar el dinero."""
+    if usuario.rol not in ("admin", "supervisor"):
+        raise ErrorServicio(403, "Su rol no puede recibir una entrega")
+    entrega = db.get(Entrega, int(entrega_id))
+    if entrega is None:
+        raise ErrorServicio(404, "La entrega no existe")
+    if usuario.rol == "supervisor" and usuario.sucursal_id != entrega.sucursal_id:
+        raise ErrorServicio(403, "Solo puede recibir las entregas de su sucursal")
+    cajero = db.get(Usuario, entrega.usuario_id)
+    sucursal = db.get(Sucursal, entrega.sucursal_id)
+    caja_cajero = D(cajero.saldo_caja or 0) if cajero is not None else D(0)
+    caja_prueba = D(cajero.saldo_caja_prueba or 0) if cajero is not None else D(0)
+    caja_sucursal = D(sucursal.saldo_actual) if sucursal is not None else D(0)
+    if entrega.recibida_en is None:
+        entrega.recibida_en = ahora_local()
+        entrega.recibida_por = usuario.id
+        auditar(db, "entrega", entrega.id, "recepcion_efectivo", usuario_id=usuario.id,
+                detalle={"monto": str(D(entrega.monto)), "es_prueba": bool(entrega.es_prueba)})
+        db.commit()
+        db.refresh(entrega)
+    if cajero is not None and (D(cajero.saldo_caja or 0) != caja_cajero or D(cajero.saldo_caja_prueba or 0) != caja_prueba):
+        raise ErrorServicio(500, "Recibir una entrega no puede cambiar la caja de la cajera")
+    if sucursal is not None and D(sucursal.saldo_actual) != caja_sucursal:
+        raise ErrorServicio(500, "Recibir una entrega no puede cambiar la caja de la sucursal")
+    return entrega_a_dict(db, entrega)
+
+
+def entrega_a_dict(db, entrega):
+    usuario = db.get(Usuario, entrega.usuario_id)
+    sucursal = db.get(Sucursal, entrega.sucursal_id)
+    terminal = db.get(Terminal, entrega.terminal_id) if entrega.terminal_id else None
+    return {
+        "id": entrega.id,
+        "numero": entrega.id,
+        "operacion_id": entrega.operacion_id,
+        "cajera": usuario.nombre if usuario else "?",
+        "sucursal": sucursal.nombre if sucursal else "?",
+        "sucursal_id": entrega.sucursal_id,
+        "terminal": terminal.serial_sunmi if terminal else "?",
+        "fecha_hora": entrega.creado_en.strftime("%d-%m-%Y %I:%M %p") if entrega.creado_en else "",
+        "monto": str(D(entrega.monto)),
+        "saldo_anterior": str(D(entrega.saldo_anterior)),
+        "saldo_restante": str(D(entrega.saldo_restante)),
+        "estado": "CONFIRMADA",
+        "recepcion": "RECIBIDA" if entrega.recibida_en else "PENDIENTE",
+        "recibida_en": entrega.recibida_en.isoformat(sep=" ") if entrega.recibida_en else None,
+        "es_prueba": bool(entrega.es_prueba),
+        "leyenda": "PRUEBA — NO OFICIAL" if entrega.es_prueba else "",
+        "texto": entrega.texto or "",
+    }
+
+
+def _texto_entrega(sucursal, terminal, cajero, entrega, cuando, prueba):
+    lineas = []
+    if prueba:
+        lineas.append("PRUEBA — NO OFICIAL")
+    lineas += [
+        (sucursal.nombre if sucursal else "SUCURSAL").upper(),
+        "COMPROBANTE DE ENTREGA",
+        cuando.strftime("%d-%m-%Y %I:%M %p"),
+        f"Cajera: {cajero}",
+        f"Sucursal: {sucursal.nombre if sucursal else '?'}",
+        f"Terminal: {terminal.serial_sunmi if terminal else '?'}",
+        f"Número de entrega: {entrega.id}",
+        f"Saldo anterior: RD$ {D(entrega.saldo_anterior)}",
+        f"Monto entregado: RD$ {D(entrega.monto)}",
+        f"Saldo restante: RD$ {D(entrega.saldo_restante)}",
+        "Estado: CONFIRMADA",
+    ]
+    return "\n".join(lineas)
+
+
+def _filas_ganadores(db, fecha, sorteo_id, sucursal_id, usuario_id, estado, prueba):
+    q = db.query(Ticket).filter(Ticket.es_prueba.is_(prueba), Ticket.estado.in_(("ganador", "pagado")))
+    if fecha is not None:
+        q = q.filter(Ticket.fecha == fecha)
+    if sucursal_id:
+        q = q.filter(Ticket.sucursal_vendedora_id == sucursal_id)
+    if usuario_id:
+        q = q.filter(Ticket.usuario_id == usuario_id)
+    if estado in ("ganador", "pagado"):
+        q = q.filter(Ticket.estado == estado)
+    if sorteo_id:
+        q = q.join(Jugada).filter((Jugada.sorteo_id == sorteo_id) | (Jugada.sorteo2_id == sorteo_id))
+    vistos = []
+    ids = set()
+    for ticket in q.order_by(Ticket.id.desc()).all():
+        if ticket.id in ids:
+            continue
+        ids.add(ticket.id)
+        vistos.append(ticket)
+    filas = []
+    for ticket in vistos:
+        datos = ticket_a_dict(db, ticket)
+        pagador = db.get(Usuario, ticket.pagado_por_usuario_id) if ticket.pagado_por_usuario_id else None
+        jugada = next((j for j in ticket.jugadas if j.premio and D(j.premio) > 0), None)
+        filas.append({
+            "id": ticket.id,
+            "serial": ticket.serial,
+            "loterias": " · ".join(" · ".join(j["loterias"]) for j in datos["jugadas"]),
+            "fecha": datos["fecha"],
+            "cajero": datos["cajero"],
+            "banca": datos["banca"],
+            "numero": jugada.numeros if jugada is not None else "",
+            "modalidad": jugada.tipo.codigo if jugada is not None and jugada.tipo else "",
+            "monto": str(D(jugada.monto)) if jugada is not None else datos["total"],
+            "premio": datos["premio_total"],
+            "estado": ticket.estado,
+            "cajero_pago": pagador.nombre if pagador else "",
+            "pagado_en": ticket.pagado_en.isoformat(sep=" ") if ticket.pagado_en else None,
+            "no_oficial": prueba,
+            "leyenda": "PRUEBA — NO OFICIAL" if prueba else "",
+        })
+    return filas
+
+
+def listar_ganadores(db, fecha=None, sorteo_id=None, sucursal_id=None, usuario_id=None, estado=None):
+    """Los totales son solo de tickets reales. Las pruebas van en otra lista."""
+    filas = _filas_ganadores(db, fecha, sorteo_id, sucursal_id, usuario_id, estado, False)
+    premios = sum((D(f["premio"]) for f in filas), D(0))
+    pagados = sum((D(f["premio"]) for f in filas if f["estado"] == "pagado"), D(0))
+    pruebas = _filas_ganadores(db, fecha, sorteo_id, sucursal_id, usuario_id, estado, True) if modo_desarrollo() else []
+    return {
+        "tickets": filas,
+        "total_tickets": len(filas),
+        "total_premios": str(premios),
+        "premios_pagados": str(pagados),
+        "premios_pendientes": str(premios - pagados),
+        "prueba": pruebas,
     }
 
 
@@ -687,7 +1365,7 @@ def entregar_cuadre(db, sucursal_id, terminal_id, usuario_id, fecha=None, efecti
     if q.first() is not None:
         raise ErrorServicio(409, "Ya se entregó el cuadre de esta terminal/sucursal para esa fecha")
 
-    f_ventas = [Ticket.fecha == fecha, Ticket.estado != "anulado"]
+    f_ventas = [Ticket.fecha == fecha, Ticket.estado != "anulado", Ticket.es_prueba.is_(False)]
     f_premios = [Ticket.estado == "pagado", func.date(Ticket.pagado_en) == fecha]
     f_caja = [TransaccionCaja.fecha == fecha]
     if terminal_id:
@@ -774,7 +1452,7 @@ def cuadre_a_dict(c):
 
 # ------------------------------------------------------------------ reportes
 def _tickets_rango(db, desde, hasta, sucursal_id=None):
-    q = db.query(Ticket).filter(Ticket.fecha >= desde, Ticket.fecha <= hasta)
+    q = db.query(Ticket).filter(Ticket.fecha >= desde, Ticket.fecha <= hasta, Ticket.es_prueba.is_(False))
     if sucursal_id:
         q = q.filter(Ticket.sucursal_vendedora_id == sucursal_id)
     return q.order_by(Ticket.id).all()
@@ -815,6 +1493,7 @@ def reporte_ventas(db, desde, hasta, usuario_id=None, sucursal_id=None, limite=5
         fila = _ticket_resumen(db, t)
         fila["operador"] = nombre
         fila["operador_usuario"] = login
+        fila["es_prueba"] = bool(t.es_prueba)
         fila["vendido_en"] = t.vendido_en.isoformat(sep=" ") if t.vendido_en else None
         filas.append(fila)
         if t.estado != "anulado":
@@ -825,7 +1504,114 @@ def reporte_ventas(db, desde, hasta, usuario_id=None, sucursal_id=None, limite=5
         "desde": desde.isoformat(), "hasta": hasta.isoformat(),
         "tickets": filas, "total_tickets": len(filas),
         "total_vendido": str(total_vendido), "total_premios": str(total_premios),
+        "modo_desarrollo": modo_desarrollo(),
+        "aviso": "MODO DESARROLLO — DATOS DE PRUEBA" if modo_desarrollo() else "",
     }
+
+
+def resumen_dia(db, desde, hasta, operador, sucursal, terminal, alcance="cajero"):
+    """Resumen de lectura. No vende, no paga y no mueve la caja.
+
+    El alcance de una cajera son sus tickets. Un supervisor puede ver la
+    sucursal de su terminal. Nunca incluye tickets de otra banca.
+    """
+    if alcance not in ("cajero", "sucursal"):
+        raise ErrorServicio(400, "El alcance debe ser cajero o sucursal")
+    if alcance == "sucursal" and operador.rol not in ("admin", "supervisor"):
+        raise ErrorServicio(403, "Su rol solo puede consultar su propio resumen")
+    usuario_id = None if alcance == "sucursal" else operador.id
+    real = _bloque_resumen(db, desde, hasta, sucursal.id, usuario_id, False)
+    prueba = _bloque_resumen(db, desde, hasta, sucursal.id, usuario_id, True) if modo_desarrollo() else None
+    ahora = ahora_local()
+    datos = {
+        "alcance": "sucursal" if usuario_id is None else "cajera autenticada",
+        "puede_sucursal": operador.rol in ("admin", "supervisor"),
+        "sucursal": sucursal.nombre if sucursal else "?",
+        "terminal": terminal.serial_sunmi if terminal else "?",
+        "cajero": operador.nombre,
+        "desde": desde.strftime("%d-%m-%Y"),
+        "hasta": hasta.strftime("%d-%m-%Y"),
+        "impreso": ahora.strftime("%d-%m-%Y %I:%M %p"),
+        "real": real,
+        "prueba": prueba,
+    }
+    datos["texto"] = _texto_resumen(datos)
+    return datos
+
+
+def _bloque_resumen(db, desde, hasta, sucursal_id, usuario_id, prueba):
+    q = db.query(Ticket).filter(
+        Ticket.fecha >= desde,
+        Ticket.fecha <= hasta,
+        Ticket.sucursal_vendedora_id == sucursal_id,
+        Ticket.es_prueba.is_(prueba),
+    )
+    if usuario_id is not None:
+        q = q.filter(Ticket.usuario_id == usuario_id)
+    tickets = q.order_by(Ticket.id).all()
+    vigentes = [t for t in tickets if t.estado != "anulado"]
+    nulos = [t for t in tickets if t.estado == "anulado"]
+    pagados = [t for t in tickets if t.estado == "pagado"]
+    otra = [t for t in pagados if t.pagado_en_sucursal_id not in (None, sucursal_id)]
+    pendientes = [t for t in tickets if t.estado == "ganador"]
+    ventas = sum((D(t.total) for t in vigentes), D(0))
+    premios_pagados = sum((D(t.premio_total) for t in pagados), D(0))
+    monto_pendiente = sum((D(t.premio_total) for t in pendientes), D(0))
+    pagado_otra = sum((D(t.premio_total) for t in otra), D(0))
+    return {
+        "ventas": str(D(ventas)),
+        "anulados_monto": str(D(sum((D(t.total) for t in nulos), D(0)))),
+        "premios_pagados": str(D(premios_pagados)),
+        "premios_pendientes": str(D(monto_pendiente)),
+        "pagado_en_otra": str(D(pagado_otra)),
+        "total_pagado": str(D(premios_pagados)),
+        "neto": str(D(ventas - premios_pagados)),
+        "pendientes": [
+            {"id": t.id, "premio": str(D(t.premio_total)), "fecha": t.fecha.strftime("%d-%m-%Y")}
+            for t in pendientes
+        ],
+    }
+
+
+def _texto_resumen(datos):
+    lineas = [
+        datos["sucursal"].upper(),
+        "RESUMEN DE VENTAS Y PAGOS",
+        f"DEL DÍA: {datos['desde']}",
+        f"AL DÍA: {datos['hasta']}",
+        f"IMPRESO: {datos['impreso']}",
+        f"Sucursal: {datos['sucursal']}",
+        f"Terminal: {datos['terminal']}",
+        f"Cajero: {datos['cajero']}",
+        f"Alcance: {datos['alcance']}",
+        "",
+    ]
+    lineas.extend(_lineas_bloque(datos["real"]))
+    if datos.get("prueba") is not None:
+        lineas.extend(["", "PRUEBA — NO OFICIAL", ""])
+        lineas.extend(_lineas_bloque(datos["prueba"]))
+    return "\n".join(lineas)
+
+
+def _lineas_bloque(bloque):
+    lineas = [
+        f"VENTAS: RD$ {bloque['ventas']}",
+        f"PREMIOS PAGADOS: RD$ {bloque['premios_pagados']}",
+        f"TOTAL NETO: RD$ {bloque['neto']}",
+        "",
+        "TICKET | GANADO | FECHA",
+    ]
+    if not bloque["pendientes"]:
+        lineas.append("Sin tickets pendientes")
+    for fila in bloque["pendientes"]:
+        lineas.append(f"{fila['id']} | RD$ {fila['premio']} | {fila['fecha']}")
+    lineas.extend([
+        f"MONTO PENDIENTE: RD$ {bloque['premios_pendientes']}",
+        f"PAGADO EN OTRA SUC.: RD$ {bloque['pagado_en_otra']}",
+        f"TOTAL PAGADO: RD$ {bloque['total_pagado']}",
+        f"TOTAL NETO: RD$ {bloque['neto']}",
+    ])
+    return lineas
 
 
 def reporte_resumen(db, desde, hasta, vista, sucursal_id=None):

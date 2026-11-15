@@ -12,8 +12,8 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import conectate, servicios
-from .comun import D, ErrorServicio
+from . import conectate, resultados_auto, rdlotto, servicios
+from .comun import D, ErrorServicio, modo_desarrollo
 from .db import configurar, init_db, nueva_sesion
 from .models import (
     Auditoria,
@@ -41,6 +41,7 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 @app.on_event("startup")
 def _al_arrancar():
     init_db()
+    resultados_auto.arrancar_si_esta_activado()
 
 
 @app.exception_handler(ErrorServicio)
@@ -196,7 +197,15 @@ def _fecha(texto):
 # ------------------------------------------------------------------- salud
 @app.get("/health")
 def salud():
-    return {"ok": True, "servicio": "sistema-de-banca-moderna", "hora": servicios.ahora_local().isoformat()}
+    desarrollo = modo_desarrollo()
+    return {
+        "ok": True,
+        "servicio": "sistema-de-banca-moderna",
+        "hora": servicios.ahora_local().isoformat(),
+        "modo_desarrollo": desarrollo,
+        "datos": "prueba" if desarrollo else "produccion",
+        "leyenda": "MODO DESARROLLO — DATOS DE PRUEBA" if desarrollo else "",
+    }
 
 
 # ------------------------------------------------------------- autenticación
@@ -578,6 +587,22 @@ def crear_limite(datos: LimiteIn, db=Depends(get_db), usuario=Depends(requiere_r
     return limite_dict(lim, db)
 
 
+class AplicarTodasIn(BaseModel):
+    tipo: str
+    numeros: str
+    monto_max_acumulado: float
+    reemplazar: bool = False
+    aplicar: bool = False
+
+
+@app.post("/limites/aplicar-todas")
+def aplicar_limite_todas(datos: AplicarTodasIn, db=Depends(get_db),
+                         usuario=Depends(requiere_rol("admin", "supervisor"))):
+    return servicios.aplicar_limite_todas(
+        db, datos.tipo, datos.numeros, datos.monto_max_acumulado, usuario.id,
+        reemplazar=datos.reemplazar, aplicar=datos.aplicar)
+
+
 @app.delete("/limites/{limite_id}")
 def borrar_limite(limite_id: int, db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
     lim = db.get(LimiteVenta, limite_id)
@@ -645,6 +670,38 @@ def importar_resultados(datos: ImportarIn, db=Depends(get_db),
     return conectate.importar_resultados(db, fecha, usuario)
 
 
+@app.get("/fuente-resultados")
+def cobertura_resultados(db=Depends(get_db), usuario=Depends(panel_actual)):
+    return {
+        "fuente": "rdlotto",
+        "documentacion": "https://rdlotto.com/api-docs",
+        "aviso": "RDLotto publica información, no el resultado oficial del operador. "
+                 "Un resultado verificado queda en verificación y no habilita pagos.",
+        "intervalo_segundos": rdlotto.INTERVALO_SEGUNDOS,
+        "trabajador": resultados_auto.estado(),
+        "sorteos": rdlotto.cobertura(),
+    }
+
+
+@app.post("/fuente-resultados/sincronizar")
+def sincronizar_resultados(db=Depends(get_db), usuario=Depends(requiere_rol("admin", "supervisor"))):
+    return resultados_auto.ciclo(forzar=True)
+
+
+@app.get("/ganadores")
+def ganadores(fecha: str | None = None, sorteo_id: int | None = None, sucursal_id: int | None = None,
+              usuario_id: int | None = None, estado: str | None = None,
+              db=Depends(get_db), usuario=Depends(panel_actual)):
+    return servicios.listar_ganadores(
+        db,
+        fecha=_fecha(fecha) if fecha else None,
+        sorteo_id=sorteo_id,
+        sucursal_id=sucursal_id,
+        usuario_id=usuario_id,
+        estado=estado,
+    )
+
+
 @app.get("/importaciones")
 def listar_importaciones(limite: int = 20, db=Depends(get_db), usuario=Depends(panel_actual)):
     filas = db.query(Importacion).order_by(Importacion.id.desc()).limit(min(limite, 100)).all()
@@ -655,10 +712,17 @@ def listar_importaciones(limite: int = 20, db=Depends(get_db), usuario=Depends(p
 class LlaveIn(BaseModel):
     id: int
     serial: str
+    operacion_id: str | None = None
 
 
 class PanelPagoIn(LlaveIn):
     sucursal_id: int
+
+
+class AnularIn(BaseModel):
+    id: int
+    serial: str
+    motivo: str | None = None
 
 
 @app.post("/panel/tickets/consultar")
@@ -673,9 +737,9 @@ def panel_pagar(datos: PanelPagoIn, db=Depends(get_db),
 
 
 @app.post("/panel/tickets/anular")
-def panel_anular(datos: LlaveIn, db=Depends(get_db),
+def panel_anular(datos: AnularIn, db=Depends(get_db),
                  usuario=Depends(requiere_rol("admin", "supervisor"))):
-    return servicios.anular_ticket(db, datos.id, datos.serial, usuario.id, terminal_id=None)
+    return servicios.anular_ticket(db, datos.id, datos.serial, usuario.id, terminal_id=None, motivo=datos.motivo)
 
 
 # ------------------------------------------------------------------ caja panel
@@ -791,6 +855,10 @@ def listar_auditoria(entidad: str | None = None, accion: str | None = None, limi
 class TerminalLoginIn(BaseModel):
     usuario: str
     clave: str
+    dispositivo_id: str | None = None
+    modelo: str | None = None
+    android: str | None = None
+    version_app: str | None = None
 
 
 @app.post("/terminal/login")
@@ -814,13 +882,14 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
     sucursal = db.get(Sucursal, usuario.sucursal_id)
     if sucursal is None or not sucursal.activa:
         raise ErrorServicio(403, "La sucursal de este usuario está inactiva")
-    terminal = servicios.terminal_de_sucursal(db, sucursal)
+    terminal = servicios.terminal_para_dispositivo(
+        db, sucursal, datos.dispositivo_id, datos.modelo, datos.android, datos.version_app,
+    )
     if terminal is None:
         raise ErrorServicio(
             403,
             "La terminal de esta sucursal está revocada: el consorcio debe reactivarla en el panel.",
         )
-    terminal.ultima_conexion_en = servicios.ahora_local()
     token = servicios.crear_sesion(db, usuario, tipo="terminal", terminal_id=terminal.id)
     db.commit()
     return {
@@ -828,7 +897,24 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
         "operador": usuario_dict(usuario),
         "sucursal": sucursal_dict(sucursal),
         "saldo": str(D(sucursal.saldo_actual)),
+        "mi_caja": str(servicios.mi_caja_de(usuario)),
+        "modo_desarrollo": modo_desarrollo(),
+        "leyenda": "MODO DESARROLLO — DATOS DE PRUEBA" if modo_desarrollo() else "",
+        "terminal": {
+            "id": terminal.id,
+            "numero": terminal.numero_terminal,
+            "serial": terminal.serial_sunmi,
+            "modelo": terminal.modelo,
+            "android": terminal.android_api,
+            "version_app": terminal.version_app,
+        },
     }
+
+
+@app.get("/terminal/resultados")
+def terminal_resultados(db=Depends(get_db), terminal=Depends(terminal_actual),
+                        operador=Depends(operador_actual)):
+    return servicios.consulta_resultados(db, servicios.ahora_local().date())
 
 
 @app.get("/terminal/sorteos")
@@ -847,7 +933,57 @@ def terminal_sorteos(db=Depends(get_db), terminal=Depends(terminal_actual),
         d["motivo_cierre"] = motivo
         salida.append(d)
     sucursal = db.get(Sucursal, terminal.sucursal_id)
-    return {"sorteos": salida, "saldo": str(D(sucursal.saldo_actual)) if sucursal else "0.00"}
+    datos = {
+        "sorteos": salida,
+        "saldo": str(D(sucursal.saldo_actual)) if sucursal else "0.00",
+        "modo_desarrollo": modo_desarrollo(),
+        "leyenda": "MODO DESARROLLO — DATOS DE PRUEBA" if modo_desarrollo() else "",
+    }
+    datos.update(servicios.indicadores_caja(db, operador))
+    return datos
+
+
+class EntregaIn(BaseModel):
+    monto: float
+    operacion_id: str
+
+
+@app.get("/terminal/entregas/estado")
+def terminal_estado_entrega(db=Depends(get_db), terminal=Depends(terminal_actual),
+                            operador=Depends(operador_actual)):
+    sucursal = db.get(Sucursal, terminal.sucursal_id)
+    return servicios.estado_entrega(db, operador, sucursal, terminal)
+
+
+@app.post("/terminal/entregas", status_code=201)
+def terminal_entregar(datos: EntregaIn, db=Depends(get_db), terminal=Depends(terminal_actual),
+                      operador=Depends(operador_actual)):
+    sucursal = db.get(Sucursal, terminal.sucursal_id)
+    return servicios.entregar_efectivo(db, operador, sucursal, terminal, datos.monto, datos.operacion_id)
+
+
+@app.get("/terminal/entregas/operacion/{operacion_id}")
+def terminal_entrega_operacion(operacion_id: str, db=Depends(get_db), terminal=Depends(terminal_actual),
+                               operador=Depends(operador_actual)):
+    return servicios.entrega_por_operacion(db, operador.id, operacion_id)
+
+
+@app.get("/terminal/entregas/{entrega_id}")
+def terminal_reimprimir_entrega(entrega_id: int, db=Depends(get_db), terminal=Depends(terminal_actual),
+                                operador=Depends(operador_actual)):
+    return servicios.entrega_para_reimprimir(db, operador.id, entrega_id)
+
+
+@app.get("/entregas")
+def panel_entregas(sucursal_id: int | None = None, db=Depends(get_db),
+                   usuario=Depends(requiere_rol("admin", "supervisor"))):
+    return servicios.listar_entregas(db, usuario, sucursal_id)
+
+
+@app.post("/entregas/{entrega_id}/recibir")
+def panel_recibir_entrega(entrega_id: int, db=Depends(get_db),
+                          usuario=Depends(requiere_rol("admin", "supervisor"))):
+    return servicios.recibir_entrega(db, entrega_id, usuario)
 
 
 class JugadaIn(BaseModel):
@@ -879,13 +1015,20 @@ def terminal_consultar(datos: LlaveIn, db=Depends(get_db), terminal=Depends(term
 def terminal_pagar(datos: LlaveIn, db=Depends(get_db), terminal=Depends(terminal_actual),
                    operador=Depends(operador_actual)):
     return servicios.pagar_ticket(db, datos.id, datos.serial, terminal.sucursal_id,
-                                  terminal.id, operador.id)
+                                  terminal.id, operador.id, operacion_id=datos.operacion_id)
+
+
+@app.post("/terminal/tickets/reimprimir")
+def terminal_reimprimir(datos: LlaveIn, db=Depends(get_db), terminal=Depends(terminal_actual),
+                        operador=Depends(operador_actual)):
+    return servicios.reimprimir_ticket(db, datos.id, datos.serial, operador.id, terminal_id=terminal.id)
 
 
 @app.post("/terminal/tickets/anular")
-def terminal_anular(datos: LlaveIn, db=Depends(get_db), terminal=Depends(terminal_actual),
+def terminal_anular(datos: AnularIn, db=Depends(get_db), terminal=Depends(terminal_actual),
                     operador=Depends(operador_actual)):
-    return servicios.anular_ticket(db, datos.id, datos.serial, operador.id, terminal_id=terminal.id)
+    return servicios.anular_ticket(db, datos.id, datos.serial, operador.id, terminal_id=terminal.id,
+                                   motivo=datos.motivo)
 
 
 class CajaTerminalIn(BaseModel):
@@ -927,6 +1070,19 @@ def terminal_cuadre(datos: CuadreTerminalIn, db=Depends(get_db), terminal=Depend
     c = servicios.entregar_cuadre(db, terminal.sucursal_id, terminal.id, operador.id,
                                   efectivo_contado=datos.efectivo_contado)
     return servicios.cuadre_a_dict(c)
+
+
+@app.get("/terminal/reportes/dia")
+def terminal_resumen_dia(desde: str | None = None, hasta: str | None = None, alcance: str = "cajero",
+                         db=Depends(get_db), terminal=Depends(terminal_actual),
+                         operador=Depends(operador_actual)):
+    hoy = servicios.ahora_local().date()
+    inicio = _fecha(desde) if desde else hoy
+    fin = _fecha(hasta) if hasta else hoy
+    if fin < inicio:
+        raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+    sucursal = db.get(Sucursal, terminal.sucursal_id)
+    return servicios.resumen_dia(db, inicio, fin, operador, sucursal, terminal, alcance)
 
 
 @app.get("/terminal/reportes/resumen")

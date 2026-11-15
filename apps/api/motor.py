@@ -26,6 +26,11 @@ def evaluar_jugada(jugada, res_a, res_b=None):
                 return D(monto * factores[clave]), clave
         return D(0), None
     if tipo == "PL":
+        if jugada.n1 == jugada.n2:
+            # La tabla vigente solo paga 1-2, 1-3 y 2-3. Los tres premios
+            # oficiales son distintos, así que una pareja repetida no ocupa
+            # dos posiciones y no gana. No existe un factor nuevo para 1-1.
+            return D(0), None
         premios = [res_a.premio1, res_a.premio2, res_a.premio3]
         if jugada.n1 in premios and jugada.n2 in premios:
             posiciones = sorted([premios.index(jugada.n1) + 1, premios.index(jugada.n2) + 1])
@@ -56,28 +61,34 @@ def recomputar_ticket(db, ticket):
         ticket.estado = "vendido"
 
 
-def _resultado_valido(db, sorteo_id, fecha):
-    r = (
-        db.query(Resultado)
-        .filter_by(sorteo_id=sorteo_id, fecha=fecha)
-        .first()
-    )
-    if r is not None and r.estado in ("confirmado", "liquidado"):
-        return r
-    return None
-
-
 def liquidar_resultado(db, resultado):
-    """Evalúa todas las jugadas pendientes que dependen de este resultado.
+    """Evalúa las jugadas reales pendientes de este resultado.
 
-    - QN/PL del sorteo liquidado.
-    - SP que crucen este sorteo, SOLO si la otra lotería también tiene
-      resultado confirmado/liquidado para la misma fecha.
-    Devuelve la cantidad de tickets afectados.
+    QN y PL se liquidan con este sorteo. El súper palé espera a que la otra
+    lotería también esté confirmada. Los tickets de prueba no entran aquí.
     """
+    return _liquidar(db, resultado, prueba=False)
+
+
+def liquidar_pruebas_fecha(db, fecha):
+    """Liquida solo tickets de prueba contra resultados ya recibidos.
+
+    No cambia el estado del resultado y no evalúa jugadas reales. Un
+    resultado en verificación alcanza para la prueba; el pago real sigue
+    exigiendo la confirmación del consorcio.
+    """
+    afectados = 0
+    filas = db.query(Resultado).filter_by(fecha=fecha).all()
+    for resultado in filas:
+        if resultado.estado == "error_fuente":
+            continue
+        afectados += _liquidar(db, resultado, prueba=True)
+    return afectados
+
+
+def _liquidar(db, resultado, prueba):
     fecha, sid = resultado.fecha, resultado.sorteo_id
     afectados = set()
-
     jugadas = (
         db.query(Jugada)
         .join(Ticket)
@@ -86,6 +97,7 @@ def liquidar_resultado(db, resultado):
             Jugada.fecha == fecha,
             Jugada.evaluada.is_(False),
             Ticket.estado != "anulado",
+            Ticket.es_prueba.is_(prueba),
         )
         .all()
     )
@@ -94,7 +106,6 @@ def liquidar_resultado(db, resultado):
             premio, detalle = evaluar_jugada(j, resultado)
             j.evaluada, j.premio, j.detalle_eval = True, premio, detalle
             afectados.add(j.ticket_id)
-
     sp = (
         db.query(Jugada)
         .join(Ticket)
@@ -102,6 +113,7 @@ def liquidar_resultado(db, resultado):
             Jugada.fecha == fecha,
             Jugada.evaluada.is_(False),
             Ticket.estado != "anulado",
+            Ticket.es_prueba.is_(prueba),
             or_(Jugada.sorteo_id == sid, Jugada.sorteo2_id == sid),
         )
         .all()
@@ -109,19 +121,27 @@ def liquidar_resultado(db, resultado):
     for j in sp:
         if j.tipo.codigo != "SP":
             continue
-        r1 = _resultado_valido(db, j.sorteo_id, fecha)
-        r2 = _resultado_valido(db, j.sorteo2_id, fecha)
+        r1 = _resultado_util(db, j.sorteo_id, fecha, prueba)
+        r2 = _resultado_util(db, j.sorteo2_id, fecha, prueba)
         if r1 is None or r2 is None:
-            continue  # queda en espera del otro sorteo
+            continue
         premio, detalle = evaluar_jugada(j, r1, r2)
         j.evaluada, j.premio, j.detalle_eval = True, premio, detalle
         afectados.add(j.ticket_id)
-
     for ticket_id in afectados:
         ticket = db.get(Ticket, ticket_id)
         if ticket is not None:
             recomputar_ticket(db, ticket)
     return len(afectados)
+
+
+def _resultado_util(db, sorteo_id, fecha, prueba):
+    r = db.query(Resultado).filter_by(sorteo_id=sorteo_id, fecha=fecha).first()
+    if r is None or r.estado == "error_fuente":
+        return None
+    if prueba or r.estado in ("confirmado", "liquidado"):
+        return r
+    return None
 
 
 def revertir_liquidacion(db, resultado):
@@ -147,6 +167,8 @@ def revertir_liquidacion(db, resultado):
     # y SP que lo crucen. (Las de otros sorteos no se tocan.)
     propias = []
     for j in jugadas:
+        if j.ticket is not None and j.ticket.es_prueba:
+            continue
         if j.tipo.codigo in ("QN", "PL") and j.sorteo_id == sid:
             propias.append(j)
         elif j.tipo.codigo == "SP" and (j.sorteo_id == sid or j.sorteo2_id == sid):

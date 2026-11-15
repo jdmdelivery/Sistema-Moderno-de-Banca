@@ -7,10 +7,12 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+<div id="aviso-prueba" class="aviso-prueba" hidden>MODO DESARROLLO — DATOS DE PRUEBA. SQLite temporal: un reinicio de Render borra esta información.</div>
 <div id="login" class="login-overlay">
   <div class="login-box">
     <h1>🎰 Sistema de Banca Moderna</h1>
     <p class="sub">Panel del Consorcio</p>
+    <p id="aviso-login" class="aviso-prueba" hidden>MODO DESARROLLO — DATOS DE PRUEBA. SQLite temporal: un reinicio de Render borra esta información.</p>
     <label>Usuario<input id="login-usuario" autocomplete="username"></label>
     <label>Clave<input id="login-clave" type="password" autocomplete="current-password"></label>
     <button id="btn-login" class="btn primario">ENTRAR</button>
@@ -32,8 +34,11 @@
   <button class="navbtn" data-sec="tabla">Tabla de Pagos</button>
   <button class="navbtn" data-sec="limites">Límites</button>
   <button class="navbtn" data-sec="resultados">Resultados</button>
+  <button class="navbtn" data-sec="fuente">Resultados automáticos</button>
+  <button class="navbtn" data-sec="ganadores">Ganadores en vivo</button>
   <button class="navbtn" data-sec="tickets">Tickets</button>
   <button class="navbtn" data-sec="caja">Caja y Cuadre</button>
+  <button class="navbtn" data-sec="entregas">Entregas</button>
   <button class="navbtn" data-sec="reportes">Reportes</button>
   <button class="navbtn" data-sec="auditoria">Auditoría</button>
 </nav>
@@ -156,6 +161,8 @@
     <label>Número(s)<input id="lim-numeros" placeholder="26 o 26-58"></label>
     <label>Monto máximo acumulado $<input id="lim-monto" type="number" step="0.01"></label>
     <button id="btn-lim-guardar" class="btn primario">GUARDAR LÍMITE</button>
+    <button id="btn-lim-todas" class="btn">APLICAR PARA TODAS</button>
+    <label><input id="lim-reemplazar" type="checkbox"> Reemplazar límites individuales existentes</label>
     <p id="lim-msg" class="msg"></p>
   </div>
 </section>
@@ -197,6 +204,7 @@
   <div id="tic-resultado" class="estado-box">Sin consulta todavía.</div>
   <div class="form">
     <label>Sucursal que paga<select id="tic-sucursal"></select></label>
+    <label>Motivo de anulación<input id="tic-motivo" placeholder="Obligatorio para anular"></label>
     <button id="btn-tic-pagar" class="btn peligro">PAGAR TICKET</button>
     <button id="btn-tic-anular" class="btn">ANULAR TICKET</button>
   </div>
@@ -229,6 +237,20 @@
   <div id="cua-resultado" class="estado-box">El cuadre usa la sucursal y terminal seleccionadas arriba.</div>
   <h3>Cuadres entregados</h3>
   <div id="cua-tabla"></div>
+</section>
+
+<section id="sec-entregas" class="seccion">
+  <h2>Entregas de cajeras</h2>
+  <p class="nota">Cada fila es el efectivo que una cajera entregó de su propio cajón. No se borra. Recibir confirma la recepción física y no vuelve a descontar el dinero. Las pruebas quedan aparte.</p>
+  <div class="form">
+    <label>Sucursal<select id="ent-sucursal"></select></label>
+    <button id="btn-ent-ver" class="btn primario">VER ENTREGAS</button>
+    <p id="ent-msg" class="msg"></p>
+  </div>
+  <h3>Entregas reales</h3>
+  <div id="ent-reales"></div>
+  <h3>PRUEBA — NO OFICIAL</h3>
+  <div id="ent-prueba"></div>
 </section>
 
 <section id="sec-reportes" class="seccion">
@@ -271,6 +293,37 @@
   </div>
   <div id="pen-salida"></div>
   <pre id="pen-texto" class="texto-impreso" style="display:none"></pre>
+</section>
+
+<section id="sec-fuente" class="seccion">
+  <h2>Estado de resultados automáticos</h2>
+  <p class="nota">La fuente es RDLotto. Sus números son información, no el resultado oficial del operador. Un resultado verificado queda en verificación y no habilita pagos hasta que el consorcio pulse Confirmar y liquidar. Si la fuente falla, no se inventan números.</p>
+  <div class="form">
+    <button id="btn-fuente" class="btn primario">CONSULTAR AHORA</button>
+    <p id="fuente-msg" class="msg"></p>
+  </div>
+  <div id="fuente-estado" class="estado-box">Sin consulta todavía.</div>
+  <div id="fuente-tabla"></div>
+</section>
+
+<section id="sec-ganadores" class="seccion">
+  <h2>Ganadores en vivo</h2>
+  <div class="form">
+    <label>Fecha<input id="gan-fecha" type="date"></label>
+    <label>Lotería<select id="gan-sorteo"></select></label>
+    <label>Banca<select id="gan-sucursal"></select></label>
+    <label>Estado<select id="gan-estado">
+      <option value="">Todos</option>
+      <option value="ganador">Pendiente de pago</option>
+      <option value="pagado">Pagado</option>
+    </select></label>
+    <button id="btn-gan" class="btn">ACTUALIZAR</button>
+    <p id="gan-msg" class="msg"></p>
+  </div>
+  <div id="gan-totales" class="estado-box"></div>
+  <div id="gan-tabla"></div>
+  <p id="gan-prueba" class="nota"></p>
+  <div id="gan-prueba-tabla"></div>
 </section>
 
 <section id="sec-auditoria" class="seccion">

@@ -20,9 +20,10 @@ def ahora_local() -> datetime:
 
 def modo_desarrollo() -> bool:
     """Indicador de pruebas. Encendido, la terminal ve y vende todos los
-    sorteos configurados sin reescribir sus horarios. Apagado, vuelven
-    las reglas de día y hora de cierre. No debe quedar encendido al
-    operar con dinero real."""
+    sorteos configurados sin reescribir sus horarios, y esas ventas quedan
+    marcadas como prueba: no mueven la caja ni entran en reportes.
+    Apagado, vuelven las reglas de día y hora de cierre y la contabilidad
+    normal. No debe quedar encendido al operar con dinero real."""
     return os.environ.get("MODO_DESARROLLO", "").strip().lower() in {
         "1", "true", "si", "sí", "yes", "on",
     }

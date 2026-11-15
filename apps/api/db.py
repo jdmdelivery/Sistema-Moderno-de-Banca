@@ -61,13 +61,14 @@ def nueva_sesion():
 def init_db():
     """Crea las tablas si no existen y siembra los datos iniciales."""
     from . import models  # noqa: F401  (registra los modelos)
-    from .seed import sembrar_si_vacio
+    from .seed import sembrar_si_vacio, sembrar_sucursal_prueba
 
     Base.metadata.create_all(engine())
     _columnas_faltantes()
     db = nueva_sesion()
     try:
         sembrar_si_vacio(db)
+        sembrar_sucursal_prueba(db)
     finally:
         db.close()
 
@@ -81,6 +82,43 @@ def _columnas_faltantes():
     insp = inspect(eng)
     if "tickets" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("tickets")}
-        if "operacion_id" not in cols:
-            with eng.begin() as conn:
-                conn.execute(text("ALTER TABLE tickets ADD COLUMN operacion_id VARCHAR(40)"))
+        faltan = {
+            "operacion_id": "VARCHAR(40)",
+            "pago_operacion_id": "VARCHAR(40)",
+            "anulado_motivo": "VARCHAR(200)",
+            "es_prueba": "BOOLEAN NOT NULL DEFAULT FALSE" if eng.dialect.name == "postgresql" else "INTEGER NOT NULL DEFAULT 0",
+            "reimpresiones": "INTEGER NOT NULL DEFAULT 0",
+            "ultima_reimpresion_en": "TIMESTAMP",
+        }
+        with eng.begin() as conn:
+            for columna, tipo in faltan.items():
+                if columna not in cols:
+                    conn.execute(text(f"ALTER TABLE tickets ADD COLUMN {columna} {tipo}"))
+    if "resultados" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("resultados")}
+        faltan = {
+            "version": "INTEGER NOT NULL DEFAULT 1",
+            "externo": "VARCHAR(80)",
+            "recibido_en": "TIMESTAMP",
+        }
+        with eng.begin() as conn:
+            for columna, tipo in faltan.items():
+                if columna not in cols:
+                    conn.execute(text(f"ALTER TABLE resultados ADD COLUMN {columna} {tipo}"))
+    if "usuarios" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("usuarios")}
+        tipo = "NUMERIC(12,2) NOT NULL DEFAULT 0"
+        with eng.begin() as conn:
+            for columna in ("saldo_caja", "saldo_caja_prueba"):
+                if columna not in cols:
+                    conn.execute(text(f"ALTER TABLE usuarios ADD COLUMN {columna} {tipo}"))
+            for columna in ("ciclo_caja_movimiento_id", "ciclo_caja_prueba_movimiento_id"):
+                if columna not in cols:
+                    conn.execute(text(f"ALTER TABLE usuarios ADD COLUMN {columna} INTEGER"))
+    if "terminales" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("terminales")}
+        with eng.begin() as conn:
+            if "modelo" not in cols:
+                conn.execute(text("ALTER TABLE terminales ADD COLUMN modelo VARCHAR(80)"))
+            if "android_api" not in cols:
+                conn.execute(text("ALTER TABLE terminales ADD COLUMN android_api VARCHAR(10)"))

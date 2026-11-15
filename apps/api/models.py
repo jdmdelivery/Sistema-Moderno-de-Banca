@@ -49,6 +49,10 @@ class Usuario(Base):
     rol = Column(String(20), nullable=False, default="operador")  # admin|supervisor|operador
     sucursal_id = Column(Integer, ForeignKey("sucursales.id"))
     activo = Column(Boolean, nullable=False, default=True)
+    saldo_caja = Column(DINERO, nullable=False, default=0)
+    saldo_caja_prueba = Column(DINERO, nullable=False, default=0)
+    ciclo_caja_movimiento_id = Column(Integer)
+    ciclo_caja_prueba_movimiento_id = Column(Integer)
     creado_en = Column(DateTime, nullable=False, default=ahora_local)
 
     sucursal = relationship("Sucursal")
@@ -91,6 +95,8 @@ class Terminal(Base):
     activa = Column(Boolean, nullable=False, default=True)
     ultima_conexion_en = Column(DateTime)
     version_app = Column(String(30))
+    modelo = Column(String(80))
+    android_api = Column(String(10))
     creado_en = Column(DateTime, nullable=False, default=ahora_local)
 
     sucursal = relationship("Sucursal")
@@ -169,6 +175,7 @@ class Ticket(Base):
     usuario_id = Column(Integer, ForeignKey("usuarios.id"))
     vendido_en = Column(DateTime, nullable=False, default=ahora_local, index=True)
     operacion_id = Column(String(40), unique=True, index=True)  # idempotencia: la app lo genera por ticket
+    pago_operacion_id = Column(String(40), unique=True, index=True)
     fecha = Column(Date, nullable=False, index=True)  # fecha de los sorteos del ticket
     total = Column(DINERO, nullable=False)
     estado = Column(String(20), nullable=False, default="vendido", index=True)
@@ -180,6 +187,10 @@ class Ticket(Base):
     pagado_en = Column(DateTime)
     anulado_en = Column(DateTime)
     anulado_por = Column(Integer, ForeignKey("usuarios.id"))
+    anulado_motivo = Column(String(200))
+    es_prueba = Column(Boolean, nullable=False, default=False)
+    reimpresiones = Column(Integer, nullable=False, default=0)
+    ultima_reimpresion_en = Column(DateTime)
 
     jugadas = relationship("Jugada", back_populates="ticket", cascade="all, delete-orphan")
     sucursal_vendedora = relationship("Sucursal", foreign_keys=[sucursal_vendedora_id])
@@ -220,8 +231,12 @@ class Resultado(Base):
     premio2 = Column(Integer, nullable=False)
     premio3 = Column(Integer, nullable=False)
     estado = Column(String(20), nullable=False, default="propuesto", index=True)
-    # propuesto|confirmado|liquidado (confirmar liquida en la misma operación)
-    fuente = Column(String(20), nullable=False, default="manual")  # manual|conectate
+    # propuesto|en_verificacion|recibido|confirmado|liquidado|error_fuente
+    # Solo confirmado/liquidado habilitan el pago. en_verificacion no paga.
+    fuente = Column(String(20), nullable=False, default="manual")  # manual|conectate|rdlotto
+    version = Column(Integer, nullable=False, default=1)
+    externo = Column(String(80))
+    recibido_en = Column(DateTime)
     propuesto_por = Column(Integer, ForeignKey("usuarios.id"))
     propuesto_en = Column(DateTime, nullable=False, default=ahora_local)
     confirmado_por = Column(Integer, ForeignKey("usuarios.id"))
@@ -229,6 +244,52 @@ class Resultado(Base):
     liquidado_en = Column(DateTime)
 
     sorteo = relationship("Sorteo")
+
+
+class ResultadoVersion(Base):
+    """Historial de cada versión recibida. La anterior no se borra."""
+
+    __tablename__ = "resultado_versiones"
+    id = Column(Integer, primary_key=True)
+    resultado_id = Column(Integer, ForeignKey("resultados.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    premio1 = Column(Integer, nullable=False)
+    premio2 = Column(Integer, nullable=False)
+    premio3 = Column(Integer, nullable=False)
+    estado = Column(String(20), nullable=False)
+    fuente = Column(String(20), nullable=False)
+    detalle = Column(Text)
+    creado_en = Column(DateTime, nullable=False, default=ahora_local)
+
+
+class CorreccionPendiente(Base):
+    """Una fuente cambió un resultado ya liquidado. No mueve dinero sola."""
+
+    __tablename__ = "correcciones_pendientes"
+    id = Column(Integer, primary_key=True)
+    resultado_id = Column(Integer, ForeignKey("resultados.id"), nullable=False, index=True)
+    premio1 = Column(Integer, nullable=False)
+    premio2 = Column(Integer, nullable=False)
+    premio3 = Column(Integer, nullable=False)
+    fuente = Column(String(20), nullable=False)
+    detalle = Column(Text)
+    creada_en = Column(DateTime, nullable=False, default=ahora_local)
+    revisada_en = Column(DateTime)
+
+
+class MovimientoCajera(Base):
+    """Efectivo del cajón de una persona. No se mezcla con el de otra."""
+
+    __tablename__ = "movimientos_cajera"
+    id = Column(Integer, primary_key=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    sucursal_id = Column(Integer, ForeignKey("sucursales.id"), nullable=False, index=True)
+    tipo = Column(String(30), nullable=False)
+    monto = Column(DINERO, nullable=False)
+    saldo_resultante = Column(DINERO, nullable=False)
+    referencia = Column(String(120))
+    motivo = Column(String(200))
+    creado_en = Column(DateTime, nullable=False, default=ahora_local)
 
 
 class Importacion(Base):
@@ -243,6 +304,26 @@ class Importacion(Base):
     estado_http = Column(Integer)
     encontrados = Column(Integer, nullable=False, default=0)
     detalle = Column(Text)
+    creado_en = Column(DateTime, nullable=False, default=ahora_local)
+
+
+class Entrega(Base):
+    """Efectivo que una cajera entrega de su propio cajón. No se borra."""
+
+    __tablename__ = "entregas"
+    id = Column(Integer, primary_key=True)
+    operacion_id = Column(String(40), nullable=False, unique=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    sucursal_id = Column(Integer, ForeignKey("sucursales.id"), nullable=False, index=True)
+    terminal_id = Column(Integer, ForeignKey("terminales.id"))
+    monto = Column(DINERO, nullable=False)
+    saldo_anterior = Column(DINERO, nullable=False)
+    saldo_restante = Column(DINERO, nullable=False)
+    es_prueba = Column(Boolean, nullable=False, default=False)
+    estado = Column(String(20), nullable=False, default="confirmada")
+    recibida_en = Column(DateTime)
+    recibida_por = Column(Integer, ForeignKey("usuarios.id"))
+    texto = Column(Text, nullable=False, default="")
     creado_en = Column(DateTime, nullable=False, default=ahora_local)
 
 

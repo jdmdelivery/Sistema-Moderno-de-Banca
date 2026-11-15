@@ -108,7 +108,6 @@ def test_venta_numeros_invalidos(entorno):
     s = entorno.sorteo_id("La Primera 12")
     casos = [
         {"tipo": "QN", "sorteos": [s], "numeros": "26-58", "monto": 5},   # quiniela con pareja
-        {"tipo": "PL", "sorteos": [s], "numeros": "26-26", "monto": 5},   # pareja repetida
         {"tipo": "QN", "sorteos": [s], "numeros": "100", "monto": 5},     # fuera de 00-99
         {"tipo": "XX", "sorteos": [s], "numeros": "26", "monto": 5},      # tipo inexistente
     ]
@@ -169,11 +168,12 @@ def test_modo_desarrollo_vende_cerrados_sin_cambiar_horarios(entorno, fijar_hora
         {"tipo": "SP", "sorteos": [primera, real], "numeros": "07-11", "monto": 10},
     ])
     assert float(t["total"]) == 40.00
-    assert float(t["saldo_restante"]) == 40.00
+    assert t["es_prueba"] is True
+    assert float(t["saldo_restante"]) == 0.00
     admin = entorno.c.post("/auth/login", json={"usuario": "admin", "clave": "admin123"})
     assert admin.status_code == 200
     entorno.admin = {"Authorization": f"Bearer {admin.json()['token']}"}
-    assert entorno.saldo(b["sucursal"]["id"]) == 40.00
+    assert entorno.saldo(b["sucursal"]["id"]) == 0.00
     despues = {
         s["nombre"]: (s["hora_sorteo"], s["hora_cierre"], s["dias_activos"], s["activo"])
         for s in entorno.c.get("/sorteos", headers={"Authorization": f"Bearer {admin.json()['token']}"}).json()

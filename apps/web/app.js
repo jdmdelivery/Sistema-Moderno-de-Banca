@@ -82,14 +82,20 @@ async function restaurarSesion() {
 }
 
 /* --------------------------------------------------------------------- nav */
+let GANADORES_RELOJ = null;
 function ir(sec) {
+  if (GANADORES_RELOJ) {
+    clearInterval(GANADORES_RELOJ);
+    GANADORES_RELOJ = null;
+  }
   $$(".navbtn").forEach((b) => b.classList.toggle("activo", b.dataset.sec === sec));
   $$(".seccion").forEach((s) => s.classList.toggle("activo", s.id === "sec-" + sec));
   const cargar = {
     inicio: cargarInicio, sucursales: cargarSucursales, terminales: cargarTerminales,
     usuarios: cargarUsuarios, sorteos: cargarSorteos, tabla: cargarTabla,
     limites: cargarLimites, resultados: cargarResultados, tickets: async () => {},
-    caja: cargarCaja, reportes: cargarReportes, auditoria: async () => {},
+    fuente: cargarFuente, ganadores: cargarGanadores,
+    caja: cargarCaja, entregas: cargarEntregas, reportes: cargarReportes, auditoria: async () => {},
   }[sec];
   if (cargar) cargar().catch((e) => console.error(e));
 }
@@ -104,9 +110,15 @@ async function cargarCatalogos() {
   $("#tic-sucursal").innerHTML = suc();
   $("#caj-sucursal").innerHTML = suc();
   $("#pen-sucursal").innerHTML = suc();
+  const entSucursal = document.querySelector("#ent-sucursal");
+  if (entSucursal) entSucursal.innerHTML = suc('<option value="">Según mi permiso</option>');
   $("#rep-sucursal").innerHTML = suc('<option value="">Todas las sucursales</option>');
   $("#usu-sucursal").innerHTML = suc('<option value="">— Sin sucursal —</option>');
   const sor = opciones(SORTEOS, (s) => s.id, (s) => s.nombre);
+  const ganSorteo = document.querySelector("#gan-sorteo");
+  if (ganSorteo) ganSorteo.innerHTML = opciones(SORTEOS, (s) => s.id, (s) => s.nombre, '<option value="">Todas</option>');
+  const ganSucursal = document.querySelector("#gan-sucursal");
+  if (ganSucursal) ganSucursal.innerHTML = suc('<option value="">Todas</option>');
   $("#lim-sorteo").innerHTML = sor;
   $("#res-sorteo").innerHTML = sor;
   const tip = opciones(TIPOS, (t) => t.codigo, (t) => `${t.codigo} — ${t.nombre}`);
@@ -311,6 +323,28 @@ async function borrarLimite(id) {
   if (!confirm("¿Eliminar este límite?")) return;
   await del(`/limites/${id}`); await cargarLimites();
 }
+async function aplicarLimiteTodas() {
+  const cuerpo = {
+    tipo: $("#lim-tipo").value,
+    numeros: $("#lim-numeros").value.trim(),
+    monto_max_acumulado: parseFloat($("#lim-monto").value || 0),
+    reemplazar: $("#lim-reemplazar").checked,
+    aplicar: false,
+  };
+  try {
+    const vista = await post("/limites/aplicar-todas", cuerpo);
+    const reemplazo = cuerpo.reemplazar
+      ? `Se reemplazarán ${vista.actualizados} límites individuales ya existentes.`
+      : `Se conservarán ${vista.omitidos} límites individuales ya existentes.`;
+    const pregunta = `Este límite se revisará en ${vista.sorteos} sorteos, abiertos y cerrados.\n` +
+      `Nuevos: ${vista.creados}. ${reemplazo}\n¿Confirma la operación?`;
+    if (!confirm(pregunta)) return;
+    if (cuerpo.reemplazar && !confirm("Autoriza reemplazar los límites individuales de este número en todos los sorteos.")) return;
+    const hecho = await post("/limites/aplicar-todas", { ...cuerpo, aplicar: true });
+    msg("#lim-msg", `Listo ✔ Creados ${hecho.creados}, actualizados ${hecho.actualizados}, omitidos ${hecho.omitidos}.`);
+    await cargarLimites();
+  } catch (e) { msg("#lim-msg", e.message, false); }
+}
 
 /* --------------------------------------------------------------- resultados */
 async function cargarResultados() {
@@ -400,6 +434,7 @@ function pintarTicket(d) {
   caja.textContent =
     `Ticket ${d.id} · Serial ${d.serial} · ${d.banca} (${d.banca_codigo})\n` +
     `Vendido: ${d.fecha_hora} · Total: ${fmt(d.total)}\n${jugadas}\n` +
+    `Cajero: ${d.cajero || "—"} · Sucursal: ${d.banca || "—"}\n` +
     `Estado: ${String(d.estado).toUpperCase()} · Premio: ${fmt(d.premio_total)}\n${d.mensaje || ""}`;
 }
 async function consultarTicket() {
@@ -417,7 +452,7 @@ async function pagarTicketPanel() {
 async function anularTicketPanel() {
   if (!confirm("¿Anular este ticket? El efectivo se devuelve al cliente y sale de la caja de la banca vendedora.")) return;
   try {
-    const d = await post("/panel/tickets/anular", llaveTicket());
+    const d = await post("/panel/tickets/anular", { ...llaveTicket(), motivo: $("#tic-motivo").value.trim() });
     pintarTicket(d); msg("#tic-msg", "Ticket ANULADO ✔ El efectivo salió de la caja de la banca vendedora.");
   } catch (e) { msg("#tic-msg", e.message, false); }
 }
@@ -481,6 +516,32 @@ async function cargarCuadres() {
       <td>${c.diferencia === null ? "—" : fmt(c.diferencia)}</td></tr>`));
 }
 
+function filaEntrega(e) {
+  const recibir = e.recepcion === "RECIBIDA"
+    ? "RECIBIDA"
+    : `<button class="btn" data-recibir="${esc(e.id)}">RECIBIR</button>`;
+  return `<tr><td>${esc(e.cajera)}</td><td>${esc(e.sucursal)}</td><td>${esc(e.fecha_hora)}</td>
+    <td>${fmt(e.monto)}</td><td>${fmt(e.saldo_anterior)}</td><td>${fmt(e.saldo_restante)}</td>
+    <td>${esc(e.numero)}</td><td>${esc(e.estado)}</td><td>${recibir}</td></tr>`;
+}
+async function cargarEntregas() {
+  const suc = $("#ent-sucursal").value;
+  const datos = await api(`/entregas${suc ? `?sucursal_id=${suc}` : ""}`);
+  const columnas = ["Cajera", "Sucursal", "Fecha y hora", "Monto", "Saldo anterior", "Saldo restante", "Número", "Estado", "Recepción"];
+  tabla("#ent-reales", columnas, (datos.reales || []).map(filaEntrega));
+  tabla("#ent-prueba", columnas, (datos.prueba || []).map(filaEntrega));
+  document.querySelectorAll("[data-recibir]").forEach((boton) => {
+    boton.addEventListener("click", () => recibirEntrega(boton.dataset.recibir));
+  });
+}
+async function recibirEntrega(id) {
+  try {
+    await post(`/entregas/${id}/recibir`, {});
+    msg("#ent-msg", "Recepción física registrada. El dinero no se descontó otra vez.", true);
+    await cargarEntregas();
+  } catch (e) { msg("#ent-msg", e.message, false); }
+}
+
 /* ----------------------------------------------------------------- reportes */
 async function cargarReportes() {
   const hoy = hoyISO();
@@ -496,6 +557,7 @@ async function verVentas() {
     const usu = $("#ven-usuario").value;
     const r = await api(`/reportes/ventas?desde=${$("#ven-desde").value}&hasta=${$("#ven-hasta").value}${usu ? `&usuario_id=${usu}` : ""}`);
     $("#ven-salida").innerHTML =
+      `${r.aviso ? `<p class="aviso-prueba">${esc(r.aviso)}</p>` : ""}` +
       `<p class="nota">Tickets: <b>${r.total_tickets}</b> · Total vendido: <b>${fmt(r.total_vendido)}</b> · Premios: <b>${fmt(r.total_premios)}</b></p>`;
     tabla("#ven-tabla", ["Ticket", "Serial", "Banca", "Operador", "Fecha", "Total", "Estado", "Premio"],
       r.tickets.map((t) => `<tr><td>${t.id}</td><td>${esc(t.serial)}</td><td>${esc(t.banca)}</td>
@@ -568,7 +630,20 @@ async function verAuditoria() {
 }
 
 /* ------------------------------------------------------------------- eventos */
+async function marcarDesarrollo() {
+  try {
+    const salud = await fetch("/health").then((r) => r.json());
+    if (salud.modo_desarrollo) {
+      const aviso = $("#aviso-prueba");
+      const login = $("#aviso-login");
+      if (aviso) aviso.hidden = false;
+      if (login) login.hidden = false;
+    }
+  } catch {}
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  marcarDesarrollo();
   $("#btn-login").addEventListener("click", entrar);
   $("#login-clave").addEventListener("keydown", (e) => { if (e.key === "Enter") entrar(); });
   $("#btn-salir").addEventListener("click", salir);
@@ -584,6 +659,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#tab-tipo").addEventListener("change", actualizarClavesTabla);
   $("#btn-tab-guardar").addEventListener("click", guardarFactor);
   $("#btn-lim-guardar").addEventListener("click", guardarLimite);
+  $("#btn-lim-todas").addEventListener("click", () => aplicarLimiteTodas().catch((e) => msg("#lim-msg", e.message, false)));
   $("#btn-res-buscar").addEventListener("click", () => buscarResultado().catch((e) => msg("#res-msg", e.message, false)));
   $("#btn-res-guardar").addEventListener("click", guardarResultado);
   $("#btn-res-confirmar").addEventListener("click", confirmarResultado);
@@ -597,6 +673,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-caj-gasto").addEventListener("click", registrarGasto);
   $("#btn-caj-listar").addEventListener("click", () => listarCaja().catch((e) => msg("#caj-msg", e.message, false)));
   $("#btn-caj-cuadre").addEventListener("click", entregarCuadre);
+  $("#btn-ent-ver").addEventListener("click", () => cargarEntregas().catch((e) => msg("#ent-msg", e.message, false)));
   $("#caj-sucursal").addEventListener("change", () => { cargarCuadres().catch(() => {}); });
   $("#btn-rep-ver").addEventListener("click", verResumen);
   $("#btn-ven-ver").addEventListener("click", verVentas);
@@ -604,5 +681,68 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-pen-texto").addEventListener("click", verPendientesTexto);
   $("#btn-pen-imprimir").addEventListener("click", imprimirPendientes);
   $("#btn-aud-ver").addEventListener("click", () => verAuditoria().catch((e) => alert(e.message)));
+  $("#btn-fuente").addEventListener("click", () => consultarFuente().catch((e) => msg("#fuente-msg", e.message, false)));
+  $("#btn-gan").addEventListener("click", () => cargarGanadores().catch((e) => msg("#gan-msg", e.message, false)));
   restaurarSesion();
 });
+
+async function cargarFuente() {
+  const datos = await api("/fuente-resultados");
+  const trabajador = datos.trabajador || {};
+  $("#fuente-estado").textContent =
+    `${datos.aviso} Intervalo ${datos.intervalo_segundos} s. ` +
+    `Trabajador ${trabajador.activo ? "activo" : "detenido"}. ` +
+    `Última consulta: ${trabajador.ultimo_intento || "—"}. ` +
+    `Último éxito: ${trabajador.ultimo_ok || "—"}. ` +
+    `Error: ${trabajador.ultimo_error || "ninguno"}.`;
+  tabla("#fuente-tabla",
+    ["Sorteo", "Identificador", "Sesión", "Hora de la fuente", "Conexión", "Motivo"],
+    datos.sorteos.map((s) => `<tr><td>${esc(s.sorteo)}</td><td>${esc(s.game || "—")}</td><td>${esc(s.session || "—")}</td>
+      <td>${esc(s.hora_fuente || "—")}</td><td>${s.conectada ? "Conectada" : "Sin conexión"}</td><td>${esc(s.motivo || "")}</td></tr>`));
+}
+
+async function consultarFuente() {
+  msg("#fuente-msg", "Consultando RDLotto…");
+  const r = await post("/fuente-resultados/sincronizar", {});
+  msg("#fuente-msg", r.ok ? `Guardados en verificación: ${r.guardados || 0}` : (r.motivo || "La fuente falló"), !!r.ok);
+  await cargarFuente();
+}
+
+async function cargarGanadores() {
+  if (GANADORES_RELOJ) clearInterval(GANADORES_RELOJ);
+  GANADORES_RELOJ = setInterval(() => refrescarGanadores().catch(() => {}), 20000);
+  await refrescarGanadores();
+}
+
+async function refrescarGanadores() {
+  const q = new URLSearchParams();
+  if ($("#gan-fecha").value) q.set("fecha", $("#gan-fecha").value);
+  if ($("#gan-sorteo").value) q.set("sorteo_id", $("#gan-sorteo").value);
+  if ($("#gan-sucursal").value) q.set("sucursal_id", $("#gan-sucursal").value);
+  if ($("#gan-estado").value) q.set("estado", $("#gan-estado").value);
+  const datos = await api("/ganadores?" + q.toString());
+  $("#gan-totales").textContent =
+    `TOTAL DE TICKETS GANADORES ${datos.total_tickets} · TOTAL EN PREMIOS $${datos.total_premios} · ` +
+    `PREMIOS PAGADOS $${datos.premios_pagados} · PREMIOS PENDIENTES $${datos.premios_pendientes}`;
+  const prueba = datos.prueba || [];
+  const aviso = document.querySelector("#gan-prueba");
+  if (aviso) {
+    aviso.textContent = prueba.length
+      ? `PRUEBA — NO OFICIAL: ${prueba.length} ticket(s). Estos premios no salen de la caja real.`
+      : "";
+  }
+  if (prueba.length) {
+    tabla("#gan-prueba-tabla",
+      ["Ticket", "Lotería", "Premio", "Estado", "Aviso"],
+      prueba.map((t) => `<tr><td>${esc(t.id)}</td><td>${esc(t.loterias)}</td><td>${esc(t.premio)}</td>
+        <td>${esc(t.estado)}</td><td>${esc(t.leyenda)}</td></tr>`));
+  } else if (document.querySelector("#gan-prueba-tabla")) {
+    document.querySelector("#gan-prueba-tabla").innerHTML = "";
+  }
+  tabla("#gan-tabla",
+    ["Ticket", "Lotería", "Fecha", "Cajera", "Banca", "Número", "Modalidad", "Apostado", "Premio", "Estado", "Pagó", "Fecha del pago"],
+    datos.tickets.map((t) => `<tr><td>${esc(t.id)}</td><td>${esc(t.loterias)}</td><td>${esc(t.fecha)}</td>
+      <td>${esc(t.cajero)}</td><td>${esc(t.banca)}</td><td>${esc(t.numero)}</td><td>${esc(t.modalidad)}</td>
+      <td>${esc(t.monto)}</td><td>${esc(t.premio)}</td><td>${t.estado === "pagado" ? "PAGADO" : "PENDIENTE DE PAGO"}</td>
+      <td>${esc(t.cajero_pago || "—")}</td><td>${esc(t.pagado_en || "—")}</td></tr>`));
+}

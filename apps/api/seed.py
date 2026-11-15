@@ -3,7 +3,7 @@ tipos de jugada QN/PL/SP y una tabla de pagos inicial (todo editable del panel).
 """
 from datetime import datetime, time
 
-from .comun import D
+from .comun import D, modo_desarrollo
 from .models import Consorcio, Sorteo, TablaPagos, TipoJugada, Usuario
 from .security import hash_clave
 
@@ -95,4 +95,58 @@ def sembrar_si_vacio(db):
                     vigente_desde=desde,
                 )
             )
+    db.commit()
+
+
+def sembrar_sucursal_prueba(db):
+    """Si el modo desarrollo arranca sin bancas, deja una sucursal de prueba.
+
+    El nombre, el movimiento y la clave dejan claro que no es dinero real.
+    No toca una base que ya tenga sucursales. Fuera de modo desarrollo no hace nada.
+    """
+    from .models import MovimientoSaldo, Sucursal, Terminal, Usuario
+
+    if not modo_desarrollo():
+        return
+    if db.query(Sucursal).first() is not None:
+        return
+    admin = db.query(Usuario).filter_by(usuario="admin").first()
+    sucursal = Sucursal(
+        codigo="1301",
+        nombre="BANCA CASTILLO (PRUEBA)",
+        direccion="DATOS DE PRUEBA — no es dinero real",
+        comision_porcentaje=D(10),
+        saldo_actual=D("5764.00"),
+        activa=True,
+    )
+    db.add(sucursal)
+    db.flush()
+    db.add(
+        MovimientoSaldo(
+            sucursal_id=sucursal.id,
+            tipo="recarga",
+            monto=D("5764.00"),
+            referencia="SALDO DE PRUEBA — no es dinero real",
+            saldo_resultante=D("5764.00"),
+            creado_por=admin.id if admin is not None else None,
+        )
+    )
+    db.add(
+        Usuario(
+            nombre="JOSE (PRUEBA)",
+            usuario="jose",
+            clave_hash=hash_clave("prueba123"),
+            rol="operador",
+            sucursal_id=sucursal.id,
+            activo=True,
+        )
+    )
+    db.add(
+        Terminal(
+            sucursal_id=sucursal.id,
+            numero_terminal=1,
+            serial_sunmi="APP-1301",
+            activa=True,
+        )
+    )
     db.commit()

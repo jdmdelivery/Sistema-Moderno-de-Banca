@@ -146,6 +146,8 @@ def entorno(monkeypatch):
     client = TestClient(app)
     yield Entorno(client)
     client.close()
+    if dbmod._engine is not None:
+        dbmod._engine.dispose()
     os.unlink(ruta)
 
 

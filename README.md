@@ -7,16 +7,25 @@ Incluye el **servidor central (API)**, el **panel web del consorcio** y la
 **app Android de la terminal** (`android-app/`), que consume la API de
 terminal aquí implementada.
 
-**Estado: EN VIVO y probado (69/69 tests).**
+**Estado: MODO DESARROLLO — DATOS DE PRUEBA.**
 - Panel: https://sistema-de-banca-moderna.onrender.com (Render, plan
   gratuito). Repo: `jdmdelivery/Sistema-Moderno-de-Banca`.
+- No hay dinero real ni operaciones reales. Usuarios, sucursales, ventas,
+  premios, entregas y balances de este entorno son datos de prueba.
 - La base en vivo es la **SQLite temporal interna** del servicio, por
   decisión de Jose el 2026-11-14 (Render solo permite una PostgreSQL
-  gratuita por cuenta y la ocupa JDM): los datos se borran al reiniciar
-  el servicio. Conectar la base definitiva (PostgreSQL) es un paso
-  posterior ya previsto: basta fijar `DATABASE_URL` (la app la normaliza
-  al dialecto psycopg 3 que trae `requirements.txt`); el `render.yaml`
-  con el Blueprint original queda en el repo.
+  gratuita por cuenta y la ocupa JDM). **Un reinicio o un nuevo despliegue
+  de Render borra toda la información**: sucursales, usuarios, tickets,
+  premios, entregas y saldos. No sirve como respaldo. Cuando se decida
+  trabajar con dinero real, hay que migrar a una base persistente con
+  copias de seguridad. Hasta entonces basta dejar `MODO_DESARROLLO=true`
+  y no contratar servicios. Conectar PostgreSQL después sigue previsto:
+  fijar `DATABASE_URL` (la app la normaliza al dialecto psycopg 3 que
+  trae `requirements.txt`); el `render.yaml` con el Blueprint original
+  queda en el repo.
+- Con `MODO_DESARROLLO` activo y ninguna sucursal, el arranque crea
+  BANCA CASTILLO (PRUEBA), el operador `jose` / `prueba123` y un saldo
+  de prueba de RD$5,764.00 marcado como «SALDO DE PRUEBA».
 - **APK de la terminal compilado y verificado** (Etapa 3): ver
   `android-app/README.md`. Falta probarlo en la SUNMI física.
 
