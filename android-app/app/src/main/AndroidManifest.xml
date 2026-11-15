@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:label="Banca Moderna"
+        android:theme="@android:style/Theme.Material.Light">
+
+        <activity
+            android:name="bancamoderna.terminal.MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity android:name="bancamoderna.terminal.ConfigActivity" android:exported="false" />
+        <activity android:name="bancamoderna.terminal.LoginActivity" android:exported="false" />
+        <activity android:name="bancamoderna.terminal.MenuActivity" android:exported="false" />
+        <activity android:name="bancamoderna.terminal.VentaActivity" android:exported="false" />
+        <activity android:name="bancamoderna.terminal.DispActivity" android:exported="false" />
+        <activity android:name="bancamoderna.terminal.TicketActivity" android:exported="false" />
+        <activity android:name="bancamoderna.terminal.PagarActivity" android:exported="false" />
+        <activity android:name="bancamoderna.terminal.AnularActivity" android:exported="false" />
+        <activity
+            android:name="bancamoderna.terminal.ScanActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+    </application>
+</manifest>

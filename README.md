@@ -1,17 +1,24 @@
-# Sistema de Banca Moderna — Servidor + Panel Web (Etapa 2)
+# Sistema de Banca Moderna — Servidor + Panel Web + App de Terminal
 
 **Sistema de Banca Moderna** (nombre elegido por Jose el 2026-11-14):
 sistema propio de venta de lotería para bancas, construido desde la
 especificación de la Etapa 1 (`~/workspace/goals/sistema-de-loter-a-para-bancas-app-apk-servidor/files/ESPECIFICACION.md`).
-Esta etapa entrega el **servidor central (API)** y el **panel web del
-consorcio**, completos y probados. La app Android (APK) es la Etapa 3 y
-consumirá la API de terminal aquí implementada.
+Incluye el **servidor central (API)**, el **panel web del consorcio** y la
+**app Android de la terminal** (`android-app/`), que consume la API de
+terminal aquí implementada.
 
-**Estado: probado en local (68/68 tests). SIN desplegar todavía** — el
-despliegue a Render/GitHub lo aprueba Jose, como en JDM. El Blueprint de
-Render está listo en `render.yaml` (servicio web + PostgreSQL gratuitos,
-`DATABASE_URL` enlazada desde la BD; la app normaliza la URL al dialecto
-psycopg 3 que trae `requirements.txt`).
+**Estado: EN VIVO y probado (69/69 tests).**
+- Panel: https://sistema-de-banca-moderna.onrender.com (Render, plan
+  gratuito). Repo: `jdmdelivery/Sistema-Moderno-de-Banca`.
+- La base en vivo es la **SQLite temporal interna** del servicio, por
+  decisión de Jose el 2026-11-14 (Render solo permite una PostgreSQL
+  gratuita por cuenta y la ocupa JDM): los datos se borran al reiniciar
+  el servicio. Conectar la base definitiva (PostgreSQL) es un paso
+  posterior ya previsto: basta fijar `DATABASE_URL` (la app la normaliza
+  al dialecto psycopg 3 que trae `requirements.txt`); el `render.yaml`
+  con el Blueprint original queda en el repo.
+- **APK de la terminal compilado y verificado** (Etapa 3): ver
+  `android-app/README.md`. Falta probarlo en la SUNMI física.
 
 ## Cómo correrlo en local
 
@@ -119,11 +126,10 @@ importador empezará a proponer sin cambiar nada más.
 
 ## Qué falta
 
-- **Etapa 2b — Despliegue:** repo en GitHub + servicio en Render con
-  PostgreSQL (con la aprobación de Jose), cambio de la clave admin y
-  primera banca/terminal reales de prueba.
-- **Etapa 3 — App Android + APK:** instalar JDK + Android SDK en la
-  máquina de Muse; app con SDK de impresora SUNMI y escáner QR por
-  cámara contra esta misma API de terminal. El nombre del producto es
-  **Sistema de Banca Moderna** (elegido por Jose el 2026-11-14); el repo
-  y el servicio de Render se llamarán `sistema-de-banca-moderna`.
+- **Etapa 4 — Piloto en la SUNMI física:** instalar el APK, crear la
+  terminal en el panel con el serial real del equipo, pegar el token de
+  un solo uso en la app y hacer una venta de prueba (ahí se verifica la
+  impresión real y la lectura del QR impreso).
+- **Base de datos definitiva** en el servidor en vivo (PostgreSQL) y
+  cambio de la clave admin por la definitiva.
+- **Firma release del APK** con clave propia cuando pase a producción.

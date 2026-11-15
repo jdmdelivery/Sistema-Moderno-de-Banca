@@ -1,0 +1,42 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    // El namespace (paquete del código y de la clase R) no puede ser
+    // 'do.bancamoderna.terminal': «do» es palabra reservada de Java.
+    // El applicationId instalado en el equipo SÍ es do.bancamoderna.terminal.
+    namespace 'bancamoderna.terminal'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'do.bancamoderna.terminal'
+        // Las Sunmi de banca corren Android 7–11 → minSdk 24 (Android 7.0)
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+    }
+
+    buildTypes {
+        debug {
+            // APK de depuración: firmada con la clave debug de Android,
+            // instalable directamente en la Sunmi (ver README).
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // Lector de códigos QR (núcleo puro Java, sin servicios de Google)
+    implementation 'com.google.zxing:core:3.5.3'
+    // Librería OFICIAL de Sunmi para la impresora interna (sin dependencias)
+    implementation 'com.sunmi:printerlibrary:1.0.24'
+}
