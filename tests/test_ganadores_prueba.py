@@ -152,7 +152,7 @@ def test_qn_pl_sp_pago_unico_y_correccion(entorno, monkeypatch, fijar_hora):
     assert pago.status_code == 200, pago.text
     pagado = pago.json()
     assert pagado["estado"] == "pagado"
-    assert pagado["veredicto"] == "TICKET YA PAGADO — NO OFICIAL"
+    assert pagado["veredicto"] == "ESTE TICKET YA SE PAGÓ"
     assert pagado["puede_pagar"] is False
     assert float(pagado["mi_caja"]) == caja_antes - 600
     assert "saldo_restante" not in pagado

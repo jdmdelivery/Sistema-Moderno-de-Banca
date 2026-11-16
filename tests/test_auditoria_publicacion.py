@@ -149,7 +149,7 @@ def test_un_premio_pagado_sigue_pagado_al_abrir_otra_sesion(entorno, monkeypatch
     consulta = entorno.consultar(ticket)
     assert consulta["puede_pagar"] is False
     assert consulta["premio_pendiente"] == "0.00"
-    assert consulta["veredicto"] == "TICKET YA PAGADO"
+    assert consulta["veredicto"] == "ESTE TICKET YA SE PAGÓ"
     repetido = entorno.c.post("/terminal/tickets/pagar", json={
         "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "pago-reinicio-2",
     }, headers=b["headers"])
@@ -181,7 +181,7 @@ def test_un_ticket_pagado_con_el_codigo_viejo_no_vuelve_a_pendiente(entorno, mon
     assert consulta["estado"] == "pagado"
     assert consulta["puede_pagar"] is False
     assert consulta["premio_pendiente"] == "0.00"
-    assert consulta["veredicto"] == "TICKET YA PAGADO"
+    assert consulta["veredicto"] == "ESTE TICKET YA SE PAGÓ"
     pago = entorno.c.post("/terminal/tickets/pagar", json={
         "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "viejo-otra-vez",
     }, headers=b["headers"])

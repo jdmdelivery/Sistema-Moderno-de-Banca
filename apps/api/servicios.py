@@ -51,7 +51,12 @@ from .models import (
 )
 from .security import generar_serial, hash_token, nuevo_token
 
-CLAVES_REQUERIDAS = {"QN": ["1ro", "2do", "3ro"], "PL": ["1-2", "1-3", "2-3"], "SP": ["sp"]}
+CLAVES_REQUERIDAS = {
+    "QN": ["1ro", "2do", "3ro"],
+    "PL": ["1-2", "1-3", "2-3"],
+    "SP": ["sp"],
+    "TR": ["tr"],
+}
 
 
 # ---------------------------------------------------------------- auditoría
@@ -414,8 +419,17 @@ def _verificar_sorteo_abierto(sorteo, momento):
 
 
 def _parse_numeros(codigo_tipo, numeros):
-    partes = [p for p in str(numeros).replace(" ", "").split("-") if p != ""]
-    if codigo_tipo != "QN" and len(partes) == 1 and len(partes[0]) == 4 and partes[0].isdigit():
+    """Devuelve (n1, n2, n3). n2/n3 son None según el tipo.
+
+    TR admite seis dígitos seguidos (122538) o XX-XX-XX. Conserva el orden
+    de entrada; la clave de límites ordena el multiset por separado.
+    """
+    bruto = str(numeros).replace(" ", "")
+    partes = [p for p in bruto.split("-") if p != ""]
+    if codigo_tipo == "TR":
+        if len(partes) == 1 and len(partes[0]) == 6 and partes[0].isdigit():
+            partes = [partes[0][0:2], partes[0][2:4], partes[0][4:6]]
+    elif codigo_tipo != "QN" and len(partes) == 1 and len(partes[0]) == 4 and partes[0].isdigit():
         partes = [partes[0][:2], partes[0][2:]]
     try:
         nums = [int(p) for p in partes]
@@ -427,17 +441,35 @@ def _parse_numeros(codigo_tipo, numeros):
     if codigo_tipo == "QN":
         if len(nums) != 1:
             raise ErrorServicio(400, "La quiniela lleva un solo número")
-        return nums[0], None
+        return nums[0], None, None
+    if codigo_tipo == "TR":
+        if len(nums) != 3:
+            raise ErrorServicio(400, "La tripleta lleva tres números (ej. 12-25-38)")
+        return nums[0], nums[1], nums[2]
     if len(nums) != 2:
         raise ErrorServicio(400, "Esta jugada lleva dos números (ej. 26-58)")
-    return nums[0], nums[1]
+    return nums[0], nums[1], None
 
 
-def clave_numero(n1, n2):
+def clave_numero(n1, n2, n3=None):
+    """Clave de límites/acumulado. PL/SP ordenan la pareja; TR ordena el trío."""
     if n2 is None:
         return f"{n1:02d}"
-    a, b = sorted([n1, n2])
-    return f"{a:02d}-{b:02d}"
+    if n3 is None:
+        a, b = sorted([n1, n2])
+        return f"{a:02d}-{b:02d}"
+    a, b, c = sorted([n1, n2, n3])
+    return f"{a:02d}-{b:02d}-{c:02d}"
+
+
+def numeros_jugada(n1, n2, n3=None):
+    """Texto visible en ticket: QN/PL/SP como hasta ahora; TR en orden de entrada."""
+    if n2 is None:
+        return f"{n1:02d}"
+    if n3 is None:
+        a, b = sorted([n1, n2])
+        return f"{a:02d}-{b:02d}"
+    return f"{n1:02d}-{n2:02d}-{n3:02d}"
 
 
 TODAS_LAS_LOTERIAS = 0
@@ -445,13 +477,13 @@ CUALQUIER_NUMERO = "*"
 
 
 def _acumulado_numero(db, sorteo_id, tipo_id, clave, fecha, usuario_id=None):
+    """Suma montos del día cuya clave (QN/PL ordenada, TR multiset) coincide."""
     consulta = (
-        db.query(func.coalesce(func.sum(Jugada.monto), 0))
+        db.query(Jugada)
         .join(Ticket)
         .filter(
             Jugada.sorteo_id == sorteo_id,
             Jugada.tipo_jugada_id == tipo_id,
-            Jugada.numeros == clave,
             Jugada.fecha == fecha,
             Ticket.estado != "anulado",
             Ticket.es_prueba.is_(False),
@@ -459,7 +491,11 @@ def _acumulado_numero(db, sorteo_id, tipo_id, clave, fecha, usuario_id=None):
     )
     if usuario_id is not None:
         consulta = consulta.filter(Ticket.usuario_id == usuario_id)
-    return D(consulta.scalar())
+    total = D(0)
+    for jugada in consulta.all():
+        if clave_numero(jugada.n1, jugada.n2, jugada.n3) == clave:
+            total += D(jugada.monto)
+    return total
 
 
 def _revisar_tope(nombre, clave, sorteo, tope, ya, extra):
@@ -499,7 +535,7 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
         tipo = db.query(TipoJugada).filter_by(codigo=str(entrada["tipo"]).upper()).first()
         if tipo is None or not tipo.activo:
             raise ErrorServicio(400, f"Tipo de jugada no válido o inactivo: {entrada['tipo']}")
-        n1, n2 = _parse_numeros(tipo.codigo, entrada["numeros"])
+        n1, n2, n3 = _parse_numeros(tipo.codigo, entrada["numeros"])
         monto = D(entrada["monto"])
         if monto < D(consorcio.monto_min_jugada):
             raise ErrorServicio(400, f"El monto mínimo por jugada es ${D(consorcio.monto_min_jugada)}")
@@ -521,7 +557,7 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
             s2 = _verificar_sorteo_abierto(db.get(Sorteo, sorteo_ids[1]), ahora)
             if s1.id == s2.id:
                 raise ErrorServicio(400, "El Súper Palé debe cruzar dos loterías diferentes")
-            expandidas.append({"tipo": tipo, "sorteo": s1, "sorteo2": s2, "n1": n1, "n2": n2,
+            expandidas.append({"tipo": tipo, "sorteo": s1, "sorteo2": s2, "n1": n1, "n2": n2, "n3": n3,
                                "monto": monto, "factores": factores})
             total += monto
         else:
@@ -529,7 +565,7 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
                 raise ErrorServicio(400, "Cada jugada necesita al menos una lotería seleccionada (DISP)")
             for sid in sorteo_ids:
                 s = _verificar_sorteo_abierto(db.get(Sorteo, sid), ahora)
-                expandidas.append({"tipo": tipo, "sorteo": s, "sorteo2": None, "n1": n1, "n2": n2,
+                expandidas.append({"tipo": tipo, "sorteo": s, "sorteo2": None, "n1": n1, "n2": n2, "n3": n3,
                                    "monto": monto, "factores": factores})
                 total += monto
 
@@ -538,7 +574,7 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
     acumulado_general = {}
     acumulado_cajera = {}
     for e in expandidas:
-        clave = clave_numero(e["n1"], e["n2"])
+        clave = clave_numero(e["n1"], e["n2"], e["n3"])
         llave = (e["sorteo"].id, e["tipo"].id, clave)
         general = (
             db.query(LimiteVenta)
@@ -621,9 +657,10 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
                 sorteo_id=e["sorteo"].id,
                 sorteo2_id=e["sorteo2"].id if e["sorteo2"] else None,
                 fecha=fecha,
-                numeros=clave_numero(e["n1"], e["n2"]),
+                numeros=numeros_jugada(e["n1"], e["n2"], e["n3"]),
                 n1=e["n1"],
                 n2=e["n2"],
+                n3=e["n3"],
                 monto=e["monto"],
                 factores_json=json.dumps({k: str(v) for k, v in e["factores"].items()}),
             )
@@ -915,13 +952,30 @@ def _vista_pago(db, ticket):
         f"SERIAL: {ticket.serial}",
         "",
     ])
+    sin_premios = not premios and not pendientes
+    finalizado_sin_premio = sin_premios and (
+        ticket.estado in ("no_ganador", "pagado") or bool(no_ganaron)
+    )
+    todo_cobrado = pendiente <= 0 and bool(premios) and (
+        ticket.estado == "pagado" or (bool(ya_pagados) and not por_cobrar)
+    )
+    ultimo_pago = None
+    for fila in ya_pagados:
+        ts = fila.get("pagado_en")
+        if ts and (ultimo_pago is None or ts > ultimo_pago):
+            ultimo_pago = ts
+
     if ticket.estado == "anulado":
         lineas.append("TICKET ANULADO")
     elif ticket.estado == "vencido":
         lineas.append("TICKET VENCIDO")
-    elif not premios and not pendientes and not no_ganaron:
-        lineas.append("TICKET SIN PREMIOS")
-    elif not premios and not pendientes and no_ganaron:
+    elif finalizado_sin_premio:
+        lineas.append("TICKET FINALIZADO — SIN PREMIOS")
+    elif todo_cobrado and pendientes and ticket.estado != "pagado":
+        lineas.append("PREMIO PAGADO — QUEDAN SORTEOS PENDIENTES")
+    elif todo_cobrado:
+        lineas.append("ESTE TICKET YA SE PAGÓ")
+    elif sin_premios and not no_ganaron:
         lineas.append("TICKET SIN PREMIOS")
 
     # Agrupa por lotería: ganadores pendientes, pagados, luego pendientes de sorteo / no ganó.
@@ -936,27 +990,39 @@ def _vista_pago(db, ticket):
             por_loteria[clave]["cobrar"].append(fila)
         else:
             por_loteria[clave]["pagados"].append(fila)
-    for clave in orden:
-        grupo = por_loteria[clave]
-        subtotal = D(0)
-        for fila in grupo["cobrar"] + grupo["pagados"]:
-            _agregar_bloque_premio(lineas, fila)
-            if fila["estado_pago"] == "pendiente":
-                subtotal += D(fila["premio"])
-        if len(grupo["cobrar"]) > 1:
-            lineas.append(f"Subtotal {clave}: RD${subtotal}")
-            lineas.append("")
+
+    # Ticket ya cerrado: resumen compacto por lotería (sin reabrir cobro).
+    if todo_cobrado and pendiente <= 0 and not por_cobrar:
+        for clave in orden:
+            lineas.extend([
+                f"Lotería: {clave}",
+                "Estado: PAGADO",
+                "",
+            ])
+    else:
+        for clave in orden:
+            grupo = por_loteria[clave]
+            subtotal = D(0)
+            for fila in grupo["cobrar"] + grupo["pagados"]:
+                _agregar_bloque_premio(lineas, fila)
+                if fila["estado_pago"] == "pendiente":
+                    subtotal += D(fila["premio"])
+            if len(grupo["cobrar"]) > 1:
+                lineas.append(f"Subtotal {clave}: RD${subtotal}")
+                lineas.append("")
 
     if pendientes and ticket.estado not in ("anulado", "vencido", "pagado"):
-        lineas.append("SORTEOS PENDIENTES")
+        if pendiente > 0:
+            lineas.append("SORTEOS PENDIENTES")
         for fila in pendientes:
             lineas.extend([
-                f"SORTEO PENDIENTE — {_fecha_txt(fila['fecha'])}",
-                fila["loteria"],
+                f"Lotería: {fila['loteria']}",
                 "Estado: PENDIENTE DE SORTEO",
+                "",
             ])
-        lineas.append("Esos sorteos no se pagan todavía. No se usan resultados de otros días.")
-        lineas.append("")
+        if pendiente > 0:
+            lineas.append("Esos sorteos no se pagan todavía. No se usan resultados de otros días.")
+            lineas.append("")
     if no_ganaron and ticket.estado not in ("anulado", "vencido"):
         for fila in no_ganaron:
             lineas.extend([
@@ -966,12 +1032,19 @@ def _vista_pago(db, ticket):
             ])
 
     if premios and ticket.estado not in ("anulado", "vencido"):
-        lineas.append(f"PREMIO TOTAL: RD${pendiente + pagado}")
-        lineas.append(f"PREMIO YA PAGADO: RD${pagado}")
-        lineas.append(f"TOTAL NUEVO POR PAGAR: RD${pendiente}")
-        lineas.append(f"SE COBRARÁ: RD${pendiente}")
-        # Compatibilidad con pantallas/tests previos.
-        lineas.append(f"PREMIO PENDIENTE: RD${pendiente}")
+        if pendiente > 0:
+            lineas.append(f"PREMIO TOTAL: RD${pendiente + pagado}")
+            lineas.append(f"PREMIO YA PAGADO: RD${pagado}")
+            lineas.append(f"TOTAL NUEVO POR PAGAR: RD${pendiente}")
+            lineas.append(f"SE COBRARÁ: RD${pendiente}")
+            lineas.append(f"PREMIO PENDIENTE: RD${pendiente}")
+        else:
+            lineas.append(f"TOTAL PREMIOS PAGADOS: RD${pagado}")
+            if ultimo_pago:
+                lineas.append(f"ÚLTIMO PAGO: {ultimo_pago}")
+            lineas.append("PREMIO YA PAGADO: RD$" + str(pagado))
+            lineas.append("TOTAL NUEVO POR PAGAR: RD$0.00")
+            lineas.append("PREMIO PENDIENTE: RD$0.00")
     puede = (
         ticket.estado not in ("anulado", "vencido", "pagado")
         and pendiente > 0
@@ -1032,23 +1105,42 @@ def consultar_ticket(db, ticket_id, serial, operacion_comprobante=None):
         datos["veredicto"] = "RESULTADOS PENDIENTES"
         datos["mensaje"] = "Ticket vendido: aún faltan resultados por liquidar"
     datos.update(_vista_pago(db, ticket))
+    # El botón de cobro depende del importe pendiente real de las jugadas, no solo del estado.
     datos["puede_pagar"] = (
         D(datos["premio_pendiente"]) > 0
         and ticket.estado not in ("anulado", "vencido", "pagado")
+        and not (ticket.es_prueba and not modo_desarrollo())
     )
-    if ticket.estado == "pagado":
+    if ticket.estado == "pagado" or D(datos["premio_pendiente"]) <= 0:
         datos["puede_pagar"] = False
         datos["premio_pendiente"] = "0.00"
         datos["importe_a_cobrar"] = "0.00"
-    if D(datos["premio_pendiente"]) > 0:
+    if D(datos.get("premio_pendiente") or 0) > 0:
         if ticket.estado == "parcial" or datos.get("sorteos_pendientes"):
             datos["veredicto"] = "PREMIOS CONFIRMADOS — SE PUEDEN PAGAR"
             datos["mensaje"] = f"Cobrar ahora ${datos['importe_a_cobrar']}"
         elif ticket.estado == "ganador":
             datos["mensaje"] = f"Ticket ganador: pague ${datos['premio_pendiente']}"
-    elif ticket.estado == "parcial":
-        datos["veredicto"] = "PAGO PARCIAL — QUEDAN SORTEOS PENDIENTES"
+    elif ticket.estado == "pagado" or (
+        datos.get("premios_pagados") and not datos.get("premios_por_pagar")
+        and not datos.get("sorteos_pendientes")
+    ):
+        if datos.get("premios_pagados") or ticket.estado == "pagado":
+            datos["veredicto"] = "ESTE TICKET YA SE PAGÓ"
+            # Conserva el detalle de sucursal/fecha si ya se armó arriba.
+            if "Ya pagado en la sucursal" not in (datos.get("mensaje") or ""):
+                datos["mensaje"] = "Todos los premios de este ticket ya fueron pagados."
+        else:
+            datos["veredicto"] = "TICKET FINALIZADO — SIN PREMIOS"
+            datos["mensaje"] = "Este ticket no tiene premios por pagar."
+    elif ticket.estado == "parcial" or (
+        datos.get("premios_pagados") and datos.get("sorteos_pendientes")
+    ):
+        datos["veredicto"] = "PREMIO PAGADO — QUEDAN SORTEOS PENDIENTES"
         datos["mensaje"] = "Ya se cobraron los premios confirmados. Esperando sorteos pendientes."
+    elif ticket.estado == "no_ganador":
+        datos["veredicto"] = "TICKET FINALIZADO — SIN PREMIOS"
+        datos["mensaje"] = "Este ticket no tiene premios por pagar."
     texto = comprobante_premio(db, ticket, operacion_id=operacion_comprobante)
     if texto:
         datos["comprobante"] = texto
@@ -1551,8 +1643,8 @@ def aplicar_limite_todas(db, tipo_codigo, numeros, monto, usuario_id, reemplazar
         raise ErrorServicio(404, "Tipo de jugada no válido")
     if D(monto) <= D(0):
         raise ErrorServicio(400, "El monto máximo debe ser mayor que cero")
-    n1, n2 = _parse_numeros(tipo.codigo, numeros)
-    clave = clave_numero(n1, n2)
+    n1, n2, n3 = _parse_numeros(tipo.codigo, numeros)
+    clave = clave_numero(n1, n2, n3)
     sorteos = db.query(Sorteo).order_by(Sorteo.id).all()
     creados = []
     actualizados = []
@@ -1623,8 +1715,8 @@ def limite_cajera_a_dict(db, fila):
 def _clave_limite(tipo, numeros):
     if numeros is None or str(numeros).strip() in ("", "*", "TODOS"):
         return CUALQUIER_NUMERO
-    n1, n2 = _parse_numeros(tipo.codigo, numeros)
-    return clave_numero(n1, n2)
+    n1, n2, n3 = _parse_numeros(tipo.codigo, numeros)
+    return clave_numero(n1, n2, n3)
 
 
 def guardar_limite_cajera(db, admin, usuario_id, sorteo_id, tipo_codigo, numeros, monto, limite_id=None):
@@ -1636,7 +1728,7 @@ def guardar_limite_cajera(db, admin, usuario_id, sorteo_id, tipo_codigo, numeros
     if cajera is None or cajera.rol != "operador" or not cajera.activo or not cajera.sucursal_id:
         raise ErrorServicio(400, "Seleccione una cajera activa")
     tipo = db.query(TipoJugada).filter_by(codigo=str(tipo_codigo).upper()).first()
-    if tipo is None or tipo.codigo not in ("QN", "PL", "SP"):
+    if tipo is None or tipo.codigo not in ("QN", "PL", "SP", "TR"):
         raise ErrorServicio(400, "El tipo de límite no es válido")
     sorteo = int(sorteo_id or 0)
     if sorteo and db.get(Sorteo, sorteo) is None:
@@ -1713,8 +1805,8 @@ def guardar_resultado(db, sorteo_id, fecha, p1, p2, p3, usuario, fuente="manual"
     for n in numeros:
         if n is None or int(n) < 0 or int(n) > 99:
             raise ErrorServicio(400, "Cada premio debe ser un número entre 00 y 99")
-    if len(set(int(n) for n in numeros)) != 3:
-        raise ErrorServicio(400, "Los tres premios deben ser números diferentes")
+    # Tres tómbolas independientes (00–99 cada una): el mismo número puede
+    # repetirse en 1.º/2.º/3.º. No se exige que los tres premios sean distintos.
     premios = tuple(int(n) for n in numeros)
     r = db.query(Resultado).filter_by(sorteo_id=sorteo_id, fecha=fecha).first()
     if simulado and r is not None and (r.fuente in ("rdlotto", "conectate") or r.externo):
@@ -1774,7 +1866,7 @@ def guardar_resultado(db, sorteo_id, fecha, p1, p2, p3, usuario, fuente="manual"
 
 
 def confirmar_resultado(db, resultado_id, usuario):
-    """Confirmar = liquidar en la misma operación: el motor evalúa QN/PL/SP
+    """Confirmar = liquidar en la misma operación: el motor evalúa QN/PL/SP/TR
     y marca cada ticket. El resultado queda en estado LIQUIDADO."""
     r = db.get(Resultado, resultado_id)
     if r is None:
@@ -3185,7 +3277,7 @@ def listar_tickets_panel(
     }
 
 
-_NOMBRE_JUGADA = {"QN": "QUINIELA", "PL": "PALÉ", "SP": "SÚPER PALÉ"}
+_NOMBRE_JUGADA = {"QN": "QUINIELA", "PL": "PALÉ", "SP": "SÚPER PALÉ", "TR": "TRIPLETA"}
 
 
 def _jugadas_de_operacion(ticket, operacion_id=None):

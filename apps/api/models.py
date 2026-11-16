@@ -226,14 +226,15 @@ class Jugada(Base):
     sorteo_id = Column(Integer, ForeignKey("sorteos.id"), nullable=False)
     sorteo2_id = Column(Integer, ForeignKey("sorteos.id"))  # solo Súper Palé
     fecha = Column(Date, nullable=False, index=True)
-    numeros = Column(String(12), nullable=False)  # "26" o "26-58" (pareja ordenada)
+    numeros = Column(String(12), nullable=False)  # "26", "26-58" o "12-25-38"
     n1 = Column(Integer, nullable=False)
     n2 = Column(Integer)
+    n3 = Column(Integer)  # solo Tripleta (TR)
     monto = Column(DINERO, nullable=False)
     factores_json = Column(Text, nullable=False, default="{}")  # foto de la tabla al vender
     evaluada = Column(Boolean, nullable=False, default=False)
     premio = Column(DINERO)
-    detalle_eval = Column(String(20))  # '1ro'|'2do'|'3ro'|'1-2'|'1-3'|'2-3'|'sp'
+    detalle_eval = Column(String(20))  # '1ro'|'2do'|'3ro'|'1-2'|'1-3'|'2-3'|'sp'|'tr'
     pagada = Column(Boolean, nullable=False, default=False)
     pagado_en = Column(DateTime)
     pagado_por_usuario_id = Column(Integer, ForeignKey("usuarios.id"))

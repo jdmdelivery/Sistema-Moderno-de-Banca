@@ -143,9 +143,13 @@ def test_reliquidacion_prohibida_y_reversion(entorno):
     assert entorno.consultar(t)["estado"] == "no_ganador"
 
 
-def test_resultado_premios_repetidos_rechazado(entorno):
+def test_resultado_admite_premios_repetidos(entorno):
+    """Tres tómbolas independientes: 19-19-45 es un resultado oficial válido."""
     s = entorno.sorteo_id("La Primera 12")
     r = entorno.c.post("/resultados", json={
         "sorteo_id": s, "fecha": "2026-11-14", "premio1": 19, "premio2": 19, "premio3": 45,
     }, headers=entorno.admin)
-    assert r.status_code == 400
+    assert r.status_code == 201, r.text
+    assert r.json()["premio1"] == "19"
+    assert r.json()["premio2"] == "19"
+    assert r.json()["premio3"] == "45"

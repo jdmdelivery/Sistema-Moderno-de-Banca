@@ -244,7 +244,7 @@ def _preparar(entorno):
 def test_identifica_quiniela_y_pale_y_no_paga_dos_veces(entorno, fijar_hora, monkeypatch):
     monkeypatch.setenv("MODO_DESARROLLO", "true")
     db = dbmod.nueva_sesion()
-    assert {fila.codigo for fila in db.query(TipoJugada).all()} == {"QN", "PL", "SP"}
+    assert {fila.codigo for fila in db.query(TipoJugada).all()} == {"QN", "PL", "SP", "TR"}
     db.close()
     b = _preparar(entorno)
     anguila = entorno.sorteo_id("La Anguila 11:00 AM")

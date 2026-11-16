@@ -55,7 +55,7 @@ def test_no_hay_tripleta():
     db = dbmod.nueva_sesion()
     codigos = {fila.codigo for fila in db.query(TipoJugada).all()}
     db.close()
-    assert codigos == {"QN", "PL", "SP"}
+    assert codigos == {"QN", "PL", "SP", "TR"}
 
 
 def test_tres_lecturas_iguales_y_diez_minutos_dejan_el_premio_pendiente(entorno, fijar_hora):

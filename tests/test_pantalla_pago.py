@@ -34,17 +34,19 @@ def _preparar(entorno):
     return b
 
 
-def test_no_existe_tabla_de_tripleta(entorno):
+def test_tripleta_esta_activa_y_vende(entorno):
     db = dbmod.nueva_sesion()
     codigos = {fila.codigo for fila in db.query(TipoJugada).all()}
     db.close()
-    assert codigos == {"QN", "PL", "SP"}
+    assert codigos == {"QN", "PL", "SP", "TR"}
     b = entorno.banca()
     sorteo = entorno.sorteo_id("LOTEDOM")
     r = entorno.c.post("/terminal/venta", json={"jugadas": [
         {"tipo": "TR", "sorteos": [sorteo], "numeros": "01-02-03", "monto": 5},
     ]}, headers=b["headers"])
-    assert r.status_code == 400
+    assert r.status_code == 201, r.text
+    assert r.json()["jugadas"][0]["tipo"] == "TR"
+    assert r.json()["jugadas"][0]["numeros"] == "01-02-03"
 
 
 def test_una_loteria_muestra_el_premio_y_oculta_la_perdedora(entorno, monkeypatch):
@@ -147,7 +149,15 @@ def test_tres_loterias_cobra_las_listas_y_deja_la_pendiente(entorno, monkeypatch
     assert anulacion.status_code == 409
     assert parcial.json()["premio_pendiente"] == "0.00"
     assert parcial.json()["premio_pagado"] == "1200.00"
+    assert parcial.json()["puede_pagar"] is False
     assert "PAGO PARCIAL" in parcial.json()["comprobante"]
+    espera = _consultar(entorno, b["headers"], ticket)
+    assert espera["puede_pagar"] is False
+    assert espera["premio_pendiente"] == "0.00"
+    assert "PREMIO PAGADO — QUEDAN SORTEOS PENDIENTES" in espera["texto_pago"]
+    assert "PENDIENTE DE SORTEO" in espera["texto_pago"]
+    assert "Florida" in espera["texto_pago"]
+    assert "SE COBRARÁ" not in espera["texto_pago"]
     repetido = entorno.c.post("/terminal/tickets/pagar", json={
         "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "pago-parcial",
     }, headers=b["headers"])
@@ -160,17 +170,37 @@ def test_tres_loterias_cobra_las_listas_y_deja_la_pendiente(entorno, monkeypatch
     assert float(entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()["mi_caja"]) == antes - 1200
     _simular(entorno, florida, 25, 8, 9)
     resto = _consultar(entorno, b["headers"], ticket)
+    assert resto["puede_pagar"] is True
     assert resto["premio_pendiente"] == "600.00"
     assert resto["premio_pagado"] == "1200.00"
     assert "Estado: PAGADO" in resto["texto_pago"]
     assert "Estado: GANADOR" in resto["texto_pago"]
+    assert "TOTAL NUEVO POR PAGAR: RD$600.00" in resto["texto_pago"]
     final = entorno.c.post("/terminal/tickets/pagar", json={
         "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "pago-resto",
     }, headers=b["headers"])
     assert final.status_code == 200, final.text
     assert final.json()["estado"] == "pagado"
+    assert final.json()["puede_pagar"] is False
+    assert final.json()["premio_pendiente"] == "0.00"
     assert float(final.json()["mi_caja"]) == antes - 1800
     assert "Florida 2:30 PM" in final.json()["comprobante"]
+    cerrado = _consultar(entorno, b["headers"], ticket)
+    assert cerrado["puede_pagar"] is False
+    assert cerrado["veredicto"] == "ESTE TICKET YA SE PAGÓ"
+    assert "ESTE TICKET YA SE PAGÓ" in cerrado["texto_pago"]
+    assert "TOTAL PREMIOS PAGADOS: RD$1800.00" in cerrado["texto_pago"]
+    assert "SE COBRARÁ" not in cerrado["texto_pago"]
+    assert "Estado: PAGADO" in cerrado["texto_pago"]
+    assert cerrado.get("comprobante")
+    # Reimprimir no vuelve a cobrar.
+    caja_final = float(entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()["mi_caja"])
+    assert caja_final == antes - 1800
+    otra = entorno.c.post("/terminal/tickets/pagar", json={
+        "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "pago-ya-cerrado",
+    }, headers=b["headers"])
+    assert otra.status_code == 409
+    assert float(entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()["mi_caja"]) == caja_final
 
 
 def test_super_pale_usa_el_primer_premio_de_cada_loteria(entorno, monkeypatch):
@@ -209,7 +239,9 @@ def test_sin_premio_anulado_y_ajeno_no_cobran(entorno, monkeypatch):
     sin_premio = _consultar(entorno, b["headers"], perdedor)
     assert sin_premio["puede_pagar"] is False
     assert sin_premio["texto_pago"].startswith("PRUEBA — NO OFICIAL\nEMPRESA:")
-    assert "TICKET SIN PREMIOS" in sin_premio["texto_pago"]
+    assert "TICKET FINALIZADO — SIN PREMIOS" in sin_premio["texto_pago"]
+    assert "CONFIRMAR PAGO" not in sin_premio["texto_pago"]
+    assert "SE COBRARÁ" not in sin_premio["texto_pago"]
     assert "25-54-78" not in sin_premio["texto_pago"]
     pago = entorno.c.post("/terminal/tickets/pagar", json={
         "id": perdedor["id"], "serial": perdedor["serial"],

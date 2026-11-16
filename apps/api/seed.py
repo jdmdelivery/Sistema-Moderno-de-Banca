@@ -1,4 +1,4 @@
-"""Datos iniciales: consorcio, usuario admin, los 40 sorteos, tipos QN/PL/SP
+"""Datos iniciales: consorcio, usuario admin, los 40 sorteos, tipos QN/PL/SP/TR
 y una tabla de pagos inicial (todo editable del panel).
 """
 from datetime import datetime, time, timedelta
@@ -68,7 +68,15 @@ FACTORES_SEMILLA = {
     "QN": {"1ro": 60, "2do": 10, "3ro": 5},
     "PL": {"1-2": 1200, "1-3": 400, "2-3": 200},
     "SP": {"sp": 2500},
+    "TR": {"tr": 500},
 }
+
+TIPOS_SEMILLA = [
+    ("QN", "Quiniela", "Un número contra el 1.º, 2.º o 3.º premio del sorteo.", False),
+    ("PL", "Palé", "Una pareja de números entre los tres premios de un sorteo.", False),
+    ("SP", "Súper Palé", "Una pareja que cruza el 1.º premio de dos loterías.", True),
+    ("TR", "Tripleta", "Tres números en cualquier orden contra los tres premios del sorteo.", False),
+]
 
 
 def sembrar_si_vacio(db):
@@ -105,11 +113,7 @@ def sembrar_si_vacio(db):
             )
         )
     tipos = {}
-    for codigo, nombre, descripcion, dos in [
-        ("QN", "Quiniela", "Un número contra el 1.º, 2.º o 3.º premio del sorteo.", False),
-        ("PL", "Palé", "Una pareja de números entre los tres premios de un sorteo.", False),
-        ("SP", "Súper Palé", "Una pareja que cruza el 1.º premio de dos loterías.", True),
-    ]:
+    for codigo, nombre, descripcion, dos in TIPOS_SEMILLA:
         tipo = TipoJugada(codigo=codigo, nombre=nombre, descripcion=descripcion,
                           requiere_dos_sorteos=dos, activo=True)
         db.add(tipo)
@@ -126,6 +130,41 @@ def sembrar_si_vacio(db):
                     vigente_desde=desde,
                 )
             )
+    db.commit()
+
+
+def asegurar_tripleta(db):
+    """Inserta TR y su factor ×500 si la base ya existía sin Tripleta.
+
+    Idempotente: no toca QN/PL/SP ni altera factores históricos. Solo agrega
+    el tipo y la fila de tabla de pagos inicial cuando faltan.
+    """
+    tipo = db.query(TipoJugada).filter_by(codigo="TR").first()
+    if tipo is None:
+        meta = next(t for t in TIPOS_SEMILLA if t[0] == "TR")
+        tipo = TipoJugada(
+            codigo=meta[0], nombre=meta[1], descripcion=meta[2],
+            requiere_dos_sorteos=meta[3], activo=True,
+        )
+        db.add(tipo)
+        db.flush()
+    elif not tipo.activo:
+        tipo.activo = True
+    vigente = (
+        db.query(TablaPagos)
+        .filter_by(tipo_jugada_id=tipo.id, clave="tr")
+        .filter(TablaPagos.vigente_hasta.is_(None))
+        .first()
+    )
+    if vigente is None:
+        db.add(
+            TablaPagos(
+                tipo_jugada_id=tipo.id,
+                clave="tr",
+                factor=D(FACTORES_SEMILLA["TR"]["tr"]),
+                vigente_desde=datetime(2020, 1, 1, 0, 0, 0),
+            )
+        )
     db.commit()
 
 

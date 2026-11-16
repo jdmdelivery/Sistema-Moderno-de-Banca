@@ -69,13 +69,19 @@ def nueva_sesion():
 def init_db():
     """Crea las tablas si no existen y siembra los datos iniciales."""
     from . import models  # noqa: F401  (registra los modelos)
-    from .seed import aplicar_catalogo_sorteos, sembrar_si_vacio, sembrar_sucursal_prueba
+    from .seed import (
+        aplicar_catalogo_sorteos,
+        asegurar_tripleta,
+        sembrar_si_vacio,
+        sembrar_sucursal_prueba,
+    )
 
     Base.metadata.create_all(engine())
     _columnas_faltantes()
     db = nueva_sesion()
     try:
         sembrar_si_vacio(db)
+        asegurar_tripleta(db)
         aplicar_catalogo_sorteos(db)
         sembrar_sucursal_prueba(db)
     finally:
@@ -163,6 +169,8 @@ def _columnas_faltantes():
                 conn.execute(text(
                     f"ALTER TABLE jugadas {_agregar_columna(eng)} pago_operacion_id VARCHAR(40)"
                 ))
+            if "n3" not in cols:
+                conn.execute(text(f"ALTER TABLE jugadas {_agregar_columna(eng)} n3 INTEGER"))
     _proteger_pago_parcial()
 
 

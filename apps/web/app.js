@@ -579,7 +579,7 @@ async function guardarSorteo() {
 
 
 /* ------------------------------------------------------------ tabla de pagos */
-const CLAVES_POR_TIPO = { QN: ["1ro", "2do", "3ro"], PL: ["1-2", "1-3", "2-3"], SP: ["sp"] };
+const CLAVES_POR_TIPO = { QN: ["1ro", "2do", "3ro"], PL: ["1-2", "1-3", "2-3"], SP: ["sp"], TR: ["tr"] };
 function actualizarClavesTabla() {
   const tipo = $("#tab-tipo").value || "QN";
   $("#tab-clave").innerHTML = (CLAVES_POR_TIPO[tipo] || []).map((c) => `<option value="${c}">${c}</option>`).join("");

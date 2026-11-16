@@ -3,6 +3,7 @@ liquida/revierte sorteos. Las reglas viven aquí; los factores NO: cada jugada
 guarda la foto de la tabla de pagos vigente al momento de la venta.
 """
 import json
+from collections import Counter
 
 from sqlalchemy import or_
 
@@ -66,6 +67,16 @@ def evaluar_jugada(jugada, res_a, res_b=None):
             )
         if {jugada.n1, jugada.n2} == {res_a.premio1, res_b.premio1}:
             return D(monto * factores["sp"]), "sp"
+        return D(0), None
+    if tipo == "TR":
+        # Orden libre con multiset: cada número debe coincidir en cantidad,
+        # no basta con que aparezca alguna vez (12-12-38 ≠ 12-38-38).
+        if jugada.n2 is None or jugada.n3 is None:
+            return D(0), None
+        oficiales = Counter([res_a.premio1, res_a.premio2, res_a.premio3])
+        jugados = Counter([jugada.n1, jugada.n2, jugada.n3])
+        if oficiales == jugados:
+            return D(monto * factores["tr"]), "tr"
         return D(0), None
     raise ErrorServicio(500, f"Tipo de jugada sin regla en el motor: {tipo}")
 
@@ -173,7 +184,7 @@ def reabrir_pruebas(db, resultado):
 def liquidar_resultado(db, resultado):
     """Evalúa las jugadas reales pendientes de este resultado.
 
-    QN y PL se liquidan con este sorteo. El súper palé espera a que la otra
+    QN, PL y TR se liquidan con este sorteo. El súper palé espera a que la otra
     lotería también esté confirmada. Los tickets de prueba no entran aquí.
     """
     return _liquidar(db, resultado, prueba=False)
@@ -218,7 +229,7 @@ def _liquidar(db, resultado, prueba):
         .all()
     )
     for j in jugadas:
-        if j.tipo.codigo not in ("QN", "PL"):
+        if j.tipo.codigo not in ("QN", "PL", "TR"):
             continue
         if not _resultado_coincide(j, resultado, j.sorteo_id):
             continue
@@ -281,7 +292,7 @@ def premio_respaldado(db, jugada, prueba=False):
     if jugada is None or jugada.fecha is None:
         return None
     tipo = jugada.tipo.codigo if jugada.tipo else None
-    if tipo in ("QN", "PL"):
+    if tipo in ("QN", "PL", "TR"):
         r1 = _resultado_util(db, jugada.sorteo_id, jugada.fecha, prueba)
         if r1 is None:
             return None
@@ -316,13 +327,13 @@ def revertir_liquidacion(db, resultado):
         )
         .all()
     )
-    # Solo las que realmente dependían de ESTE resultado: QN/PL de este sorteo
+    # Solo las que realmente dependían de ESTE resultado: QN/PL/TR de este sorteo
     # y SP que lo crucen. (Las de otros sorteos no se tocan.)
     propias = []
     for j in jugadas:
         if j.ticket is not None and j.ticket.es_prueba:
             continue
-        if j.tipo.codigo in ("QN", "PL") and j.sorteo_id == sid:
+        if j.tipo.codigo in ("QN", "PL", "TR") and j.sorteo_id == sid:
             propias.append(j)
         elif j.tipo.codigo == "SP" and (j.sorteo_id == sid or j.sorteo2_id == sid):
             propias.append(j)

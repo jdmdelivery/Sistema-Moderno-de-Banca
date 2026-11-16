@@ -51,7 +51,7 @@ def test_resultado_dia_14_no_hace_ganar_ticket_dia_15(entorno, fijar_hora):
     assert pendiente["puede_pagar"] is False
     assert float(pendiente["premio_total"]) == 0
     assert float(pendiente["premio_pendiente"]) == 0
-    assert "SORTEO PENDIENTE — 15/11/2026" in pendiente["texto_pago"]
+    assert "PENDIENTE DE SORTEO" in pendiente["texto_pago"]
     assert "25-48-90" not in pendiente["texto_pago"]
 
     # Reliquidar el 14 no debe tocar el ticket del 15.

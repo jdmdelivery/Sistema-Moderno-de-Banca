@@ -172,7 +172,7 @@ def test_la_prueba_se_liquida_sola_sin_tocar_la_caja_real(entorno, monkeypatch):
     )
     assert pago.status_code == 200, pago.text
     assert pago.json()["mi_caja"] == "7400.00"
-    assert pago.json()["veredicto"] == "TICKET YA PAGADO — NO OFICIAL"
+    assert pago.json()["veredicto"] == "ESTE TICKET YA SE PAGÓ"
     assert entorno.saldo(b["sucursal"]["id"]) == 5774
     repetido = entorno.c.post(
         "/terminal/tickets/pagar",

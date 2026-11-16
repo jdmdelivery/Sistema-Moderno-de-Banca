@@ -663,8 +663,8 @@ def crear_limite(datos: LimiteIn, db=Depends(get_db), usuario=Depends(requiere_r
     tipo = db.query(TipoJugada).filter_by(codigo=datos.tipo.upper()).first()
     if tipo is None or db.get(Sorteo, datos.sorteo_id) is None:
         raise ErrorServicio(404, "Sorteo o tipo de jugada no válido")
-    n1, n2 = servicios._parse_numeros(tipo.codigo, datos.numeros)
-    clave = servicios.clave_numero(n1, n2)
+    n1, n2, n3 = servicios._parse_numeros(tipo.codigo, datos.numeros)
+    clave = servicios.clave_numero(n1, n2, n3)
     existente = db.query(LimiteVenta).filter_by(
         sorteo_id=datos.sorteo_id, tipo_jugada_id=tipo.id, clave_numero=clave).first()
     if existente is not None:
