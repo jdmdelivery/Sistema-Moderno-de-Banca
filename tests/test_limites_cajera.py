@@ -71,3 +71,109 @@ def test_quiniela_por_numero_pale_por_combinacion_y_otra_cajera(entorno, fijar_h
     fijar_hora(datetime(2026, 11, 15, 10, 0, 0))
     jose_otro_dia = entorno.login_terminal("jose", "prueba123")
     entorno.vender_ok(jose_otro_dia, [{"tipo": "QN", "sorteos": [primera], "numeros": "25", "monto": 500}])
+
+
+def test_limites_tambien_acumulan_en_modo_desarrollo(entorno, monkeypatch):
+    """Con MODO_DESARROLLO las ventas son es_prueba; el tope debe acumularlas igual."""
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    from apps.api import comun
+    monkeypatch.setattr(comun, "modo_desarrollo", lambda: True)
+    from apps.api import servicios
+    monkeypatch.setattr(servicios, "modo_desarrollo", lambda: True)
+
+    b = entorno.banca(saldo=100000, usuario="jose", clave="prueba123")
+    jose = _id(entorno, "jose")
+    primera = entorno.sorteo_id("La Primera 12")
+    _limite(entorno, jose, primera, "QN", "33", 50)
+    entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [primera], "numeros": "33", "monto": 40}])
+    exceso = entorno.vender(b["headers"], [{"tipo": "QN", "sorteos": [primera], "numeros": "33", "monto": 20}])
+    assert exceso.status_code == 409 and "cajera" in exceso.json()["detail"]
+
+
+def _limite_sp(entorno, usuario_id, s1, s2, numeros, monto):
+    r = entorno.c.post("/limites-cajera", json={
+        "usuario_id": usuario_id, "sorteo_id": s1, "sorteo2_id": s2,
+        "tipo": "SP", "numeros": numeros, "monto_max_acumulado": monto,
+    }, headers=entorno.admin)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_limites_sp_tr_orden_acumulado_y_aislamiento(entorno, fijar_hora):
+    b = entorno.banca(saldo=100000, usuario="jose", clave="prueba123")
+    entorno.operador("ana", "prueba123", b["sucursal"]["id"])
+    ana = entorno.login_terminal("ana", "prueba123")
+    jose = _id(entorno, "jose")
+    ana_id = _id(entorno, "ana")
+    primera = entorno.sorteo_id("La Primera 12")
+    real = entorno.sorteo_id("Real Tarde")
+
+    # SP individual: tope por combinación + par de loterías (orden indiferente).
+    _limite_sp(entorno, jose, primera, real, "07-19", 40)
+    entorno.vender_ok(b["headers"], [{
+        "tipo": "SP", "sorteos": [primera, real], "numeros": "07-19", "monto": 30,
+    }])
+    # Invertir loterías y números no evade el acumulado.
+    exceso_sp = entorno.vender(b["headers"], [{
+        "tipo": "SP", "sorteos": [real, primera], "numeros": "19-07", "monto": 20,
+    }])
+    assert exceso_sp.status_code == 409 and "cajera" in exceso_sp.json()["detail"]
+    # Otra cajera no comparte el tope de jose.
+    entorno.vender_ok(ana, [{
+        "tipo": "SP", "sorteos": [primera, real], "numeros": "07-19", "monto": 40,
+    }])
+
+    # SP general (*): cada combinación tiene su propio máximo.
+    _limite_sp(entorno, jose, 0, 0, "*", 25)
+    entorno.vender_ok(b["headers"], [{
+        "tipo": "SP", "sorteos": [primera, real], "numeros": "11-22", "monto": 25,
+    }])
+    gen_sp = entorno.vender(b["headers"], [{
+        "tipo": "SP", "sorteos": [primera, real], "numeros": "11-22", "monto": 5,
+    }])
+    assert gen_sp.status_code == 409
+
+    # TR: orden libre y repeticiones equivalen a la misma clave.
+    _limite(entorno, jose, primera, "TR", "12-25-38", 30)
+    entorno.vender_ok(b["headers"], [{
+        "tipo": "TR", "sorteos": [primera], "numeros": "12-25-38", "monto": 20,
+    }])
+    ord_tr = entorno.vender(b["headers"], [{
+        "tipo": "TR", "sorteos": [primera], "numeros": "38-12-25", "monto": 15,
+    }])
+    assert ord_tr.status_code == 409 and "12-25-38" in ord_tr.json()["detail"]
+
+    _limite(entorno, jose, primera, "TR", "12-12-38", 20)
+    entorno.vender_ok(b["headers"], [{
+        "tipo": "TR", "sorteos": [primera], "numeros": "12-12-38", "monto": 20,
+    }])
+    rep_tr = entorno.vender(b["headers"], [{
+        "tipo": "TR", "sorteos": [primera], "numeros": "38-12-12", "monto": 5,
+    }])
+    assert rep_tr.status_code == 409
+
+    # TR general + aislamiento de cajera / varias ventas.
+    _limite(entorno, jose, 0, "TR", "*", 15)
+    entorno.vender_ok(b["headers"], [{
+        "tipo": "TR", "sorteos": [real], "numeros": "01-02-03", "monto": 10,
+    }])
+    entorno.vender_ok(b["headers"], [{
+        "tipo": "TR", "sorteos": [real], "numeros": "01-02-03", "monto": 5,
+    }])
+    split_tr = entorno.vender(b["headers"], [{
+        "tipo": "TR", "sorteos": [real], "numeros": "03-01-02", "monto": 5,
+    }])
+    assert split_tr.status_code == 409, split_tr.text
+    entorno.vender_ok(ana, [{
+        "tipo": "TR", "sorteos": [real], "numeros": "01-02-03", "monto": 15,
+    }])
+
+    # Límite general (LimiteVenta) más restrictivo que el de cajera.
+    entorno.c.post("/limites", json={
+        "sorteo_id": primera, "tipo": "TR", "numeros": "44-55-66", "monto_max_acumulado": 10,
+    }, headers=entorno.admin)
+    _limite(entorno, ana_id, primera, "TR", "44-55-66", 100)
+    gen_tr = entorno.vender(ana, [{
+        "tipo": "TR", "sorteos": [primera], "numeros": "66-44-55", "monto": 15,
+    }])
+    assert gen_tr.status_code == 409 and gen_tr.json()["detail"].startswith("Límite alcanzado")

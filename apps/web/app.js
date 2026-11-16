@@ -120,9 +120,11 @@ let MENU_SCROLL_Y = 0;
 function bloquearScrollFondo(activo) {
   if (activo) {
     MENU_SCROLL_Y = window.scrollY || window.pageYOffset || 0;
+    document.documentElement.classList.add("menu-abierto");
     document.body.classList.add("menu-abierto");
     document.body.style.top = "-" + MENU_SCROLL_Y + "px";
   } else {
+    document.documentElement.classList.remove("menu-abierto");
     document.body.classList.remove("menu-abierto");
     document.body.style.top = "";
     window.scrollTo(0, MENU_SCROLL_Y);
@@ -194,6 +196,9 @@ async function cargarCatalogos() {
     const todas = opciones(SORTEOS, (s) => s.id, (s) => s.nombre, '<option value="0">TODAS LAS LOTERÍAS</option>');
     limLoteria.innerHTML = todas;
     $("#lim-pl-loteria").innerHTML = todas;
+    $("#lim-tr-loteria").innerHTML = todas;
+    $("#lim-sp-loteria1").innerHTML = todas;
+    $("#lim-sp-loteria2").innerHTML = todas;
   }
   $("#res-sorteo").innerHTML = sor;
   const tip = opciones(TIPOS, (t) => t.codigo, (t) => `${t.codigo} — ${t.nombre}`);
@@ -443,28 +448,20 @@ function rangoVentasCajeros(tipo) {
   }
   return [hoy, hoy];
 }
-function tarjetaCajero(c) {
-  return `<article class="caj-card">
-    <div class="gan-card-top">
-      <div>
-        <h4>${esc(c.nombre)}</h4>
-        <div class="meta">${esc(c.usuario)} · ${esc(c.sucursal || "—")}</div>
-      </div>
-      ${pillEstadoUsuario(c)}
+function filaCajeroCompacta(c) {
+  const n = Number(c.tickets_vendidos || 0);
+  const ticketsTxt = n === 1 ? "1 ticket" : `${n} tickets`;
+  return `<div class="vc-fila">
+    <div class="vc-fila-info">
+      <span class="vc-fila-nombre">${esc(c.nombre)}</span>
+      <span class="vc-fila-sep" aria-hidden="true">—</span>
+      <span class="vc-fila-meta">${ticketsTxt}</span>
+      <span class="vc-fila-sep" aria-hidden="true">—</span>
+      <span class="vc-fila-monto">${fmt(c.ventas_netas)}</span>
+      <span class="vc-fila-sep solo-escritorio" aria-hidden="true">—</span>
+      <button type="button" class="btn primario vc-fila-btn" onclick="verDetalleCajero(${c.usuario_id})">VER DETALLE</button>
     </div>
-    <div class="montos">
-      <div>Ventas brutas<b>${fmt(c.ventas_brutas)}</b></div>
-      <div>Anulaciones<b>${fmt(c.anulaciones)}</b></div>
-      <div>Ventas netas<b>${fmt(c.ventas_netas)}</b></div>
-      <div>Premios pagados<b>${fmt(c.premios_pagados)}</b></div>
-      <div>Recaudación período<b>${fmt(c.recaudacion)}</b></div>
-      <div>Fondo asignado<b>${fmt(c.fondo_asignado)}</b></div>
-      <div>Entregas<b>${fmt(c.entregas)}</b></div>
-      <div>MI CAJA<b>${fmt(c.mi_caja)}</b></div>
-    </div>
-    <div class="meta">Tickets: ${esc(c.tickets_vendidos)} · Última operación: ${esc(c.ultima_operacion || "—")}</div>
-    <button type="button" class="btn primario" onclick="verDetalleCajero(${c.usuario_id})">VER DETALLE</button>
-  </article>`;
+  </div>`;
 }
 async function cargarVentasCajeros() {
   await cargarCatalogos();
@@ -494,7 +491,7 @@ async function refrescarVentasCajeros() {
     $("#vc-periodo").textContent = `DESDE ${datos.desde}  HASTA ${datos.hasta} · ${datos.total_cajeros} cajero(s)` +
       (datos.es_prueba ? " · PRUEBA" : "");
     $("#vc-lista").innerHTML = (datos.cajeros || []).length
-      ? datos.cajeros.map(tarjetaCajero).join("")
+      ? datos.cajeros.map(filaCajeroCompacta).join("")
       : '<p class="nota">Sin cajeros con estos filtros.</p>';
     msg("#vc-msg", "");
   } catch (e) { msg("#vc-msg", e.message, false); }
@@ -525,9 +522,21 @@ async function verDetalleCajero(id) {
       <br><span class="meta">${esc(m.creado_en || "—")} · ${esc(m.referencia || "")}</span></div>`
     ).join("") || '<p class="nota">Sin movimientos en el período.</p>';
     cuerpo.innerHTML = `
-      <div class="meta" style="margin-bottom:12px">${pillEstadoUsuario(r)} · ${esc(r.sucursal || "—")}<br>
-      Ventas netas ${fmt(r.ventas_netas)} · Premios pagados ${fmt(r.premios_pagados)} · Recaudación ${fmt(r.recaudacion)}<br>
-      Fondo ${fmt(r.fondo_asignado)} · Entregas ${fmt(r.entregas)} · MI CAJA ${fmt(r.mi_caja)}</div>
+      <div class="vc-detalle-cab">
+        ${pillEstadoUsuario(r)} · ${esc(r.sucursal || "—")}
+        <div class="meta">Última operación: ${esc(r.ultima_operacion || "—")}</div>
+      </div>
+      <div class="vc-detalle-montos">
+        <div>Ventas brutas<b>${fmt(r.ventas_brutas)}</b></div>
+        <div>Anulaciones<b>${fmt(r.anulaciones)}</b></div>
+        <div>Ventas netas<b>${fmt(r.ventas_netas)}</b></div>
+        <div>Premios pagados<b>${fmt(r.premios_pagados)}</b></div>
+        <div>Recaudación del período<b>${fmt(r.recaudacion)}</b></div>
+        <div>Fondo asignado<b>${fmt(r.fondo_asignado)}</b></div>
+        <div>Entregas<b>${fmt(r.entregas)}</b></div>
+        <div>MI CAJA<b>${fmt(r.mi_caja)}</b></div>
+      </div>
+      <div class="meta" style="margin:8px 0 12px">Tickets: ${esc(r.tickets_vendidos)} · Vigentes: ${esc(r.tickets_vigentes)} · Anulados: ${esc(r.tickets_anulados)}</div>
       <div class="gan-grupo"><h5>Tickets vendidos</h5>${ventas}</div>
       <div class="gan-grupo"><h5>Premios que pagó</h5>${pagos}</div>
       <div class="gan-grupo"><h5>Movimientos de caja</h5>${movs}</div>`;
@@ -615,6 +624,11 @@ async function cargarLimites() {
     $("#lim-qn-numero").innerHTML = numeros00a99('<option value="*">TODOS LOS NÚMEROS</option>');
     $("#lim-pl-a").innerHTML = numeros00a99();
     $("#lim-pl-b").innerHTML = numeros00a99();
+    $("#lim-sp-a").innerHTML = numeros00a99();
+    $("#lim-sp-b").innerHTML = numeros00a99();
+    $("#lim-tr-a").innerHTML = numeros00a99();
+    $("#lim-tr-b").innerHTML = numeros00a99();
+    $("#lim-tr-c").innerHTML = numeros00a99();
   }
   const elegido = $("#lim-sucursal").value;
   $("#lim-sucursal").innerHTML = opciones(SUCURSALES, (s) => s.id, (s) => `${s.codigo} — ${s.nombre}`);
@@ -650,15 +664,35 @@ async function pintarLimites() {
 function editarLimite(l) {
   LIMITE_EDICION = l.id;
   $("#lim-cajera").value = String(l.usuario_id);
+  const partes = String(l.clave_numero || "").split("-");
   if (l.tipo === "PL") {
     $("#lim-pl-loteria").value = String(l.sorteo_id);
     $("#lim-pl-monto").value = l.monto_max_acumulado;
     if (l.clave_numero === "*") $("#lim-pl-modo").value = "*";
     else {
       $("#lim-pl-modo").value = "uno";
-      const partes = l.clave_numero.split("-");
       $("#lim-pl-a").value = partes[0];
       $("#lim-pl-b").value = partes[1] || partes[0];
+    }
+  } else if (l.tipo === "SP") {
+    $("#lim-sp-loteria1").value = String(l.sorteo_id || 0);
+    $("#lim-sp-loteria2").value = String(l.sorteo2_id || 0);
+    $("#lim-sp-monto").value = l.monto_max_acumulado;
+    if (l.clave_numero === "*") $("#lim-sp-modo").value = "*";
+    else {
+      $("#lim-sp-modo").value = "uno";
+      $("#lim-sp-a").value = partes[0];
+      $("#lim-sp-b").value = partes[1] || partes[0];
+    }
+  } else if (l.tipo === "TR") {
+    $("#lim-tr-loteria").value = String(l.sorteo_id);
+    $("#lim-tr-monto").value = l.monto_max_acumulado;
+    if (l.clave_numero === "*") $("#lim-tr-modo").value = "*";
+    else {
+      $("#lim-tr-modo").value = "uno";
+      $("#lim-tr-a").value = partes[0];
+      $("#lim-tr-b").value = partes[1] || partes[0];
+      $("#lim-tr-c").value = partes[2] || partes[0];
     }
   } else {
     $("#lim-qn-loteria").value = String(l.sorteo_id);
@@ -670,20 +704,39 @@ function editarLimite(l) {
 async function guardarLimiteCajera(tipo) {
   const cajera = $("#lim-cajera").value;
   if (!cajera) throw new Error("Seleccione una cajera");
-  const cuerpo = { usuario_id: Number(cajera), tipo, id: LIMITE_EDICION };
+  const cuerpo = { usuario_id: Number(cajera), tipo, id: LIMITE_EDICION, sorteo2_id: 0 };
   if (tipo === "QN") {
     cuerpo.sorteo_id = Number($("#lim-qn-loteria").value);
     cuerpo.numeros = $("#lim-qn-numero").value;
     cuerpo.monto_max_acumulado = Number($("#lim-qn-monto").value);
-  } else {
+  } else if (tipo === "PL") {
     cuerpo.sorteo_id = Number($("#lim-pl-loteria").value);
     cuerpo.numeros = $("#lim-pl-modo").value === "*" ? "*" : `${$("#lim-pl-a").value}-${$("#lim-pl-b").value}`;
     cuerpo.monto_max_acumulado = Number($("#lim-pl-monto").value);
+  } else if (tipo === "SP") {
+    cuerpo.sorteo_id = Number($("#lim-sp-loteria1").value);
+    cuerpo.sorteo2_id = Number($("#lim-sp-loteria2").value);
+    if (cuerpo.sorteo_id && cuerpo.sorteo2_id && cuerpo.sorteo_id === cuerpo.sorteo2_id) {
+      throw new Error("El Súper Palé requiere dos loterías diferentes");
+    }
+    if ((cuerpo.sorteo_id === 0) !== (cuerpo.sorteo2_id === 0)) {
+      throw new Error("Para SP elija dos loterías, o TODAS en ambas");
+    }
+    cuerpo.numeros = $("#lim-sp-modo").value === "*" ? "*" : `${$("#lim-sp-a").value}-${$("#lim-sp-b").value}`;
+    cuerpo.monto_max_acumulado = Number($("#lim-sp-monto").value);
+  } else if (tipo === "TR") {
+    cuerpo.sorteo_id = Number($("#lim-tr-loteria").value);
+    cuerpo.numeros = $("#lim-tr-modo").value === "*"
+      ? "*"
+      : `${$("#lim-tr-a").value}-${$("#lim-tr-b").value}-${$("#lim-tr-c").value}`;
+    cuerpo.monto_max_acumulado = Number($("#lim-tr-monto").value);
+  } else {
+    throw new Error("Tipo de límite no válido");
   }
   if (!cuerpo.monto_max_acumulado || cuerpo.monto_max_acumulado <= 0) throw new Error("Indique el monto máximo");
   await post("/limites-cajera", cuerpo);
   LIMITE_EDICION = null;
-  msg("#lim-msg", "Límite guardado. Cada número o palé conserva su propio máximo.", true);
+  msg("#lim-msg", "Límite guardado. Cada combinación conserva su propio máximo del día.", true);
   await pintarLimites();
 }
 async function borrarLimiteCajera(id) {
@@ -1423,6 +1476,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#lim-cajera").addEventListener("change", () => pintarLimites().catch(() => {}));
   $("#btn-lim-qn").addEventListener("click", () => guardarLimiteCajera("QN").catch((e) => msg("#lim-msg", e.message, false)));
   $("#btn-lim-pl").addEventListener("click", () => guardarLimiteCajera("PL").catch((e) => msg("#lim-msg", e.message, false)));
+  $("#btn-lim-sp").addEventListener("click", () => guardarLimiteCajera("SP").catch((e) => msg("#lim-msg", e.message, false)));
+  $("#btn-lim-tr").addEventListener("click", () => guardarLimiteCajera("TR").catch((e) => msg("#lim-msg", e.message, false)));
   $("#btn-res-buscar").addEventListener("click", () => buscarResultado().catch((e) => msg("#res-msg", e.message, false)));
   $("#btn-res-guardar").addEventListener("click", guardarResultado);
   $("#btn-res-confirmar").addEventListener("click", confirmarResultado);

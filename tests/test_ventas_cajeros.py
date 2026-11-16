@@ -58,6 +58,42 @@ def test_panel_tiene_seccion_ventas_cajeros(entorno):
     assert 'data-sec="ventas-cajeros"' in html
     assert 'id="sec-ventas-cajeros"' in html
     assert 'id="vc-lista"' in html
+    assert 'vc-lista' in html
     js = entorno.c.get("/static/app.js").text
     assert "cargarVentasCajeros" in js
     assert "verDetalleCajero" in js
+    assert "filaCajeroCompacta" in js
+    assert "VER DETALLE" in js
+    assert "tarjetaCajero" not in js
+    css = entorno.c.get("/static/style.css").text
+    assert ".vc-fila" in css
+    assert ".vc-lista" in css
+
+
+def test_lista_compacta_coincide_con_detalle(entorno, monkeypatch, fijar_hora):
+    """La fila compacta usa las mismas ventas_netas / tickets que el detalle."""
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    fijar_hora(datetime(2026, 11, 14, 10, 0, 0))
+    a = entorno.banca(saldo=5000, usuario="vc3", clave="prueba123")
+    lot = entorno.sorteo_id("LOTEDOM")
+    entorno.vender_ok(a["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "07", "monto": 20}])
+    entorno.vender_ok(a["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "08", "monto": 15}])
+    lista = entorno.c.get(
+        "/reportes/ventas-cajeros?desde=2026-11-14&hasta=2026-11-14&usuario_id="
+        + str(next(u["id"] for u in entorno.c.get("/usuarios", headers=entorno.admin).json() if u["usuario"] == "vc3")),
+        headers=entorno.admin,
+    )
+    assert lista.status_code == 200, lista.text
+    fila = lista.json()["cajeros"][0]
+    det = entorno.c.get(
+        f"/reportes/ventas-cajeros/{fila['usuario_id']}?desde=2026-11-14&hasta=2026-11-14",
+        headers=entorno.admin,
+    )
+    assert det.status_code == 200, det.text
+    r = det.json()["resumen"]
+    assert r["ventas_netas"] == fila["ventas_netas"]
+    assert r["tickets_vendidos"] == fila["tickets_vendidos"]
+    assert r["premios_pagados"] == fila["premios_pagados"]
+    assert r["mi_caja"] == fila["mi_caja"]
+    assert float(fila["ventas_netas"]) == 35
+    assert fila["tickets_vendidos"] == 2

@@ -150,27 +150,36 @@ class TablaPagos(Base):
 
 class LimiteVenta(Base):
     __tablename__ = "limites_venta"
-    __table_args__ = (UniqueConstraint("sorteo_id", "tipo_jugada_id", "clave_numero"),)
+    __table_args__ = (
+        UniqueConstraint("sorteo_id", "sorteo2_id", "tipo_jugada_id", "clave_numero", name="uq_limite_venta"),
+    )
     id = Column(Integer, primary_key=True)
     sorteo_id = Column(Integer, ForeignKey("sorteos.id"), nullable=False)
+    # SP: segunda lotería (par ordenado). 0 = no aplica (QN/PL/TR) o "todas" junto con sorteo_id=0.
+    sorteo2_id = Column(Integer, nullable=False, default=0)
     tipo_jugada_id = Column(Integer, ForeignKey("tipos_jugada.id"), nullable=False)
-    clave_numero = Column(String(12), nullable=False)  # "26" o "26-58" (pareja ordenada)
+    clave_numero = Column(String(20), nullable=False)  # "26", "26-58" o "12-25-38"
     monto_max_acumulado = Column(DINERO, nullable=False)
 
 
 class LimiteCajera(Base):
-    """Tope de una cajera. sorteo_id 0 = todas las loterías. clave * = cada número por separado."""
+    """Tope de una cajera. sorteo_id 0 = todas las loterías. clave * = cada número por separado.
+    SP usa sorteo_id + sorteo2_id (par ordenado); 0+0 = cualquier cruce de loterías."""
 
     __tablename__ = "limites_cajera"
     __table_args__ = (
-        UniqueConstraint("usuario_id", "sorteo_id", "tipo_jugada_id", "clave_numero", name="uq_limite_cajera"),
+        UniqueConstraint(
+            "usuario_id", "sorteo_id", "sorteo2_id", "tipo_jugada_id", "clave_numero",
+            name="uq_limite_cajera",
+        ),
     )
     id = Column(Integer, primary_key=True)
     usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
     sucursal_id = Column(Integer, ForeignKey("sucursales.id"), nullable=False, index=True)
     sorteo_id = Column(Integer, nullable=False, default=0)
+    sorteo2_id = Column(Integer, nullable=False, default=0)
     tipo_jugada_id = Column(Integer, ForeignKey("tipos_jugada.id"), nullable=False)
-    clave_numero = Column(String(12), nullable=False)
+    clave_numero = Column(String(20), nullable=False)
     monto_max_acumulado = Column(DINERO, nullable=False)
 
 

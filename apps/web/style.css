@@ -17,14 +17,17 @@ header{
   background:var(--panel);border-bottom:1px solid var(--borde);position:sticky;top:0;z-index:50
 }
 /* Menú móvil abierto: el Dashboard detrás no se desplaza (iPhone Safari / Android). */
+html.menu-abierto{overflow:hidden;height:100%;overscroll-behavior:none}
 body.menu-abierto{
   overflow:hidden;
   position:fixed;
   width:100%;
   left:0;right:0;
   overscroll-behavior:none;
+  touch-action:none;
 }
-body.menu-abierto main{pointer-events:none;touch-action:none}
+body.menu-abierto main{pointer-events:none;touch-action:none;visibility:hidden}
+body.menu-abierto header{z-index:55}
 .marca{font-size:18px}.marca .sub{color:var(--suave);font-size:13px;margin-left:6px}
 .sesion{color:var(--suave);font-size:14px}
 nav{display:flex;flex-wrap:wrap;gap:6px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--borde)}
@@ -104,6 +107,30 @@ body.con-sesion .login-overlay{display:none !important}
 .caj-card .meta{color:var(--suave);font-size:13px;line-height:1.45}
 .caj-card .montos{display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px}
 .caj-card .montos b{display:block;color:var(--texto);font-size:15px;overflow-wrap:anywhere}
+/* Ventas por Cajero: lista compacta (tema verde del panel). */
+.vc-filtros{align-items:end}
+.vc-chips{display:flex;flex-wrap:wrap;gap:8px;width:100%}
+.vc-lista{
+  margin:8px 0 20px;background:var(--panel);border:1px solid var(--borde);
+  border-radius:12px;overflow:hidden;
+}
+.vc-fila{
+  padding:12px 14px;border-bottom:1px solid var(--borde);min-width:0;
+}
+.vc-fila:last-child{border-bottom:none}
+.vc-fila-info{
+  min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;
+}
+.vc-fila-nombre{font-weight:600;font-size:15px;overflow-wrap:anywhere}
+.vc-fila-meta,.vc-fila-sep{color:var(--suave);font-size:13.5px}
+.vc-fila-monto{color:var(--verde);font-weight:600;font-size:14.5px;overflow-wrap:anywhere}
+.vc-fila-btn{flex:0 0 auto;white-space:nowrap;min-height:40px}
+.vc-detalle-cab{margin-bottom:10px;line-height:1.45}
+.vc-detalle-montos{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+  gap:10px;margin:0 0 8px;font-size:13px;color:var(--suave);
+}
+.vc-detalle-montos b{display:block;color:var(--texto);font-size:15px;margin-top:2px;overflow-wrap:anywhere}
 .tic-lista{display:flex;flex-direction:column;gap:12px;width:100%}
 .tic-card{background:var(--panel);border:1px solid var(--borde);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0}
 .tic-cab{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
@@ -131,29 +158,42 @@ body.con-sesion .login-overlay{display:none !important}
   .sesion{font-size:12px;flex-shrink:0;max-width:42%;text-align:right}
   .sesion #yo-nombre{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
   main{width:100%;max-width:100%}
-  .cards,.caj-lista,.form,.tabla-scroll{width:100%}
+  .cards,.caj-lista,.vc-lista,.form,.tabla-scroll{width:100%}
+  .vc-filtros{flex-direction:column;align-items:stretch;gap:8px;padding:10px}
+  .vc-chips{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .vc-chips .btn{width:100%;min-width:0;padding:11px 8px;font-size:13px}
+  .vc-fila{padding:12px}
+  .vc-fila-info{gap:8px}
+  .vc-fila-btn{width:100%;min-height:44px;margin-left:0}
+  .vc-detalle-montos{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   header{gap:8px;padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top))}
   .btn-menu{display:inline-flex;align-items:center;justify-content:center}
+  /* Anclar top+bottom (no solo max-height/100dvh): en Safari iPhone el panel
+     debe ser el único scroll y llegar hasta Auditoría sin cortarse. */
   nav{
     display:none;position:fixed;
-    top:calc(56px + env(safe-area-inset-top)); left:0; right:0;
-    max-height:calc(100dvh - 56px - env(safe-area-inset-top));
-    overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;
+    top:calc(56px + env(safe-area-inset-top, 0px));
+    left:0; right:0; bottom:0;
+    height:auto;max-height:none;
+    overflow-x:hidden;overflow-y:scroll;-webkit-overflow-scrolling:touch;
     overscroll-behavior:contain;touch-action:pan-y;
-    z-index:45;padding:12px;gap:8px;flex-direction:column;
+    z-index:60;padding:12px;gap:8px;flex-direction:column;flex-wrap:nowrap;
     background:var(--panel);border-bottom:1px solid var(--borde);
     box-shadow:0 12px 28px rgba(0,0,0,.35);
-    padding-bottom:calc(12px + env(safe-area-inset-bottom));
-    isolation:isolate;
+    padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px));
+    isolation:isolate;min-height:0;
   }
   nav.abierto{display:flex}
   .nav-fondo.abierto{
     display:block;position:fixed;
     inset:0;
-    background:rgba(0,0,0,.55);z-index:40;
+    background:rgba(0,0,0,.55);z-index:58;
     overscroll-behavior:none;touch-action:none;
   }
-  .navbtn{width:100%;min-height:48px;border-radius:12px;font-size:16px;text-align:left;padding:12px 16px}
+  .navbtn{
+    width:100%;min-height:48px;border-radius:12px;font-size:16px;text-align:left;
+    padding:12px 16px;flex:0 0 auto;
+  }
   .btn,.btn.primario,.btn.peligro{min-height:46px;padding:12px 16px;font-size:15px}
   .btn.fila,.btn.chico{min-height:40px;padding:8px 12px;font-size:14px}
   .form{flex-direction:column;align-items:stretch}
@@ -193,10 +233,18 @@ body.con-sesion .login-overlay{display:none !important}
 }
 @media(min-width:641px){
   .btn-menu{display:none !important}
-  nav{display:flex !important;position:static;max-height:none;overflow:visible;flex-direction:row;box-shadow:none;isolation:auto;touch-action:auto;overscroll-behavior:auto}
+  nav{
+    display:flex !important;position:static;top:auto;bottom:auto;height:auto;
+    max-height:none;overflow:visible;flex-direction:row;flex-wrap:wrap;
+    box-shadow:none;isolation:auto;touch-action:auto;overscroll-behavior:auto;
+    z-index:auto;padding-bottom:10px;
+  }
+  .navbtn{width:auto;flex:0 0 auto}
   .nav-fondo{display:none !important}
+  html.menu-abierto{overflow:auto;height:auto}
   body.menu-abierto{position:static;overflow-x:hidden;overflow-y:auto;touch-action:auto}
-  body.menu-abierto main{pointer-events:auto}
+  body.menu-abierto main{pointer-events:auto;visibility:visible;touch-action:auto}
+  body.menu-abierto header{z-index:50}
 }
 .gan-lista{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin:12px 0 20px}
 .gan-card{background:var(--panel);border:1px solid var(--borde);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:8px}

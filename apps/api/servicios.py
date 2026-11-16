@@ -7,7 +7,7 @@ import json
 import uuid
 from datetime import datetime, time, timedelta
 
-from sqlalchemy import func, or_, update
+from sqlalchemy import and_, func, or_, update
 from sqlalchemy.exc import IntegrityError
 
 from . import motor
@@ -476,19 +476,51 @@ TODAS_LAS_LOTERIAS = 0
 CUALQUIER_NUMERO = "*"
 
 
-def _acumulado_numero(db, sorteo_id, tipo_id, clave, fecha, usuario_id=None):
-    """Suma montos del día cuya clave (QN/PL ordenada, TR multiset) coincide."""
+def _par_sorteos_limite(sorteo_id, sorteo2_id=0):
+    """Normaliza el par de loterías para SP (orden estable). QN/PL/TR → (id, 0)."""
+    a = int(sorteo_id or 0)
+    b = int(sorteo2_id or 0)
+    if b and a:
+        return tuple(sorted((a, b)))
+    return (a, 0)
+
+
+def _etiqueta_sorteos(db, sorteo_id, sorteo2_id=0):
+    s1 = db.get(Sorteo, sorteo_id) if sorteo_id else None
+    if not sorteo2_id:
+        if not sorteo_id:
+            return "Todas las loterías"
+        return s1.nombre if s1 else "?"
+    s2 = db.get(Sorteo, sorteo2_id)
+    n1 = s1.nombre if s1 else "?"
+    n2 = s2.nombre if s2 else "?"
+    return f"{n1} × {n2}"
+
+
+def _acumulado_numero(db, sorteo_id, tipo_id, clave, fecha, usuario_id=None, sorteo2_id=0, es_prueba=False):
+    """Suma montos del día cuya clave (QN/PL/SP ordenada, TR multiset) coincide.
+    SP acumula el cruce de loterías sin importar el orden guardado en la jugada.
+    Solo suma tickets del mismo ámbito (real o prueba) que la venta en curso."""
+    sid, sid2 = _par_sorteos_limite(sorteo_id, sorteo2_id)
     consulta = (
         db.query(Jugada)
         .join(Ticket)
         .filter(
-            Jugada.sorteo_id == sorteo_id,
             Jugada.tipo_jugada_id == tipo_id,
             Jugada.fecha == fecha,
             Ticket.estado != "anulado",
-            Ticket.es_prueba.is_(False),
+            Ticket.es_prueba.is_(bool(es_prueba)),
         )
     )
+    if sid2:
+        consulta = consulta.filter(
+            or_(
+                and_(Jugada.sorteo_id == sid, Jugada.sorteo2_id == sid2),
+                and_(Jugada.sorteo_id == sid2, Jugada.sorteo2_id == sid),
+            )
+        )
+    else:
+        consulta = consulta.filter(Jugada.sorteo_id == sid)
     if usuario_id is not None:
         consulta = consulta.filter(Ticket.usuario_id == usuario_id)
     total = D(0)
@@ -496,6 +528,23 @@ def _acumulado_numero(db, sorteo_id, tipo_id, clave, fecha, usuario_id=None):
         if clave_numero(jugada.n1, jugada.n2, jugada.n3) == clave:
             total += D(jugada.monto)
     return total
+
+
+def _limites_cajera_aplicables(filas, sorteo_id, sorteo2_id, clave):
+    """Filtra límites de cajera que aplican a esta jugada (incluye * y todas las loterías)."""
+    sid, sid2 = _par_sorteos_limite(sorteo_id, sorteo2_id)
+    aplicables = []
+    for fila in filas:
+        if fila.clave_numero not in (clave, CUALQUIER_NUMERO):
+            continue
+        fs1, fs2 = _par_sorteos_limite(fila.sorteo_id, getattr(fila, "sorteo2_id", 0) or 0)
+        if sid2:
+            if (fs1, fs2) in ((0, 0), (sid, sid2)):
+                aplicables.append(fila)
+        else:
+            if fs2 == 0 and fs1 in (sid, TODAS_LAS_LOTERIAS):
+                aplicables.append(fila)
+    return aplicables
 
 
 def _revisar_tope(nombre, clave, sorteo, tope, ya, extra):
@@ -571,40 +620,68 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
 
     # El tope general y el de la cajera se revisan por número, lotería y fecha.
     # El más bajo de los dos bloquea. Un tope de "todos" aplica a cada número por separado.
+    # SP: el par de loterías se normaliza; TR/PL: la clave ordena la combinación (anti-evasión).
+    # El acumulado usa el mismo ámbito real/prueba que la venta actual.
+    venta_es_prueba = modo_desarrollo()
     acumulado_general = {}
     acumulado_cajera = {}
     for e in expandidas:
         clave = clave_numero(e["n1"], e["n2"], e["n3"])
-        llave = (e["sorteo"].id, e["tipo"].id, clave)
-        general = (
-            db.query(LimiteVenta)
-            .filter_by(sorteo_id=e["sorteo"].id, tipo_jugada_id=e["tipo"].id, clave_numero=clave)
-            .with_for_update()
-            .first()
-        )
+        sid2 = e["sorteo2"].id if e["sorteo2"] is not None else 0
+        sid, sid2 = _par_sorteos_limite(e["sorteo"].id, sid2)
+        llave = (sid, sid2, e["tipo"].id, clave)
+        etiqueta = _etiqueta_sorteos(db, sid, sid2) if sid2 else e["sorteo"].nombre
+        if sid2:
+            general = (
+                db.query(LimiteVenta)
+                .filter(
+                    LimiteVenta.tipo_jugada_id == e["tipo"].id,
+                    LimiteVenta.clave_numero == clave,
+                    or_(
+                        and_(LimiteVenta.sorteo_id == sid, LimiteVenta.sorteo2_id == sid2),
+                        and_(LimiteVenta.sorteo_id == sid2, LimiteVenta.sorteo2_id == sid),
+                    ),
+                )
+                .with_for_update()
+                .first()
+            )
+        else:
+            general = (
+                db.query(LimiteVenta)
+                .filter_by(
+                    sorteo_id=sid, sorteo2_id=0, tipo_jugada_id=e["tipo"].id, clave_numero=clave,
+                )
+                .with_for_update()
+                .first()
+            )
         if general is not None:
-            ya = _acumulado_numero(db, e["sorteo"].id, e["tipo"].id, clave, fecha)
+            ya = _acumulado_numero(
+                db, sid, e["tipo"].id, clave, fecha, sorteo2_id=sid2, es_prueba=venta_es_prueba,
+            )
             extra = acumulado_general.get(llave, D(0)) + e["monto"]
-            _revisar_tope("Límite alcanzado", clave, e["sorteo"].nombre, general.monto_max_acumulado, ya, extra)
+            _revisar_tope("Límite alcanzado", clave, etiqueta, general.monto_max_acumulado, ya, extra)
             acumulado_general[llave] = extra
-        propios = (
+        candidatos = (
             db.query(LimiteCajera)
             .filter(
                 LimiteCajera.usuario_id == operador.id,
                 LimiteCajera.tipo_jugada_id == e["tipo"].id,
-                LimiteCajera.sorteo_id.in_([e["sorteo"].id, TODAS_LAS_LOTERIAS]),
                 LimiteCajera.clave_numero.in_([clave, CUALQUIER_NUMERO]),
             )
             .order_by(LimiteCajera.id)
             .with_for_update()
             .all()
         )
+        propios = _limites_cajera_aplicables(candidatos, sid, sid2, clave)
         if propios:
             tope = min(propios, key=lambda fila: D(fila.monto_max_acumulado))
-            ya = _acumulado_numero(db, e["sorteo"].id, e["tipo"].id, clave, fecha, operador.id)
+            ya = _acumulado_numero(
+                db, sid, e["tipo"].id, clave, fecha, operador.id,
+                sorteo2_id=sid2, es_prueba=venta_es_prueba,
+            )
             extra = acumulado_cajera.get(llave, D(0)) + e["monto"]
             _revisar_tope(
-                "Límite de la cajera alcanzado", clave, e["sorteo"].nombre,
+                "Límite de la cajera alcanzado", clave, etiqueta,
                 tope.monto_max_acumulado, ya, extra,
             )
             acumulado_cajera[llave] = extra
@@ -1651,12 +1728,13 @@ def aplicar_limite_todas(db, tipo_codigo, numeros, monto, usuario_id, reemplazar
     omitidos = []
     for sorteo in sorteos:
         existente = db.query(LimiteVenta).filter_by(
-            sorteo_id=sorteo.id, tipo_jugada_id=tipo.id, clave_numero=clave).first()
+            sorteo_id=sorteo.id, sorteo2_id=0, tipo_jugada_id=tipo.id, clave_numero=clave,
+        ).first()
         if existente is None:
             creados.append({"id": sorteo.id, "sorteo": sorteo.nombre})
             if aplicar:
                 db.add(LimiteVenta(
-                    sorteo_id=sorteo.id, tipo_jugada_id=tipo.id, clave_numero=clave,
+                    sorteo_id=sorteo.id, sorteo2_id=0, tipo_jugada_id=tipo.id, clave_numero=clave,
                     monto_max_acumulado=D(monto)))
         elif reemplazar:
             actualizados.append({"id": sorteo.id, "sorteo": sorteo.nombre})
@@ -1690,7 +1768,7 @@ def limite_cajera_a_dict(db, fila):
     cajera = db.get(Usuario, fila.usuario_id)
     sucursal = db.get(Sucursal, fila.sucursal_id)
     tipo = db.get(TipoJugada, fila.tipo_jugada_id)
-    sorteo = db.get(Sorteo, fila.sorteo_id) if fila.sorteo_id else None
+    sid2 = int(getattr(fila, "sorteo2_id", 0) or 0)
     codigo = tipo.codigo if tipo else "?"
     if fila.clave_numero == CUALQUIER_NUMERO:
         numero = "Todos los números" if codigo == "QN" else "Cualquier combinación"
@@ -1704,7 +1782,8 @@ def limite_cajera_a_dict(db, fila):
         "sucursal_id": fila.sucursal_id,
         "sucursal": sucursal.nombre if sucursal else "",
         "sorteo_id": fila.sorteo_id,
-        "sorteo": "Todas las loterías" if not fila.sorteo_id else (sorteo.nombre if sorteo else "?"),
+        "sorteo2_id": sid2,
+        "sorteo": _etiqueta_sorteos(db, fila.sorteo_id, sid2),
         "tipo": codigo,
         "clave_numero": fila.clave_numero,
         "numero": numero,
@@ -1719,7 +1798,9 @@ def _clave_limite(tipo, numeros):
     return clave_numero(n1, n2, n3)
 
 
-def guardar_limite_cajera(db, admin, usuario_id, sorteo_id, tipo_codigo, numeros, monto, limite_id=None):
+def guardar_limite_cajera(
+    db, admin, usuario_id, sorteo_id, tipo_codigo, numeros, monto, limite_id=None, sorteo2_id=None,
+):
     if admin is None or admin.rol != "admin":
         raise ErrorServicio(403, "Solo un administrador puede guardar límites de cajera")
     if D(monto) <= 0:
@@ -1731,12 +1812,29 @@ def guardar_limite_cajera(db, admin, usuario_id, sorteo_id, tipo_codigo, numeros
     if tipo is None or tipo.codigo not in ("QN", "PL", "SP", "TR"):
         raise ErrorServicio(400, "El tipo de límite no es válido")
     sorteo = int(sorteo_id or 0)
-    if sorteo and db.get(Sorteo, sorteo) is None:
-        raise ErrorServicio(404, "La lotería no existe")
+    sorteo2 = int(sorteo2_id or 0)
+    if tipo.codigo == "SP":
+        if sorteo and sorteo2:
+            if sorteo == sorteo2:
+                raise ErrorServicio(400, "El Súper Palé requiere dos loterías diferentes")
+            if db.get(Sorteo, sorteo) is None or db.get(Sorteo, sorteo2) is None:
+                raise ErrorServicio(404, "La lotería no existe")
+            sorteo, sorteo2 = _par_sorteos_limite(sorteo, sorteo2)
+        elif not sorteo and not sorteo2:
+            sorteo, sorteo2 = 0, 0
+        else:
+            raise ErrorServicio(400, "Indique las dos loterías del Súper Palé, o TODAS en ambas")
+    else:
+        sorteo2 = 0
+        if sorteo and db.get(Sorteo, sorteo) is None:
+            raise ErrorServicio(404, "La lotería no existe")
     clave = _clave_limite(tipo, numeros)
     otro = (
         db.query(LimiteCajera)
-        .filter_by(usuario_id=cajera.id, sorteo_id=sorteo, tipo_jugada_id=tipo.id, clave_numero=clave)
+        .filter_by(
+            usuario_id=cajera.id, sorteo_id=sorteo, sorteo2_id=sorteo2,
+            tipo_jugada_id=tipo.id, clave_numero=clave,
+        )
         .first()
     )
     if limite_id:
@@ -1753,12 +1851,14 @@ def guardar_limite_cajera(db, admin, usuario_id, sorteo_id, tipo_codigo, numeros
     fila.usuario_id = cajera.id
     fila.sucursal_id = cajera.sucursal_id
     fila.sorteo_id = sorteo
+    fila.sorteo2_id = sorteo2
     fila.tipo_jugada_id = tipo.id
     fila.clave_numero = clave
     fila.monto_max_acumulado = D(monto)
     db.flush()
     auditar(db, "limite_cajera", fila.id, "limite_cajera", usuario_id=admin.id, detalle={
-        "cajera_id": cajera.id, "sorteo_id": sorteo, "tipo": tipo.codigo, "clave": clave, "monto": str(D(monto)),
+        "cajera_id": cajera.id, "sorteo_id": sorteo, "sorteo2_id": sorteo2,
+        "tipo": tipo.codigo, "clave": clave, "monto": str(D(monto)),
     })
     db.commit()
     db.refresh(fila)

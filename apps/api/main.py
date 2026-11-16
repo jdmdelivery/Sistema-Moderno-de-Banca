@@ -166,10 +166,11 @@ def tabla_dict(f):
 
 
 def limite_dict(l, db):
-    sorteo = db.get(Sorteo, l.sorteo_id)
+    sid2 = int(getattr(l, "sorteo2_id", 0) or 0)
     tipo = db.get(TipoJugada, l.tipo_jugada_id)
     return {
-        "id": l.id, "sorteo_id": l.sorteo_id, "sorteo": sorteo.nombre if sorteo else "?",
+        "id": l.id, "sorteo_id": l.sorteo_id, "sorteo2_id": sid2,
+        "sorteo": servicios._etiqueta_sorteos(db, l.sorteo_id, sid2),
         "tipo": tipo.codigo if tipo else "?", "clave_numero": l.clave_numero,
         "monto_max_acumulado": str(D(l.monto_max_acumulado)),
     }
@@ -648,6 +649,7 @@ def crear_factor(datos: TablaIn, db=Depends(get_db), usuario=Depends(requiere_ro
 # ------------------------------------------------------------------ límites
 class LimiteIn(BaseModel):
     sorteo_id: int
+    sorteo2_id: int | None = None
     tipo: str
     numeros: str
     monto_max_acumulado: float
@@ -665,15 +667,27 @@ def crear_limite(datos: LimiteIn, db=Depends(get_db), usuario=Depends(requiere_r
         raise ErrorServicio(404, "Sorteo o tipo de jugada no válido")
     n1, n2, n3 = servicios._parse_numeros(tipo.codigo, datos.numeros)
     clave = servicios.clave_numero(n1, n2, n3)
+    sid2 = int(getattr(datos, "sorteo2_id", 0) or 0)
+    if tipo.codigo == "SP":
+        if not sid2 or sid2 == datos.sorteo_id:
+            raise ErrorServicio(400, "El Súper Palé requiere dos loterías diferentes")
+        if db.get(Sorteo, sid2) is None:
+            raise ErrorServicio(404, "Sorteo o tipo de jugada no válido")
+        sid, sid2 = servicios._par_sorteos_limite(datos.sorteo_id, sid2)
+    else:
+        sid, sid2 = datos.sorteo_id, 0
     existente = db.query(LimiteVenta).filter_by(
-        sorteo_id=datos.sorteo_id, tipo_jugada_id=tipo.id, clave_numero=clave).first()
+        sorteo_id=sid, sorteo2_id=sid2, tipo_jugada_id=tipo.id, clave_numero=clave,
+    ).first()
     if existente is not None:
         existente.monto_max_acumulado = D(datos.monto_max_acumulado)
         db.commit()
         db.refresh(existente)
         return limite_dict(existente, db)
-    lim = LimiteVenta(sorteo_id=datos.sorteo_id, tipo_jugada_id=tipo.id, clave_numero=clave,
-                      monto_max_acumulado=D(datos.monto_max_acumulado))
+    lim = LimiteVenta(
+        sorteo_id=sid, sorteo2_id=sid2, tipo_jugada_id=tipo.id, clave_numero=clave,
+        monto_max_acumulado=D(datos.monto_max_acumulado),
+    )
     db.add(lim)
     db.flush()
     servicios.auditar(db, "limite", lim.id, "creacion", usuario_id=usuario.id, detalle={"clave": clave})
@@ -712,6 +726,7 @@ def borrar_limite(limite_id: int, db=Depends(get_db), usuario=Depends(requiere_r
 class LimiteCajeraIn(BaseModel):
     usuario_id: int
     sorteo_id: int | None = None
+    sorteo2_id: int | None = None
     tipo: str
     numeros: str | None = None
     monto_max_acumulado: float
@@ -729,7 +744,7 @@ def guardar_limite_cajera(datos: LimiteCajeraIn, db=Depends(get_db),
                           usuario=Depends(requiere_rol("admin"))):
     return servicios.guardar_limite_cajera(
         db, usuario, datos.usuario_id, datos.sorteo_id, datos.tipo, datos.numeros,
-        datos.monto_max_acumulado, datos.id,
+        datos.monto_max_acumulado, datos.id, datos.sorteo2_id,
     )
 
 

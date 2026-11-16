@@ -151,8 +151,8 @@
 <section id="sec-ventas-cajeros" class="seccion">
   <h2>Ventas por Cajero</h2>
   <p class="nota">Cada cajero por separado. Los premios cuentan para quien los pagó, no automáticamente para quien vendió el ticket. El fondo asignado no se mezcla con las ventas.</p>
-  <div class="form">
-    <div class="chips" id="vc-chips">
+  <div class="form vc-filtros">
+    <div class="chips vc-chips" id="vc-chips">
       <button type="button" class="btn" data-rango="hoy">HOY</button>
       <button type="button" class="btn" data-rango="ayer">AYER</button>
       <button type="button" class="btn" data-rango="semana">ESTA SEMANA</button>
@@ -166,7 +166,7 @@
     <p id="vc-msg" class="msg"></p>
   </div>
   <p id="vc-periodo" class="nota"></p>
-  <div id="vc-lista" class="caj-lista"></div>
+  <div id="vc-lista" class="vc-lista"></div>
 </section>
 
 <div id="vc-modal" class="modal" hidden>
@@ -222,7 +222,7 @@
 
 <section id="sec-limites" class="seccion">
   <h2>Límites por cajera</h2>
-  <p class="nota">Cada número y cada palé tienen su propio máximo del día. El límite general, si existe, sigue aplicando cuando es más bajo.</p>
+  <p class="nota">Cada número, palé, súper palé y tripleta tienen su propio máximo del día. El límite general, si existe, sigue aplicando cuando es más bajo. El orden de los números no evade el tope.</p>
   <h3>Elegir cajera</h3>
   <div class="form">
     <label>Sucursal<select id="lim-sucursal"></select></label>
@@ -246,6 +246,32 @@
     <label>Segundo<select id="lim-pl-b"></select></label>
     <label>Máximo por palé RD$<input id="lim-pl-monto" type="number" min="0.01" step="0.01" placeholder="50"></label>
     <button id="btn-lim-pl" class="btn primario">GUARDAR PALÉ</button>
+  </div>
+  <h3>Límites de súper palé (SP)</h3>
+  <div class="form">
+    <label>Primera lotería<select id="lim-sp-loteria1"></select></label>
+    <label>Segunda lotería<select id="lim-sp-loteria2"></select></label>
+    <label>Combinación<select id="lim-sp-modo">
+      <option value="*">Cualquier súper palé</option>
+      <option value="uno">Una combinación</option>
+    </select></label>
+    <label>Primero<select id="lim-sp-a"></select></label>
+    <label>Segundo<select id="lim-sp-b"></select></label>
+    <label>Máximo SP RD$<input id="lim-sp-monto" type="number" min="0.01" step="0.01" placeholder="50"></label>
+    <button id="btn-lim-sp" class="btn primario">GUARDAR SÚPER PALÉ</button>
+  </div>
+  <h3>Límites de tripleta (TR)</h3>
+  <div class="form">
+    <label>Lotería<select id="lim-tr-loteria"></select></label>
+    <label>Combinación<select id="lim-tr-modo">
+      <option value="*">Cualquier tripleta</option>
+      <option value="uno">Una combinación</option>
+    </select></label>
+    <label>Primero<select id="lim-tr-a"></select></label>
+    <label>Segundo<select id="lim-tr-b"></select></label>
+    <label>Tercero<select id="lim-tr-c"></select></label>
+    <label>Máximo TR RD$<input id="lim-tr-monto" type="number" min="0.01" step="0.01" placeholder="20"></label>
+    <button id="btn-lim-tr" class="btn primario">GUARDAR TRIPLETA</button>
     <p id="lim-msg" class="msg"></p>
   </div>
   <h3>Límites guardados</h3>

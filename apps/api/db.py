@@ -171,6 +171,14 @@ def _columnas_faltantes():
                 ))
             if "n3" not in cols:
                 conn.execute(text(f"ALTER TABLE jugadas {_agregar_columna(eng)} n3 INTEGER"))
+    for tabla in ("limites_cajera", "limites_venta"):
+        if tabla in insp.get_table_names():
+            cols = {c["name"] for c in insp.get_columns(tabla)}
+            with eng.begin() as conn:
+                if "sorteo2_id" not in cols:
+                    conn.execute(text(
+                        f"ALTER TABLE {tabla} {_agregar_columna(eng)} sorteo2_id INTEGER NOT NULL DEFAULT 0"
+                    ))
     _proteger_pago_parcial()
 
 
