@@ -14,9 +14,30 @@ def factores_de(jugada) -> dict:
     return {k: D(v) for k, v in json.loads(jugada.factores_json or "{}").items()}
 
 
+def _resultado_coincide(jugada, resultado, sorteo_id):
+    """Un resultado solo aplica si coinciden fecha y sorteo exactos.
+
+    La igualdad de números no basta: un 25 del día 14 no gana un ticket del 15.
+    """
+    if resultado is None or sorteo_id is None or jugada.fecha is None:
+        return False
+    if resultado.estado == "error_fuente":
+        return False
+    return resultado.sorteo_id == sorteo_id and resultado.fecha == jugada.fecha
+
+
 def evaluar_jugada(jugada, res_a, res_b=None):
     """Devuelve (premio, detalle). res_a = resultado del sorteo principal;
-    res_b = resultado del segundo sorteo (solo Súper Palé)."""
+    res_b = resultado del segundo sorteo (solo Súper Palé).
+
+    Exige que cada resultado sea de la misma fecha y del mismo sorteo que la
+    jugada. Nunca se acepta el «último resultado disponible» de otra fecha.
+    """
+    if not _resultado_coincide(jugada, res_a, jugada.sorteo_id):
+        raise ErrorServicio(
+            500,
+            "El resultado no corresponde a la fecha y el sorteo de la jugada",
+        )
     factores = factores_de(jugada)
     monto = D(jugada.monto)
     tipo = jugada.tipo.codigo
@@ -38,8 +59,11 @@ def evaluar_jugada(jugada, res_a, res_b=None):
             return D(monto * factores[clave]), clave
         return D(0), None
     if tipo == "SP":
-        if res_b is None:
-            raise ErrorServicio(500, "Súper Palé sin el resultado de la segunda lotería")
+        if not _resultado_coincide(jugada, res_b, jugada.sorteo2_id):
+            raise ErrorServicio(
+                500,
+                "Súper Palé: el segundo resultado no corresponde a la fecha y el sorteo de la jugada",
+            )
         if {jugada.n1, jugada.n2} == {res_a.premio1, res_b.premio1}:
             return D(monto * factores["sp"]), "sp"
         return D(0), None
@@ -172,7 +196,14 @@ def liquidar_pruebas_fecha(db, fecha):
 
 
 def _liquidar(db, resultado, prueba):
+    """Liquida solo jugadas con la misma fecha y el mismo sorteo del resultado.
+
+    Clave obligatoria: (resultado.fecha, resultado.sorteo_id). No se usa el
+    último resultado de otra fecha aunque los números coincidan.
+    """
     fecha, sid = resultado.fecha, resultado.sorteo_id
+    if fecha is None or sid is None:
+        return 0
     afectados = set()
     jugadas = (
         db.query(Jugada)
@@ -187,10 +218,13 @@ def _liquidar(db, resultado, prueba):
         .all()
     )
     for j in jugadas:
-        if j.tipo.codigo in ("QN", "PL"):
-            premio, detalle = evaluar_jugada(j, resultado)
-            j.evaluada, j.premio, j.detalle_eval = True, premio, detalle
-            afectados.add(j.ticket_id)
+        if j.tipo.codigo not in ("QN", "PL"):
+            continue
+        if not _resultado_coincide(j, resultado, j.sorteo_id):
+            continue
+        premio, detalle = evaluar_jugada(j, resultado)
+        j.evaluada, j.premio, j.detalle_eval = True, premio, detalle
+        afectados.add(j.ticket_id)
     sp = (
         db.query(Jugada)
         .join(Ticket)
@@ -206,9 +240,12 @@ def _liquidar(db, resultado, prueba):
     for j in sp:
         if j.tipo.codigo != "SP":
             continue
-        r1 = _resultado_util(db, j.sorteo_id, fecha, prueba)
-        r2 = _resultado_util(db, j.sorteo2_id, fecha, prueba)
+        # Ambos resultados deben ser de la misma fecha de la jugada.
+        r1 = _resultado_util(db, j.sorteo_id, j.fecha, prueba)
+        r2 = _resultado_util(db, j.sorteo2_id, j.fecha, prueba)
         if r1 is None or r2 is None:
+            continue
+        if not _resultado_coincide(j, r1, j.sorteo_id) or not _resultado_coincide(j, r2, j.sorteo2_id):
             continue
         premio, detalle = evaluar_jugada(j, r1, r2)
         j.evaluada, j.premio, j.detalle_eval = True, premio, detalle
@@ -221,11 +258,42 @@ def _liquidar(db, resultado, prueba):
 
 
 def _resultado_util(db, sorteo_id, fecha, prueba):
+    """Resultado aplicable a un ticket: exacto por (sorteo_id, fecha).
+
+    Nunca cae al resultado más reciente de otra fecha.
+    """
+    if sorteo_id is None or fecha is None:
+        return None
     r = db.query(Resultado).filter_by(sorteo_id=sorteo_id, fecha=fecha).first()
     if r is None or r.estado == "error_fuente":
         return None
     if prueba or r.estado in ("confirmado", "liquidado"):
         return r
+    return None
+
+
+def premio_respaldado(db, jugada, prueba=False):
+    """Recalcula el premio con el resultado exacto de la fecha de la jugada.
+
+    Si falta el resultado de esa fecha/sorteo, o es solo provisional en un
+    cobro real, no respalda el pago. No usa resultados de otros días.
+    """
+    if jugada is None or jugada.fecha is None:
+        return None
+    tipo = jugada.tipo.codigo if jugada.tipo else None
+    if tipo in ("QN", "PL"):
+        r1 = _resultado_util(db, jugada.sorteo_id, jugada.fecha, prueba)
+        if r1 is None:
+            return None
+        premio, detalle = evaluar_jugada(jugada, r1)
+        return premio, detalle, r1
+    if tipo == "SP":
+        r1 = _resultado_util(db, jugada.sorteo_id, jugada.fecha, prueba)
+        r2 = _resultado_util(db, jugada.sorteo2_id, jugada.fecha, prueba)
+        if r1 is None or r2 is None:
+            return None
+        premio, detalle = evaluar_jugada(jugada, r1, r2)
+        return premio, detalle, r1
     return None
 
 

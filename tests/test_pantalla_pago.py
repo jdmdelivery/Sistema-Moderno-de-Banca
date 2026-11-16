@@ -127,7 +127,8 @@ def test_tres_loterias_cobra_las_listas_y_deja_la_pendiente(entorno, monkeypatch
     assert consulta["premio_pendiente"] == "1200.00"
     assert "SORTEOS PENDIENTES" in consulta["texto_pago"]
     assert "Florida 2:30 PM" in consulta["texto_pago"]
-    assert "Esos sorteos no se pagan todavía." in consulta["texto_pago"]
+    assert "Esos sorteos no se pagan todavía" in consulta["texto_pago"]
+    assert "No se usan resultados de otros días" in consulta["texto_pago"]
     caja = entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()
     antes = float(caja["mi_caja"])
     assert float(caja["premios_por_pagar"]) == 1200.00

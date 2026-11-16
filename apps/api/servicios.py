@@ -747,6 +747,9 @@ def ticket_a_dict(db, ticket, saldo_restante=None):
 
 
 def _numero_oficial(db, sorteo_id, fecha):
+    """Solo el resultado de esa fecha y ese sorteo. Nunca el de otro día."""
+    if sorteo_id is None or fecha is None:
+        return None
     fila = db.query(Resultado).filter_by(sorteo_id=sorteo_id, fecha=fecha).first()
     if fila is None or fila.estado == "error_fuente":
         return None
@@ -916,8 +919,15 @@ def _vista_pago(db, ticket):
     if pendientes and ticket.estado not in ("anulado", "vencido", "pagado"):
         lineas.append("SORTEOS PENDIENTES")
         for fila in pendientes:
-            lineas.append(f"{fila['loteria']} {fila['fecha']} — PENDIENTE")
-        lineas.append("Esos sorteos no se pagan todavía.")
+            fecha_txt = fila["fecha"]
+            try:
+                y, m, d = fecha_txt.split("-")
+                fecha_txt = f"{d}/{m}/{y}"
+            except Exception:
+                pass
+            lineas.append(f"SORTEO PENDIENTE — {fecha_txt}")
+            lineas.append(f"{fila['loteria']}")
+        lineas.append("Esos sorteos no se pagan todavía. No se usan resultados de otros días.")
         lineas.append("")
     if premios and ticket.estado not in ("anulado", "vencido"):
         lineas.append(f"PREMIO TOTAL: RD${pendiente + pagado}")
@@ -1089,6 +1099,23 @@ def _cobrar_premios(db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, o
         if any(not j.evaluada for j in ticket.jugadas):
             raise ErrorServicio(409, "El ticket aún no es ganador: faltan resultados por liquidar")
         _error_no_pagable(db, ticket)
+    # Antes de cobrar: cada jugada debe respaldarse con el resultado confirmado
+    # de SU fecha y SU sorteo. Un resultado de otro día no autoriza el pago.
+    for jugada in pendientes:
+        respaldo = motor.premio_respaldado(db, jugada, prueba=prueba)
+        if respaldo is None:
+            raise ErrorServicio(
+                409,
+                "No hay resultado confirmado de la fecha y el sorteo de esta jugada. "
+                "No se paga con resultados de otro día.",
+            )
+        premio_ok, _detalle, _fila = respaldo
+        if D(premio_ok) != D(jugada.premio or 0):
+            raise ErrorServicio(
+                409,
+                "El premio guardado no coincide con el resultado confirmado de esa fecha. "
+                "No se pagó.",
+            )
     premio = sum((D(j.premio) for j in pendientes), D(0))
     caja_real = D(sucursal.saldo_actual) if sucursal is not None else D(0)
     if prueba:
@@ -1873,9 +1900,10 @@ def tablero_resultados(db, hoy=None):
 def consulta_resultados(db, hoy):
     """Lectura para la terminal. No confirma, no liquida y no mueve dinero.
 
-    Si el sorteo tiene resultado en la fecha consultada, ese es el que se
-    muestra. Si no, se conserva el último anterior. Un error de fuente no
-    cuenta como resultado.
+    Solo las cifras de `hoy` se muestran como resultado vigente. Si no hay
+    resultado de hoy, la fila queda PENDIENTE (sin números de días anteriores
+    en la pantalla principal). Una referencia histórica opcional puede ir
+    etiquetada con su propia fecha; nunca sustituye al resultado del día.
     """
     sorteos = db.query(Sorteo).filter_by(activo=True).order_by(Sorteo.orden, Sorteo.id).all()
     guardados = (
