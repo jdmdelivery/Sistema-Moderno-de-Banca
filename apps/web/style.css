@@ -63,10 +63,30 @@ input:focus,select:focus{outline:2px solid var(--verde-osc)}
 .texto-impreso{background:#fff;color:#111;border-radius:8px;padding:16px;font-family:ui-monospace,Menlo,monospace;font-size:13.5px;white-space:pre-wrap;max-width:420px}
 .dias{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:var(--suave);font-size:13px;padding-bottom:6px}
 .dias label{display:flex;gap:3px;align-items:center}
-.login-overlay{position:fixed;inset:0;background:rgba(5,8,6,.92);display:flex;align-items:center;justify-content:center;z-index:50}
-.login-box{background:var(--panel);border:1px solid var(--borde);border-radius:16px;padding:28px;width:min(360px,92vw);display:flex;flex-direction:column;gap:10px}
-.login-box h1{margin:0;font-size:24px}.login-box .sub{color:var(--suave);margin:0 0 8px}
+/* Acceso: capa opaca por encima del panel. Sin sesión no se monta el Dashboard. */
+.login-overlay{
+  position:fixed;inset:0;z-index:100;
+  display:none;align-items:center;justify-content:center;
+  background:var(--fondo);
+  padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
+  overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+}
+body.sin-sesion .login-overlay{display:flex}
+body.sin-sesion > header,
+body.sin-sesion > nav,
+body.sin-sesion > #nav-fondo,
+body.sin-sesion > main{display:none !important}
+body.con-sesion .login-overlay{display:none !important}
+.login-box{
+  background:var(--panel);border:1px solid var(--borde);border-radius:16px;
+  padding:28px;width:min(360px,100%);margin:auto;
+  display:flex;flex-direction:column;gap:10px;flex-shrink:0;
+}
+.login-box h1{margin:0;font-size:clamp(20px,5.5vw,24px);line-height:1.2}
+.login-box .sub{color:var(--suave);margin:0 0 8px}
 .login-box label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--suave)}
+.login-box input{width:100%;min-width:0;min-height:44px;font-size:16px}
+.login-box .btn.primario{width:100%;min-height:48px}
 .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;border:1px solid var(--borde)}
 .pill.ganador{background:#14532d}.pill.pagado{background:#1e3a5f}.pill.anulado{background:#5f1e1e}
 .pill.vendido{background:#3d3410}.pill.no_ganador{background:#333}.pill.liquidado{background:#14532d}
@@ -137,8 +157,7 @@ input:focus,select:focus{outline:2px solid var(--verde-osc)}
   .card .num{font-size:clamp(15px,4.5vw,20px)}
   .tabla-scroll table{min-width:680px;font-size:13px}
   th,td{padding:10px 8px}
-  .login-box{padding:22px 18px;width:min(360px,94vw)}
-  .login-box .btn.primario{width:100%;min-height:48px}
+  .login-box{padding:22px 18px;width:min(360px,100%)}
   .caj-card .montos{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   .modal{padding:0;padding-bottom:env(safe-area-inset-bottom)}
   .modal-caja{width:100%;max-height:94dvh;border-radius:16px 16px 0 0}

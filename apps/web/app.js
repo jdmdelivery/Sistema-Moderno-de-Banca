@@ -53,14 +53,35 @@ function opciones(lista, valor, texto, extra = "") {
 }
 
 /* ------------------------------------------------------------------ sesión */
+function pantallaAcceso() {
+  document.body.classList.add("sin-sesion");
+  document.body.classList.remove("con-sesion");
+  cerrarMenuMovil();
+  const login = $("#login");
+  if (login) {
+    login.style.display = "";
+    login.removeAttribute("hidden");
+  }
+}
+
+function pantallaPanel() {
+  document.body.classList.remove("sin-sesion");
+  document.body.classList.add("con-sesion");
+  const login = $("#login");
+  if (login) {
+    login.style.display = "none";
+    login.setAttribute("hidden", "");
+  }
+}
+
 async function entrar() {
   try {
     const r = await post("/auth/login", { usuario: $("#login-usuario").value.trim(), clave: $("#login-clave").value });
     TOKEN = r.token; YO = r.usuario;
     localStorage.setItem("lot_token", TOKEN);
-    $("#login").style.display = "none";
     $("#yo-nombre").textContent = `${YO.nombre} (${YO.rol})`;
     mostrarFondo(YO.rol === "admin");
+    pantallaPanel();
     await cargarCatalogos();
     ir("inicio");
   } catch (e) { msg("#login-msg", e.message, false); }
@@ -69,18 +90,26 @@ async function salir() {
   try { await post("/auth/logout"); } catch {}
   TOKEN = ""; YO = null;
   localStorage.removeItem("lot_token");
+  pantallaAcceso();
   location.reload();
 }
 async function restaurarSesion() {
-  if (!TOKEN) return;
+  if (!TOKEN) {
+    pantallaAcceso();
+    return;
+  }
   try {
     YO = await api("/auth/yo");
-    $("#login").style.display = "none";
     $("#yo-nombre").textContent = `${YO.nombre} (${YO.rol})`;
     mostrarFondo(YO.rol === "admin");
+    pantallaPanel();
     await cargarCatalogos();
     ir("inicio");
-  } catch { TOKEN = ""; localStorage.removeItem("lot_token"); }
+  } catch {
+    TOKEN = "";
+    localStorage.removeItem("lot_token");
+    pantallaAcceso();
+  }
 }
 
 /* --------------------------------------------------------------------- nav */

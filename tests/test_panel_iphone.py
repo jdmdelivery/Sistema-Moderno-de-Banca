@@ -27,6 +27,7 @@ def test_html_tiene_viewport_fit_cover_y_pwa(entorno):
     assert "manifest.webmanifest" in html
     assert 'id="btn-menu"' in html
     assert 'id="nav-fondo"' in html
+    assert 'class="sin-sesion"' in html or "class='sin-sesion'" in html
     # Módulos administrativos clave accesibles
     for sec in (
         "inicio", "usuarios", "ventas-cajeros", "ganadores", "caja",
@@ -34,3 +35,16 @@ def test_html_tiene_viewport_fit_cover_y_pwa(entorno):
     ):
         assert f'data-sec="{sec}"' in html
         assert f'id="sec-{sec}"' in html
+
+
+def test_login_sin_sesion_oculta_panel(entorno):
+    css = entorno.c.get("/static/style.css").text
+    js = entorno.c.get("/static/app.js").text
+    assert "body.sin-sesion" in css
+    assert "body.con-sesion" in css
+    assert "z-index:100" in css or "z-index: 100" in css
+    assert "pantallaAcceso" in js
+    assert "pantallaPanel" in js
+    # El overlay de acceso usa fondo opaco, no un velo sobre el Dashboard.
+    assert "login-overlay" in css
+    assert "background:var(--fondo)" in css or "background: var(--fondo)" in css
