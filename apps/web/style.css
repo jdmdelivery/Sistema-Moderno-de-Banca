@@ -117,6 +117,13 @@ body.con-sesion .login-overlay{display:none !important}
 .estado-pill{display:inline-block;font-size:11px;font-weight:700;padding:4px 8px;border-radius:999px;border:1px solid var(--borde);white-space:nowrap}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chips .btn.activo{background:var(--verde-osc);border-color:var(--verde-osc);color:#fff}
+.inicio-periodo{margin:8px 0 10px;font-size:13px}
+.inicio-bloque-interno{margin-top:14px}
+.inicio-interno-titulo{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--suave);letter-spacing:.02em}
+.fuente-estado{display:grid;gap:6px;line-height:1.45}
+.fuente-estado .fila-estado{display:flex;flex-wrap:wrap;gap:6px 12px}
+.fuente-estado .k{color:var(--suave);min-width:9.5rem}
+.fuente-estado .v{color:var(--texto);overflow-wrap:anywhere}
 @media(max-width:640px){
   main{padding:10px;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
   .marca{font-size:14px;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -152,6 +159,21 @@ body.con-sesion .login-overlay{display:none !important}
   .form{flex-direction:column;align-items:stretch}
   .form label{width:100%}
   input,select,textarea{width:100%;min-width:0;min-height:44px;font-size:16px}
+  .solo-escritorio{display:none !important}
+  #sec-inicio .inicio-filtro{padding:10px;gap:8px}
+  #sec-inicio .inicio-chips{
+    display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+    width:100%;gap:8px;flex-wrap:nowrap;
+  }
+  #sec-inicio .inicio-chips .btn{
+    width:100%;min-width:0;padding:11px 6px;font-size:13px;white-space:nowrap;
+  }
+  #sec-inicio h2{margin:4px 0 8px;font-size:18px}
+  #sec-inicio h3{margin:12px 0 8px;font-size:14px}
+  #sec-inicio .inicio-periodo{margin:6px 0 8px}
+  #sec-inicio .cards{gap:8px;margin:0}
+  #sec-inicio .card{padding:10px}
+  #sec-inicio .card .lbl{font-size:12px}
   .cards{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   .card{padding:12px}
   .card .num{font-size:clamp(15px,4.5vw,20px)}
@@ -161,10 +183,13 @@ body.con-sesion .login-overlay{display:none !important}
   .caj-card .montos{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   .modal{padding:0;padding-bottom:env(safe-area-inset-bottom)}
   .modal-caja{width:100%;max-height:94dvh;border-radius:16px 16px 0 0}
+  .fuente-estado .k{min-width:7.5rem}
 }
 @media(max-width:380px){
   .cards{grid-template-columns:1fr}
   .caj-card .montos{grid-template-columns:1fr}
+  #sec-inicio .inicio-chips{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  #sec-inicio .inicio-chips .btn{font-size:12px;padding:10px 4px}
 }
 @media(min-width:641px){
   .btn-menu{display:none !important}

@@ -817,13 +817,16 @@ def movil_admin(seccion: str = "inicio", desde: str | None = None, hasta: str | 
 
 @app.get("/fuente-resultados")
 def cobertura_resultados(db=Depends(get_db), usuario=Depends(panel_actual)):
+    trabajador = resultados_auto.estado_reloj(db)
     return {
         "fuente": "conectate",
+        "nombre_fuente": "Conéctate.com",
         "url": conectate_widget.URL_WIDGET,
-        "aviso": "Solo el widget público de Conéctate. Tres lecturas iguales y 10 minutos "
-                 "antes de confirmar. No paga solo. RDLotto no se consulta.",
+        "aviso": "Fuente: Conéctate.com. Tres lecturas iguales y 10 minutos "
+                 "antes de confirmar. No paga solo. No inventa números si la fuente falla.",
         "intervalo_segundos": resultados_auto.INTERVALO_SEGUNDOS,
-        "trabajador": resultados_auto.estado_reloj(db),
+        "trabajador": trabajador,
+        "ultimo_resultado": trabajador.get("ultimo_detalle"),
         "sorteos": [
             {
                 "sorteo": s.nombre,

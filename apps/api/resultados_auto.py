@@ -98,6 +98,7 @@ def estado_reloj(db, momento=None):
         "reloj": marca,
         "ultima_ejecucion": None if ultima is None or ultima.creado_en is None else _sin_zona(ultima.creado_en).isoformat(sep=" ", timespec="minutes"),
         "ultima_consulta_ok": None if ultima_ok is None or ultima_ok.creado_en is None else _sin_zona(ultima_ok.creado_en).isoformat(sep=" ", timespec="minutes"),
+        "ultimo_detalle": None if ultima_ok is None else (ultima_ok.detalle or None),
         "proxima_estimada": None if proxima is None else proxima.isoformat(sep=" ", timespec="minutes"),
         "ultimo_error": None if not errores else (errores[0].detalle or "la consulta falló"),
         "errores_recientes": [fila.detalle for fila in errores if fila.detalle],

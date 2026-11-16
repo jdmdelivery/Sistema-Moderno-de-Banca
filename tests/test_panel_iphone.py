@@ -48,3 +48,36 @@ def test_login_sin_sesion_oculta_panel(entorno):
     # El overlay de acceso usa fondo opaco, no un velo sobre el Dashboard.
     assert "login-overlay" in css
     assert "background:var(--fondo)" in css or "background: var(--fondo)" in css
+
+
+def test_dashboard_movil_oculta_calendarios_y_mantiene_chips(entorno):
+    html = entorno.c.get("/").text
+    css = entorno.c.get("/static/style.css").text
+    js = entorno.c.get("/static/app.js").text
+    assert 'id="ini-hoy"' in html and 'id="ini-ayer"' in html and 'id="ini-quince"' in html
+    assert 'id="ini-desde"' in html and 'id="ini-hasta"' in html
+    assert "solo-escritorio" in html
+    assert ".solo-escritorio{display:none" in css.replace(" ", "")
+    assert "inicio-chips" in css
+    assert "consultarPeriodo" in js
+    # Sin encabezado ruidoso de PRUEBA en el Dashboard; los bloques siguen separados.
+    assert '<h3>PRUEBA</h3>' not in html
+    assert 'data-bloque="prueba"' in html
+    assert 'id="inicio-prueba"' in html
+    assert "MODO DESARROLLO" not in html.split('id="sec-inicio"')[1].split("</section>")[0]
+
+
+def test_fuente_resultados_es_conectate(entorno):
+    html = entorno.c.get("/").text
+    js = entorno.c.get("/static/app.js").text
+    assert "Fuente: Conéctate.com" in html
+    assert "Consultando Conéctate.com" in js
+    assert "Consultando RDLotto" not in js
+    assert "La fuente es RDLotto" not in html
+    r = entorno.c.get("/fuente-resultados", headers=entorno.admin)
+    assert r.status_code == 200
+    datos = r.json()
+    assert datos["fuente"] == "conectate"
+    assert datos["nombre_fuente"] == "Conéctate.com"
+    assert "conectate.com" in (datos.get("url") or "").lower()
+    assert datos["trabajador"]["fuente"] == "conectate"

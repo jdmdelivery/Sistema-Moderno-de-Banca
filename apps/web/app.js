@@ -220,13 +220,19 @@ function tarjetasInicio(bloque) {
     [bloque.tickets, "Tickets vendidos"],
     [fmt(bloque.premios_pagados), "Premios pagados"],
     [fmt(bloque.premios_pendientes), "Premios por pagar"],
-    [fmt(bloque.neto), "Neto (ventas − premios pagados)"],
+    [fmt(bloque.neto), "Neto"],
     [fmt(bloque.comision), "Comisión"],
   ];
   return filas.map(([n, l]) => `<div class="card"><div class="num">${esc(n)}</div><div class="lbl">${esc(l)}</div></div>`).join("");
 }
 
-async function cargarInicio(desde, hasta) {
+function marcarChipInicio(tipo) {
+  document.querySelectorAll("#sec-inicio .inicio-chips .btn").forEach((b) => {
+    b.classList.toggle("activo", !!tipo && b.dataset.rango === tipo);
+  });
+}
+
+async function cargarInicio(desde, hasta, chip) {
   if (!desde && !hasta && $("#ini-desde").value && $("#ini-hasta").value) {
     desde = $("#ini-desde").value;
     hasta = $("#ini-hasta").value;
@@ -242,9 +248,11 @@ async function cargarInicio(desde, hasta) {
   INICIO_HOY = r.hoy;
   $("#ini-desde").value = r.desde;
   $("#ini-hasta").value = r.hasta;
-  $("#inicio-periodo").textContent = `DESDE ${r.desde}  HASTA ${r.hasta}  ·  ${r.zona}`;
+  $("#inicio-periodo").textContent = `${r.desde} → ${r.hasta} · ${r.zona}`;
   $("#inicio-reales").innerHTML = tarjetasInicio(r.reales);
   $("#inicio-prueba").innerHTML = tarjetasInicio(r.prueba);
+  if (chip !== undefined) marcarChipInicio(chip || null);
+  else if (!desde && !hasta) marcarChipInicio("hoy");
   msg("#inicio-msg", "");
 }
 
@@ -255,7 +263,7 @@ function consultarPeriodo(tipo) {
     : tipo === "quince"
       ? [sumarDias(hoy, -14), hoy]
       : [hoy, hoy];
-  return cargarInicio(rango[0], rango[1]);
+  return cargarInicio(rango[0], rango[1], tipo);
 }
 
 /* --------------------------------------------------------------- sucursales */
@@ -1381,7 +1389,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#ini-hoy").addEventListener("click", () => consultarPeriodo("hoy").catch((e) => msg("#inicio-msg", e.message, false)));
   $("#ini-ayer").addEventListener("click", () => consultarPeriodo("ayer").catch((e) => msg("#inicio-msg", e.message, false)));
   $("#ini-quince").addEventListener("click", () => consultarPeriodo("quince").catch((e) => msg("#inicio-msg", e.message, false)));
-  $("#ini-consultar").addEventListener("click", () => cargarInicio($("#ini-desde").value, $("#ini-hasta").value).catch((e) => msg("#inicio-msg", e.message, false)));
+  $("#ini-consultar").addEventListener("click", () => cargarInicio($("#ini-desde").value, $("#ini-hasta").value, null).catch((e) => msg("#inicio-msg", e.message, false)));
   $("#btn-login").addEventListener("click", entrar);
   $("#login-clave").addEventListener("keydown", (e) => { if (e.key === "Enter") entrar(); });
   $("#btn-salir").addEventListener("click", salir);
@@ -1481,25 +1489,44 @@ document.addEventListener("DOMContentLoaded", () => {
   restaurarSesion();
 });
 
+function filaEstadoFuente(clave, valor) {
+  return `<div class="fila-estado"><span class="k">${esc(clave)}</span><span class="v">${esc(valor)}</span></div>`;
+}
+
 async function cargarFuente() {
   const datos = await api("/fuente-resultados");
   const trabajador = datos.trabajador || {};
-  $("#fuente-estado").textContent =
-    `${datos.aviso} Intervalo ${datos.intervalo_segundos} s. ` +
-    `Trabajador ${trabajador.activo ? "activo" : "detenido"}. ` +
-    `Última consulta: ${trabajador.ultimo_intento || "—"}. ` +
-    `Último éxito: ${trabajador.ultimo_ok || "—"}. ` +
-    `Error: ${trabajador.ultimo_error || "ninguno"}.`;
+  const fuenteNombre = datos.nombre_fuente || (datos.fuente === "conectate" ? "Conéctate.com" : (datos.fuente || "—"));
+  const reloj = trabajador.reloj || (trabajador.activo ? "ACTIVO" : "DETENIDO");
+  const ultimaConsulta = trabajador.ultima_ejecucion || trabajador.ultimo_intento || "—";
+  const ultimaOk = trabajador.ultima_consulta_ok || trabajador.ultimo_ok || "—";
+  const ultimoDetalle = trabajador.ultimo_detalle || datos.ultimo_resultado || "—";
+  const error = trabajador.ultimo_error || "ninguno";
+  const conectados = (datos.sorteos || []).filter((s) => s.conectada).length;
+  const total = (datos.sorteos || []).length;
+  $("#fuente-estado").innerHTML = [
+    filaEstadoFuente("Fuente", fuenteNombre),
+    filaEstadoFuente("Estado de conexión", `${conectados}/${total} sorteos con fuente`),
+    filaEstadoFuente("Trabajador automático", reloj),
+    filaEstadoFuente("Última consulta", ultimaConsulta),
+    filaEstadoFuente("Última verificación correcta", ultimaOk),
+    filaEstadoFuente("Último resultado recibido", ultimoDetalle),
+    filaEstadoFuente("Intervalo", `${datos.intervalo_segundos || "—"} s`),
+    filaEstadoFuente("Errores", error),
+  ].join("");
   tabla("#fuente-tabla",
-    ["Sorteo", "Identificador", "Sesión", "Hora de la fuente", "Conexión", "Motivo"],
-    datos.sorteos.map((s) => `<tr><td>${esc(s.sorteo)}</td><td>${esc(s.game || "—")}</td><td>${esc(s.session || "—")}</td>
-      <td>${esc(s.hora_fuente || "—")}</td><td>${s.conectada ? "Conectada" : "Sin conexión"}</td><td>${esc(s.motivo || "")}</td></tr>`));
+    ["Sorteo", "Hora", "Conexión", "Motivo"],
+    (datos.sorteos || []).map((s) => `<tr><td>${esc(s.sorteo)}</td><td>${esc(s.hora || s.hora_fuente || "—")}</td>
+      <td>${s.conectada ? "Conectada" : "Sin conexión"}</td><td>${esc(s.motivo || "")}</td></tr>`));
 }
 
 async function consultarFuente() {
-  msg("#fuente-msg", "Consultando RDLotto…");
+  msg("#fuente-msg", "Consultando Conéctate.com...");
   const r = await post("/fuente-resultados/sincronizar", {});
-  msg("#fuente-msg", r.ok ? `Guardados en verificación: ${r.guardados || 0}` : (r.motivo || "La fuente falló"), !!r.ok);
+  const resumen = r.ok
+    ? `Encontrados: ${r.encontrados || 0} · Confirmados: ${r.confirmados || 0}`
+    : (r.motivo || "La fuente falló");
+  msg("#fuente-msg", resumen, !!r.ok);
   await cargarFuente();
 }
 

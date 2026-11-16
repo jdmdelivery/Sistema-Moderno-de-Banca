@@ -56,24 +56,25 @@
 <main>
 <section id="sec-inicio" class="seccion activo">
   <h2>Resumen</h2>
-  <div class="form">
-    <div class="chips">
-      <button type="button" id="ini-hoy" class="btn">HOY</button>
-      <button type="button" id="ini-ayer" class="btn">AYER</button>
-      <button type="button" id="ini-quince" class="btn">15 DÍAS</button>
+  <div class="form inicio-filtro">
+    <div class="chips inicio-chips">
+      <button type="button" id="ini-hoy" class="btn" data-rango="hoy">HOY</button>
+      <button type="button" id="ini-ayer" class="btn" data-rango="ayer">AYER</button>
+      <button type="button" id="ini-quince" class="btn" data-rango="quince">15 DÍAS</button>
     </div>
-    <label>DESDE<input id="ini-desde" type="date"></label>
-    <label>HASTA<input id="ini-hasta" type="date"></label>
-    <button type="button" id="ini-consultar" class="btn primario">CONSULTAR</button>
+    <label class="solo-escritorio">DESDE<input id="ini-desde" type="date"></label>
+    <label class="solo-escritorio">HASTA<input id="ini-hasta" type="date"></label>
+    <button type="button" id="ini-consultar" class="btn primario solo-escritorio">CONSULTAR</button>
     <p id="inicio-msg" class="msg"></p>
   </div>
-  <p id="inicio-periodo" class="nota"></p>
-  <h3>REALES</h3>
-  <div id="inicio-reales" class="cards"></div>
-  <h3>PRUEBA</h3>
-  <div id="inicio-prueba" class="cards"></div>
-  <p class="nota">Las ventas usan la fecha de la venta. Los premios pagados usan la fecha del pago. Los pendientes son ganadores de ese período que siguen sin pagar. La comisión es el porcentaje vigente de cada cajera sobre las ventas no anuladas. PRUEBA no entra en REALES.</p>
-  <p class="nota">PostgreSQL está en el plan gratuito de Render. Ese plan vence y no hace respaldos por sí solo. Exporte una copia de la base antes del vencimiento y antes de usar dinero real. No es un archivo permanente sin límite.</p>
+  <p id="inicio-periodo" class="nota inicio-periodo"></p>
+  <h3>Reales</h3>
+  <div id="inicio-reales" class="cards" data-bloque="reales"></div>
+  <div class="inicio-bloque-interno" data-bloque="prueba" aria-label="Indicadores separados de reales">
+    <h3 class="inicio-interno-titulo">Separados de reales</h3>
+    <div id="inicio-prueba" class="cards"></div>
+  </div>
+  <p class="nota solo-escritorio">PostgreSQL está en el plan gratuito de Render. Ese plan vence y no hace respaldos por sí solo. Exporte una copia de la base antes del vencimiento y antes de usar dinero real.</p>
 </section>
 
 <section id="sec-sucursales" class="seccion">
@@ -489,12 +490,12 @@
 
 <section id="sec-fuente" class="seccion">
   <h2>Estado de resultados automáticos</h2>
-  <p class="nota">La fuente es RDLotto. Sus números son información, no el resultado oficial del operador. Un resultado verificado queda en verificación y no habilita pagos hasta que el consorcio pulse Confirmar y liquidar. Si la fuente falla, no se inventan números.</p>
+  <p class="nota"><b>Fuente: Conéctate.com</b> — Sus números son información, no el resultado oficial del operador. Tres lecturas iguales y diez minutos antes de confirmar. Un resultado verificado no habilita pagos hasta Confirmar y liquidar. Si la fuente falla, no se inventan números.</p>
   <div class="form">
     <button id="btn-fuente" class="btn primario">CONSULTAR AHORA</button>
     <p id="fuente-msg" class="msg"></p>
   </div>
-  <div id="fuente-estado" class="estado-box">Sin consulta todavía.</div>
+  <div id="fuente-estado" class="estado-box fuente-estado">Sin consulta todavía.</div>
   <div id="fuente-tabla"></div>
 </section>
 
