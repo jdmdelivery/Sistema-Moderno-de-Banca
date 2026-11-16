@@ -322,6 +322,25 @@
     </div>
   </div>
 
+  <div id="tic-anular-modal" class="modal" hidden>
+    <div class="modal-caja">
+      <div class="modal-cab">
+        <h3>Confirmar anulación</h3>
+        <button type="button" class="btn" id="tic-anular-cancelar">CANCELAR</button>
+      </div>
+      <div class="modal-cuerpo">
+        <p id="tic-anular-resumen" class="meta"></p>
+        <div id="tic-anular-avisos" class="nota"></div>
+        <label>MOTIVO (obligatorio)<input id="tic-anular-motivo" placeholder="Escriba el motivo" maxlength="200"></label>
+        <div class="tic-acciones" style="margin-top:12px">
+          <button type="button" class="btn peligro" id="tic-anular-confirmar">CONFIRMAR ANULACIÓN</button>
+          <button type="button" class="btn" id="tic-anular-cancelar-2">CANCELAR</button>
+        </div>
+        <p id="tic-anular-msg" class="msg"></p>
+      </div>
+    </div>
+  </div>
+
   <h3>Consultar / pagar / anular por ID o serial</h3>
   <div class="form">
     <label>ID del ticket<input id="tic-id" type="number"></label>

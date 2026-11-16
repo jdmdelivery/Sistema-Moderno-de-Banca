@@ -934,6 +934,16 @@ def panel_detalle_ticket(ticket_id: int, db=Depends(get_db),
     return servicios.ticket_a_dict(db, ticket)
 
 
+@app.get("/panel/tickets/{ticket_id}/anulacion")
+def panel_info_anulacion(ticket_id: int, db=Depends(get_db),
+                         usuario=Depends(requiere_rol("admin"))):
+    """Vista previa de anulación administrativa (no modifica datos)."""
+    ticket = db.get(Ticket, ticket_id)
+    if ticket is None:
+        raise HTTPException(404, "Ticket no encontrado")
+    return servicios.info_anulacion_admin(db, ticket)
+
+
 @app.post("/panel/tickets/consultar")
 def panel_consultar(datos: LlaveIn, db=Depends(get_db), usuario=Depends(panel_actual)):
     return servicios.consultar_ticket(db, datos.id, datos.serial)

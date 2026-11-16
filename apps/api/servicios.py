@@ -727,6 +727,8 @@ def ticket_a_dict(db, ticket, saldo_restante=None):
         "cajero": db.get(Usuario, ticket.usuario_id).nombre if ticket.usuario_id and db.get(Usuario, ticket.usuario_id) else "",
     }
     datos.update(_info_anulacion(db, ticket))
+    datos["anulacion_admin"] = info_anulacion_admin(db, ticket)
+    datos["puede_anular_admin"] = bool(datos["anulacion_admin"].get("puede_anular"))
     if ticket.estado == "pagado":
         pagador = db.get(Usuario, ticket.pagado_por_usuario_id) if ticket.pagado_por_usuario_id else None
         datos["pago"] = {
@@ -754,14 +756,17 @@ def _numero_oficial(db, sorteo_id, fecha):
 def _premio_ya_cobrado(jugada, ticket):
     if not jugada.evaluada or jugada.premio is None or D(jugada.premio) <= 0:
         return False
-    # Solo la jugada marcada como pagada cuenta: un ticket "pagado" que luego
-    # recibe otro premio liquidado no debe marcar el tramo nuevo como cobrado.
     if jugada.pagada:
         return True
-    return ticket.estado == "pagado" and all(
-        (not j.evaluada) or j.premio is None or D(j.premio) <= 0 or j.pagada
-        for j in ticket.jugadas
-    )
+    # Código viejo: el ticket quedaba "pagado" sin marcar jugadas.pagada.
+    # Si ninguna jugada tiene marca individual, todo el premio del ticket
+    # se considera cobrado (evita reabrir pagos duplicados).
+    # Si hay mezcla (algunas pagadas y otras no), solo cuentan las marcadas:
+    # las no marcadas son tramos nuevos pendientes.
+    if ticket.estado == "pagado":
+        if not any(j.pagada for j in ticket.jugadas):
+            return True
+    return False
 
 
 def _linea_premio(db, ticket, jugada):
@@ -824,6 +829,10 @@ def _vista_pago(db, ticket):
             })
     pendiente = sum((D(fila["premio"]) for fila in premios if fila["estado_pago"] == "pendiente"), D(0))
     pagado = sum((D(fila["premio"]) for fila in premios if fila["estado_pago"] == "pagado"), D(0))
+    if ticket.estado == "pagado":
+        # Ticket cerrado a nivel cabecera: nada queda por cobrar (código viejo o pago total).
+        pendiente = D(0)
+        pagado = sum((D(fila["premio"]) for fila in premios), D(0)) or D(ticket.premio_total)
     lineas = []
     if ticket.es_prueba:
         lineas.append("PRUEBA — NO OFICIAL")
@@ -857,7 +866,7 @@ def _vista_pago(db, ticket):
         if fila["pagado_en"]:
             lineas.append(f"Fecha de pago: {fila['pagado_en']}")
         lineas.append("")
-    if pendientes and ticket.estado not in ("anulado", "vencido"):
+    if pendientes and ticket.estado not in ("anulado", "vencido", "pagado"):
         lineas.append("SORTEOS PENDIENTES")
         for fila in pendientes:
             lineas.append(f"{fila['loteria']} {fila['fecha']}")
@@ -869,7 +878,7 @@ def _vista_pago(db, ticket):
         lineas.append(f"PREMIO PENDIENTE: RD${pendiente}")
         lineas.append(f"SE COBRARÁ: RD${pendiente}")
     puede = (
-        ticket.estado not in ("anulado", "vencido")
+        ticket.estado not in ("anulado", "vencido", "pagado")
         and pendiente > 0
         and not (ticket.es_prueba and not modo_desarrollo())
     )
@@ -922,8 +931,13 @@ def consultar_ticket(db, ticket_id, serial):
         datos["mensaje"] = "Ticket vendido: aún faltan resultados por liquidar"
     datos.update(_vista_pago(db, ticket))
     datos["puede_pagar"] = (
-        D(datos["premio_pendiente"]) > 0 and ticket.estado not in ("anulado", "vencido")
+        D(datos["premio_pendiente"]) > 0
+        and ticket.estado not in ("anulado", "vencido", "pagado")
     )
+    if ticket.estado == "pagado":
+        datos["puede_pagar"] = False
+        datos["premio_pendiente"] = "0.00"
+        datos["importe_a_cobrar"] = "0.00"
     if ticket.estado == "ganador":
         datos["mensaje"] = f"Ticket ganador: pague ${datos['premio_pendiente']}"
     elif ticket.estado == "parcial":
@@ -1176,51 +1190,154 @@ def _ya_movio_anulacion(db, ticket):
     return False
 
 
+_ESTADOS_ANULABLES_CAJERA = ("vendido",)
+_ESTADOS_ANULABLES_ADMIN = ("vendido", "ganador", "no_ganador", "parcial")
+
+
+def _sorteos_cerrados_ticket(ticket, ahora):
+    """Nombres de sorteos del ticket cuya hora de cierre ya pasó."""
+    cerrados = []
+    vistos = set()
+    for j in ticket.jugadas or []:
+        for s in (j.sorteo, j.sorteo2):
+            if s is None or s.nombre in vistos:
+                continue
+            cerrado = j.fecha < ahora.date() or (
+                j.fecha == ahora.date() and ahora.time() >= s.hora_cierre
+            )
+            if cerrado:
+                vistos.add(s.nombre)
+                cerrados.append(s.nombre)
+    return cerrados
+
+
+def _premios_pendientes_anulacion(ticket):
+    """Premios ganadores aún no cobrados (se invalidan al anular por admin)."""
+    filas = []
+    total = D(0)
+    for j in ticket.jugadas or []:
+        if not j.evaluada or j.premio is None or D(j.premio) <= 0:
+            continue
+        if j.pagada:
+            continue
+        total += D(j.premio)
+        filas.append({
+            "jugada_id": j.id,
+            "numeros": j.numeros,
+            "premio": str(D(j.premio)),
+            "loterias": [
+                s.nombre for s in (j.sorteo, j.sorteo2) if s is not None
+            ],
+        })
+    return filas, total
+
+
+def info_anulacion_admin(db, ticket, ahora=None):
+    """Datos para la ventana de confirmación del Panel (solo lectura)."""
+    ahora = ahora_oficial(db, forzar=ahora)
+    cerrados = _sorteos_cerrados_ticket(ticket, ahora)
+    pendientes, total_pend = _premios_pendientes_anulacion(ticket)
+    pagadas = [j for j in (ticket.jugadas or []) if j.pagada]
+    puede = (
+        ticket.estado in _ESTADOS_ANULABLES_ADMIN
+        and not pagadas
+        and ticket.estado != "pagado"
+        and not _ya_movio_anulacion(db, ticket)
+    )
+    advertencias = []
+    if cerrados:
+        advertencias.append(
+            "Uno o más sorteos ya cerraron: " + ", ".join(cerrados)
+            + ". El administrador puede anular igualmente."
+        )
+    if pendientes:
+        advertencias.append(
+            f"Este ticket tiene premios pendientes por RD${total_pend}. "
+            "Al anular se invalidan y no podrán cobrarse."
+        )
+    if ticket.estado == "pagado" or pagadas:
+        advertencias.append(
+            "Hay premios ya pagados. No se puede anular directamente; "
+            "requiere reversión auditada de pagos."
+        )
+    vendedor = db.get(Usuario, ticket.usuario_id) if ticket.usuario_id else None
+    return {
+        "puede_anular": puede,
+        "estado": ticket.estado,
+        "total": str(D(ticket.total)),
+        "cajera": vendedor.nombre if vendedor else "—",
+        "cajera_usuario": vendedor.usuario if vendedor else "—",
+        "sucursal": ticket.sucursal_vendedora.nombre if ticket.sucursal_vendedora else "—",
+        "loterias": _loterias_ticket(ticket),
+        "sorteos_cerrados": cerrados,
+        "premios_pendientes": pendientes,
+        "premios_pendientes_total": str(total_pend),
+        "tiene_premios_pagados": bool(pagadas) or ticket.estado == "pagado",
+        "advertencias": advertencias,
+    }
+
+
 def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=None, motivo=None,
                    ventana_cajera=False):
     """Anula un ticket. La seguridad vive aquí, no en la SUNMI.
 
-    - Cajera (ventana_cajera=True): solo sus tickets y solo antes de 5 minutos.
-    - A los 5 minutos exactos el servidor la bloquea.
-    - Panel admin (ventana_cajera=False): puede anular después, si el sorteo
-      sigue abierto y el ticket no está pagado.
+    - Cajera (ventana_cajera=True): solo sus tickets, solo < 5 minutos y con
+      sorteos aún abiertos.
+    - Admin del Panel (ventana_cajera=False): puede anular con sorteos cerrados,
+      tickets perdidos o ganadores pendientes de pago. Nunca con premios ya
+      pagados (total o parcial). No borra el historial.
     """
     ahora = ahora_oficial(db, forzar=ahora)
     motivo_txt = str(motivo or "").strip()[:200]
     if not motivo_txt:
         raise ErrorServicio(400, "Indique el motivo de la anulación")
     ticket = buscar_ticket(db, ticket_id, serial, bloquear=True)
+    if ticket.estado == "anulado":
+        raise ErrorServicio(409, "El ticket ya está anulado")
     if ventana_cajera:
         if ticket.usuario_id != usuario_id:
             raise ErrorServicio(403, "Solo puede anular sus propios tickets")
         if not ventana_anulacion_cajera(ticket.vendido_en, ahora):
             raise ErrorServicio(403, MSG_ANULACION_VENCIDA)
-    if ticket.estado == "anulado":
-        raise ErrorServicio(409, "El ticket ya está anulado")
+        if ticket.estado != "vendido":
+            raise ErrorServicio(409, "Solo puede anular tickets vendidos")
+        for j in ticket.jugadas:
+            for s in (j.sorteo, j.sorteo2):
+                if s is None:
+                    continue
+                if j.fecha < ahora.date() or (j.fecha == ahora.date() and ahora.time() >= s.hora_cierre):
+                    raise ErrorServicio(409, f"No se puede anular: el sorteo {s.nombre} ya cerró")
     if ticket.estado == "pagado":
         datos = ticket_a_dict(db, ticket)
         p = datos.get("pago") or {}
         raise ErrorServicio(
             409,
             f"El ticket ya fue pagado en la sucursal {p.get('sucursal', '?')} "
-            f"el {p.get('fecha_hora', '?')}",
+            f"el {p.get('fecha_hora', '?')}. No se puede anular directamente; "
+            "requiere reversión auditada de pagos.",
         )
     if any(j.pagada for j in ticket.jugadas):
-        raise ErrorServicio(409, "Este ticket ya tiene premios pagados. No se puede anular.")
-    if ticket.estado in ("ganador", "no_ganador", "vencido"):
-        raise ErrorServicio(409, "Ya no se puede anular: los sorteos de este ticket ya cerraron")
-    for j in ticket.jugadas:
-        for s in (j.sorteo, j.sorteo2):
-            if s is None:
-                continue
-            if j.fecha < ahora.date() or (j.fecha == ahora.date() and ahora.time() >= s.hora_cierre):
-                raise ErrorServicio(409, f"No se puede anular: el sorteo {s.nombre} ya cerró")
+        raise ErrorServicio(
+            409,
+            "Este ticket ya tiene premios pagados (total o parcial). "
+            "No se puede anular directamente; requiere reversión auditada de pagos.",
+        )
+    if ticket.estado == "vencido":
+        raise ErrorServicio(409, "No se puede anular un ticket vencido")
+    if not ventana_cajera and ticket.estado not in _ESTADOS_ANULABLES_ADMIN:
+        raise ErrorServicio(409, f"No se puede anular un ticket en estado «{ticket.estado}»")
     if _ya_movio_anulacion(db, ticket):
         raise ErrorServicio(409, "El ticket ya está anulado")
+
+    estado_previo = ticket.estado
+    cerrados = _sorteos_cerrados_ticket(ticket, ahora)
+    pendientes, total_pend = _premios_pendientes_anulacion(ticket)
+    estados_ok = _ESTADOS_ANULABLES_CAJERA if ventana_cajera else _ESTADOS_ANULABLES_ADMIN
+
     # UPDATE atómico: si otra petición ya anuló, rowcount=0 y no hay doble movimiento.
     marcados = (
         db.query(Ticket)
-        .filter(Ticket.id == ticket.id, Ticket.estado == "vendido")
+        .filter(Ticket.id == ticket.id, Ticket.estado.in_(estados_ok))
         .update(
             {
                 "estado": "anulado",
@@ -1234,6 +1351,17 @@ def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=Non
     if marcados != 1:
         raise ErrorServicio(409, "El ticket ya está anulado")
     db.refresh(ticket)
+
+    # Invalidar premios pendientes: el historial de monto ganador se conserva
+    # en auditoría; las jugadas dejan de ser cobrables.
+    for j in ticket.jugadas or []:
+        if j.pagada:
+            continue
+        if j.evaluada and j.premio is not None and D(j.premio) > 0:
+            # Conserva premio original en detalle; marca no cobrable vía ticket anulado.
+            # No se toca el monto histórico en la jugada para auditoría de liquidación.
+            pass
+
     sucursal = db.get(Sucursal, ticket.sucursal_vendedora_id)
     if not ticket.es_prueba:
         sucursal.saldo_actual = D(sucursal.saldo_actual) - D(ticket.total)
@@ -1258,6 +1386,7 @@ def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=Non
             bolsa="prueba",
         )
     quien = db.get(Usuario, usuario_id)
+    vendedor = db.get(Usuario, ticket.usuario_id) if ticket.usuario_id else None
     auditar(
         db, "ticket", ticket.id, "anulacion", usuario_id=usuario_id, terminal_id=terminal_id,
         detalle={
@@ -1270,6 +1399,15 @@ def anular_ticket(db, ticket_id, serial, usuario_id, terminal_id=None, ahora=Non
             "vendido_en": ticket.vendido_en.isoformat(sep=" ") if ticket.vendido_en else None,
             "desde_panel": not ventana_cajera,
             "es_prueba": bool(ticket.es_prueba),
+            "estado_previo": estado_previo,
+            "sorteos_cerrados": cerrados,
+            "premios_pendientes_invalidados": pendientes,
+            "premios_pendientes_total": str(total_pend),
+            "cajera_id": ticket.usuario_id,
+            "cajera": vendedor.nombre if vendedor else None,
+            "cajera_usuario": vendedor.usuario if vendedor else None,
+            "sucursal_id": ticket.sucursal_vendedora_id,
+            "importe_ticket": str(D(ticket.total)),
         },
     )
     db.commit()
@@ -2856,7 +2994,10 @@ def listar_tickets_panel(
             "estado": t.estado,
             "premio_total": str(D(t.premio_total)),
             "es_prueba": bool(t.es_prueba),
-            "puede_anular": t.estado == "vendido",
+            "puede_anular": (
+                t.estado in _ESTADOS_ANULABLES_ADMIN
+                and not any(j.pagada for j in (t.jugadas or []))
+            ),
         })
     paginas = max(1, (total + por_pagina - 1) // por_pagina) if total else 1
     return {

@@ -824,7 +824,7 @@ async function pintarListaTickets() {
       $("#tic-lista").innerHTML = filas.map((t) => {
         const lot = (t.loterias || []).join(", ") || "—";
         const anular = t.puede_anular
-          ? `<button type="button" class="btn peligro" data-tic-anular="${t.id}" data-tic-serial="${esc(t.serial)}" data-tic-total="${esc(t.total)}" data-tic-cajera="${esc(t.cajera)}">ELIMINAR / ANULAR</button>`
+          ? `<button type="button" class="btn peligro" data-tic-anular="${t.id}" data-tic-serial="${esc(t.serial)}">ELIMINAR / ANULAR</button>`
           : "";
         return `<article class="tic-card">
           <div class="tic-cab">
@@ -889,45 +889,79 @@ async function verTicketDetalle(id) {
       ${d.pago ? `<p class="nota">Pago: ${esc(d.pago.fecha_hora || "—")} · ${esc(d.pago.sucursal || "—")} · cajero ${esc(d.pago.cajero || "—")}</p>` : ""}`;
     $("#tic-modal").hidden = false;
     const btn = $("#tic-modal-anular");
-    btn.hidden = d.estado !== "vendido";
+    const puede = !!(d.puede_anular_admin || (d.anulacion_admin && d.anulacion_admin.puede_anular));
+    btn.hidden = !puede;
     btn.dataset.ticAnular = String(d.id);
     btn.dataset.ticSerial = d.serial;
-    btn.dataset.ticTotal = String(d.total);
-    btn.dataset.ticCajera = d.cajero || "";
-    btn.onclick = () => anularTicketLista(btn);
+    btn.onclick = () => abrirModalAnular(d.id, d.serial);
+  } catch (e) {
+    msg("#tic-lista-msg", e.message, false);
+  }
+}
+
+let TIC_ANULAR = null;
+
+async function abrirModalAnular(id, serial) {
+  try {
+    const info = await api(`/panel/tickets/${id}/anulacion`);
+    const det = await api(`/panel/tickets/${id}`);
+    TIC_ANULAR = { id, serial: serial || det.serial, info, det };
+    const lot = (info.loterias || []).join(", ") || "—";
+    const cerrados = (info.sorteos_cerrados || []).join(", ") || "Ninguno (abiertos)";
+    $("#tic-anular-resumen").innerHTML =
+      `<b>Ticket #${esc(id)}</b> · ${esc(det.serial)}<br>` +
+      `Cajera: ${esc(info.cajera)} (${esc(info.cajera_usuario)}) · Sucursal: ${esc(info.sucursal)}<br>` +
+      `Importe: <b>${fmt(info.total)}</b> · Estado: ${esc(String(info.estado).toUpperCase())}<br>` +
+      `Loterías: ${esc(lot)}<br>` +
+      `Sorteos cerrados: ${esc(cerrados)}<br>` +
+      `Premios pendientes: <b>${fmt(info.premios_pendientes_total)}</b>` +
+      (info.tiene_premios_pagados ? " · <b>TIENE PREMIOS PAGADOS</b>" : "");
+    const avisos = (info.advertencias || []).map((a) => `<p>${esc(a)}</p>`).join("");
+    $("#tic-anular-avisos").innerHTML = avisos || "<p>Sin advertencias especiales.</p>";
+    $("#tic-anular-motivo").value = "";
+    msg("#tic-anular-msg", "");
+    $("#tic-anular-confirmar").disabled = !info.puede_anular;
+    $("#tic-anular-modal").hidden = false;
   } catch (e) {
     msg("#tic-lista-msg", e.message, false);
   }
 }
 
 async function anularTicketLista(boton) {
-  const id = boton.dataset.ticAnular;
-  const serial = boton.dataset.ticSerial;
-  const total = boton.dataset.ticTotal;
-  const cajera = boton.dataset.ticCajera || "—";
-  const motivo = prompt(
-    `¿ESTÁ SEGURO DE ANULAR EL TICKET #${id}?\n` +
-    `Importe: RD$${total}\nCajera: ${cajera}\n\nEscriba el motivo (obligatorio):`,
-    ""
-  );
-  if (motivo === null) return;
-  const texto = String(motivo).trim();
+  await abrirModalAnular(boton.dataset.ticAnular, boton.dataset.ticSerial);
+}
+
+async function confirmarAnulacionAdmin() {
+  if (!TIC_ANULAR) return;
+  const texto = ($("#tic-anular-motivo").value || "").trim();
   if (!texto) {
-    msg("#tic-lista-msg", "Indique el motivo de la anulación.", false);
+    msg("#tic-anular-msg", "Indique el motivo de la anulación.", false);
     return;
   }
-  if (!confirm(`Confirmar anulación del ticket #${id} (${serial}) por RD$${total}. No se borra el historial.`)) return;
+  if (!TIC_ANULAR.info.puede_anular) {
+    msg("#tic-anular-msg", "Este ticket no se puede anular directamente.", false);
+    return;
+  }
   try {
-    const d = await post("/panel/tickets/anular", { id: parseInt(id, 10), serial, motivo: texto });
+    const d = await post("/panel/tickets/anular", {
+      id: parseInt(TIC_ANULAR.id, 10),
+      serial: TIC_ANULAR.serial,
+      motivo: texto,
+    });
     $("#tic-motivo").value = texto;
     $("#tic-id").value = d.id;
     $("#tic-serial").value = d.serial;
     pintarTicket(d);
+    $("#tic-anular-modal").hidden = true;
     $("#tic-modal").hidden = true;
+    TIC_ANULAR = null;
     msg("#tic-lista-msg", `Ticket #${d.id} ANULADO ✔`);
+    if (typeof cargarDashboard === "function") {
+      try { await cargarDashboard(); } catch (_) { /* opcional */ }
+    }
     await pintarListaTickets();
   } catch (e) {
-    msg("#tic-lista-msg", e.message, false);
+    msg("#tic-anular-msg", e.message, false);
   }
 }
 
@@ -1360,6 +1394,15 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#tic-modal-cerrar")?.addEventListener("click", () => { $("#tic-modal").hidden = true; });
   $("#tic-modal")?.addEventListener("click", (ev) => {
     if (ev.target === $("#tic-modal")) $("#tic-modal").hidden = true;
+  });
+  const cerrarAnular = () => { $("#tic-anular-modal").hidden = true; TIC_ANULAR = null; };
+  $("#tic-anular-cancelar")?.addEventListener("click", cerrarAnular);
+  $("#tic-anular-cancelar-2")?.addEventListener("click", cerrarAnular);
+  $("#tic-anular-confirmar")?.addEventListener("click", () => {
+    confirmarAnulacionAdmin().catch((e) => msg("#tic-anular-msg", e.message, false));
+  });
+  $("#tic-anular-modal")?.addEventListener("click", (ev) => {
+    if (ev.target === $("#tic-anular-modal")) cerrarAnular();
   });
   $("#btn-caj-recibir").addEventListener("click", recibirEfectivo);
   $("#btn-caj-gasto").addEventListener("click", registrarGasto);

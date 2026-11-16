@@ -111,7 +111,8 @@ def test_anular_sin_motivo_rechazado(entorno, fijar_hora):
     assert "motivo" in r.json()["detail"].lower()
 
 
-def test_anular_despues_del_cierre_rechazado(entorno, fijar_hora):
+def test_cajera_no_anula_despues_del_cierre_admin_si(entorno, fijar_hora):
+    """Cajera sigue bloqueada; el admin del Panel sí anula con sorteo cerrado."""
     fijar_hora(datetime(2026, 11, 14, 10, 0, 0))
     b = entorno.banca(saldo=1000)
     s = entorno.sorteo_id("La Primera 12")
@@ -120,13 +121,15 @@ def test_anular_despues_del_cierre_rechazado(entorno, fijar_hora):
     fijar_hora(datetime(2026, 11, 14, 12, 5))
     r = _anular_terminal(entorno, b["headers"], t)
     assert r.status_code in (403, 409)
-    admin = _anular_panel(entorno, t)
-    assert admin.status_code == 409 and "ya cerró" in admin.json()["detail"]
     assert entorno.consultar(t)["estado"] == "vendido"
     assert float(entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()["mi_caja"]) == caja0 + 10
+    admin = _anular_panel(entorno, t, motivo="Admin con sorteo cerrado")
+    assert admin.status_code == 200, admin.text
+    assert admin.json()["estado"] == "anulado"
+    assert float(entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()["mi_caja"]) == caja0
 
 
-def test_anular_con_un_solo_sorteo_cerrado_rechazado(entorno, fijar_hora):
+def test_admin_anula_con_un_sorteo_cerrado_en_super_pale(entorno, fijar_hora):
     fijar_hora(datetime(2026, 11, 14, 10, 0, 0))
     b = entorno.banca(saldo=1000)
     s1 = entorno.sorteo_id("La Primera 12")
@@ -134,12 +137,12 @@ def test_anular_con_un_solo_sorteo_cerrado_rechazado(entorno, fijar_hora):
     t = entorno.vender_ok(b["headers"], [
         {"tipo": "SP", "sorteos": [s1, s2], "numeros": "26-58", "monto": 10},
     ])
-    fijar_hora(datetime(2026, 11, 14, 10, 2, 0))
-    # Dentro de 5 min pero con un sorteo ya cerrado: debe rechazar por cierre.
     fijar_hora(datetime(2026, 11, 14, 12, 5))
-    # Pasó la ventana de cajera; admin tampoco puede.
-    r = _anular_panel(entorno, t)
-    assert r.status_code == 409 and "La Primera 12" in r.json()["detail"]
+    # Cajera: ventana vencida o sorteo cerrado.
+    assert _anular_terminal(entorno, b["headers"], t).status_code in (403, 409)
+    r = _anular_panel(entorno, t, motivo="SP con sorteo cerrado")
+    assert r.status_code == 200, r.text
+    assert r.json()["estado"] == "anulado"
 
 
 def test_anular_dos_veces_rechazado(entorno, fijar_hora):
