@@ -1562,7 +1562,54 @@ _RESULTADOS_VISIBLES = ("propuesto", "en_verificacion", "recibido", "confirmado"
 _RESULTADOS_CONFIRMADOS = ("confirmado", "liquidado")
 
 
-def _estado_panel(sorteo, resultado, hoy, momento, fallo):
+def _causa_king_pendiente(db, nombre, hoy):
+    """Lee la última discrepancia King del día para mostrar la causa técnica."""
+    if db is None:
+        return None
+    filas = (
+        db.query(Auditoria)
+        .filter(Auditoria.accion == "discrepancia_operador")
+        .order_by(Auditoria.id.desc())
+        .limit(30)
+        .all()
+    )
+    for fila in filas:
+        try:
+            detalle = json.loads(fila.detalle_json or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if detalle.get("sorteo") != nombre:
+            continue
+        if detalle.get("fecha") and detalle.get("fecha") != hoy.isoformat():
+            continue
+        causa = detalle.get("causa") or "numeros_distintos"
+        if causa == "operador_aun_muestra_ayer":
+            return (
+                "RDLotto ya tiene verified de hoy, pero kinglotterysxm.com "
+                f"aún muestra {detalle.get('operador_fecha')} "
+                f"{detalle.get('operador')}. No se usa esa fecha."
+            )
+        if causa == "rdlotto_verified_sin_operador_hoy":
+            return (
+                "RDLotto verified disponible; el operador aún no publica "
+                "la fecha de hoy. Se mantiene PENDIENTE."
+            )
+        if causa == "operador_hoy_sin_rdlotto_verified":
+            return (
+                "El operador ya publicó hoy; falta RDLotto verified con "
+                "los mismos números."
+            )
+        if causa == "numeros_distintos":
+            return (
+                "Operador y RDLotto no coinciden "
+                f"({detalle.get('operador')} vs {detalle.get('rdlotto')}). "
+                "No se confirma."
+            )
+        break
+    return None
+
+
+def _estado_panel(db, sorteo, resultado, hoy, momento, fallo):
     from .conectate_widget import RECONOCIDOS, motivo_sin_fuente
 
     if sorteo.nombre not in RECONOCIDOS:
@@ -1584,10 +1631,14 @@ def _estado_panel(sorteo, resultado, hoy, momento, fallo):
     from . import operador_king
 
     if operador_king.es_king(sorteo.nombre):
+        causa = _causa_king_pendiente(db, sorteo.nombre, hoy)
+        if causa:
+            return "PENDIENTE", causa
         return (
             "PENDIENTE",
-            "Todavía no hay tres números. Hace falta que el operador y "
-            "RDLotto coincidan en fecha, sesión y números.",
+            "Todavía no hay tres números. Hace falta que el operador "
+            "(kinglotterysxm.com) y RDLotto verified coincidan en fecha, "
+            "sesión y números. No se usan números de otro horario.",
         )
     return "PENDIENTE", "Todavía no hay tres números. La fuente es el widget de Conéctate."
 
@@ -1616,7 +1667,7 @@ def tablero_resultados(db, hoy=None):
             .order_by(Resultado.id.desc())
             .first()
         )
-        estado, motivo = _estado_panel(sorteo, resultado, hoy, momento, fallo)
+        estado, motivo = _estado_panel(db, sorteo, resultado, hoy, momento, fallo)
         base = por_id.get(sorteo.id, {})
         base["estado_panel"] = estado
         base["motivo_fuente"] = motivo

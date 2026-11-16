@@ -147,7 +147,13 @@ def test_horarios_cruzados_no_mezclan_sesiones():
     doc = _rd(_draw("noche", HOY, (1, 55, 2)))
     aceptados, _, difs = operador_king.confirmar(HOY, html=html, documento=doc)
     assert aceptados == {}
-    assert difs == []
+    # No se mezclan sesiones: quedan diagnósticos, cero confirmaciones.
+    assert all(d["sorteo"] in (DIA, NOCHE) for d in difs)
+    assert {d.get("causa") for d in difs} <= {
+        "operador_hoy_sin_rdlotto_verified",
+        "rdlotto_verified_sin_operador_hoy",
+        "operador_aun_muestra_ayer",
+    }
 
 
 def test_numeros_diferentes_registran_discrepancia():
@@ -166,7 +172,10 @@ def test_operador_sin_publicacion_deja_pendiente():
     doc = _rd(_draw("dia", HOY, (1, 55, 2)))
     aceptados, _, difs = operador_king.confirmar(HOY, html=html, documento=doc)
     assert aceptados == {}
-    assert difs == []
+    assert len(difs) == 1
+    assert difs[0]["sorteo"] == DIA
+    assert difs[0]["causa"] == "rdlotto_verified_sin_operador_hoy"
+    assert difs[0]["rdlotto"] == [1, 55, 2]
 
 
 def test_operador_sin_conexion_deja_pendiente(monkeypatch):

@@ -165,7 +165,8 @@ def cruzar(operador, rdlotto, hoy):
     """Acepta solo fecha de hoy, sesión y tres números idénticos.
 
     Un resultado fechado ayer no confirma el sorteo de hoy, aunque el
-    sitio todavía lo muestre en la portada.
+    sitio todavía lo muestre en la portada. Si RDLotto ya trae verified
+    de hoy y el operador aún no, se anota la causa sin inventar números.
     """
     if not isinstance(hoy, date):
         return {}, []
@@ -176,7 +177,32 @@ def cruzar(operador, rdlotto, hoy):
         clave = (nombre, hoy)
         oficial = (operador or {}).get(clave)
         contraste = (rdlotto or {}).get(clave)
-        if oficial is None or contraste is None:
+        if oficial is None and contraste is None:
+            continue
+        if oficial is None and contraste is not None:
+            # Busca si el operador todavía muestra la sesión de ayer.
+            ayer = (operador or {}).get((nombre, hoy - timedelta(days=1)))
+            detalle = {
+                "sorteo": nombre,
+                "fecha": hoy.isoformat(),
+                "sesion": sesion,
+                "causa": "rdlotto_verified_sin_operador_hoy",
+                "rdlotto": list(contraste["numeros"]),
+            }
+            if ayer is not None:
+                detalle["operador_fecha"] = (hoy - timedelta(days=1)).isoformat()
+                detalle["operador"] = list(ayer["numeros"])
+                detalle["causa"] = "operador_aun_muestra_ayer"
+            discrepancias.append(detalle)
+            continue
+        if contraste is None and oficial is not None:
+            discrepancias.append({
+                "sorteo": nombre,
+                "fecha": hoy.isoformat(),
+                "sesion": sesion,
+                "causa": "operador_hoy_sin_rdlotto_verified",
+                "operador": list(oficial["numeros"]),
+            })
             continue
         if oficial.get("sesion") != sesion or contraste.get("sesion") != sesion:
             continue
@@ -185,6 +211,7 @@ def cruzar(operador, rdlotto, hoy):
                 "sorteo": nombre,
                 "fecha": hoy.isoformat(),
                 "sesion": sesion,
+                "causa": "numeros_distintos",
                 "operador": list(oficial["numeros"]),
                 "rdlotto": list(contraste["numeros"]),
             })
