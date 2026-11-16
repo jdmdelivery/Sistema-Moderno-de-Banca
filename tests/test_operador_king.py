@@ -193,20 +193,19 @@ def test_operador_sin_conexion_deja_pendiente(monkeypatch):
     assert difs == []
 
 
-def test_ciclo_tres_lecturas_y_diez_minutos(entorno, fijar_hora):
+def test_ciclo_tres_lecturas_y_cuatro_minutos(entorno, fijar_hora):
     html = _html(dia=((1, 55, 2), HOY), noche=((31, 5, 30), AYER))
     doc = _rd(_draw("dia", HOY, (1, 55, 2)))
     base = datetime(2026, 11, 15, 12, 40)
     marcas = []
-    for minuto in (40, 44, 48, 51):
+    for minuto in (40, 44, 48):
         fijar_hora(base.replace(minute=minuto))
         resumen = resultados_auto.ciclo(
             forzar=True, payload=[], king_html=html, king_rdlotto=doc,
         )
         assert resumen["ok"] is True
         marcas.append(resumen["confirmados"])
-    assert marcas[:3] == [0, 0, 0]
-    assert marcas[3] == 1
+    assert marcas == [0, 0, 1]
     filas = _filas()
     assert filas[DIA][0:3] == (1, 55, 2)
     assert filas[DIA][3] in ("confirmado", "liquidado")
@@ -250,8 +249,6 @@ def test_reinicio_del_reloj_conserva_lecturas(entorno, fijar_hora):
     # Simula reinicio: el estado en memoria no importa; la base conserva.
     resultados_auto._estado["ultimo_ok"] = None
     fijar_hora(base.replace(minute=48))
-    resultados_auto.ciclo(forzar=True, payload=[], king_html=html, king_rdlotto=doc)
-    fijar_hora(base.replace(minute=51))
     resumen = resultados_auto.ciclo(forzar=True, payload=[], king_html=html, king_rdlotto=doc)
     assert resumen["confirmados"] == 1
     assert _filas()[DIA][3] in ("confirmado", "liquidado")
@@ -261,7 +258,7 @@ def test_terminal_resultados_muestra_confirmado_y_noche_pendiente(entorno, fijar
     html = _html(dia=((1, 55, 2), HOY), noche=((31, 5, 30), AYER))
     doc = _rd(_draw("dia", HOY, (1, 55, 2)))
     base = datetime(2026, 11, 15, 12, 40)
-    for minuto in (40, 44, 48, 51):
+    for minuto in (40, 44, 48):
         fijar_hora(base.replace(minute=minuto))
         resultados_auto.ciclo(forzar=True, payload=[], king_html=html, king_rdlotto=doc)
     db = dbmod.nueva_sesion()
@@ -282,7 +279,7 @@ def test_no_modifica_resultado_ya_confirmado(entorno, fijar_hora):
     html = _html(dia=((1, 55, 2), HOY))
     doc = _rd(_draw("dia", HOY, (1, 55, 2)))
     base = datetime(2026, 11, 15, 12, 40)
-    for minuto in (40, 44, 48, 51):
+    for minuto in (40, 44, 48):
         fijar_hora(base.replace(minute=minuto))
         resultados_auto.ciclo(forzar=True, payload=[], king_html=html, king_rdlotto=doc)
     html2 = _html(dia=((9, 8, 7), HOY))

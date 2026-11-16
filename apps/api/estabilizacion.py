@@ -1,9 +1,9 @@
-"""Tres lecturas idénticas y diez minutos antes de confirmar.
+"""Tres lecturas idénticas y cuatro minutos estables antes de confirmar.
 
 El estado vive en la base, no en la memoria: un reinicio de Render no
 pone el contador en cero. Un resultado manual bloqueado no se reemplaza.
 Un confirmado que luego cambia en la fuente queda en alerta, sin tocar
-premios ya pagados.
+premios ya pagados. No se acepta una sola lectura provisional como oficial.
 """
 from datetime import timedelta
 
@@ -11,11 +11,13 @@ from .models import ColaPremio, CorreccionPendiente, ObservacionResultado, Resul
 from . import motor, servicios
 
 LECTURAS_MINIMAS = 3
-MINUTOS_ESTABLES = 10
+# Antes: 10 minutos → ~12–15 min de retraso tras la 1.ª lectura.
+# Ahora: 4 minutos + 3 lecturas iguales (sigue sin pagar ni inventar).
+MINUTOS_ESTABLES = 4
 
 
 def observar(db, sorteo, fecha, numeros, momento, origen="widget"):
-    """Registra una lectura. Confirma solo si ya hubo tres iguales y 10 minutos."""
+    """Registra una lectura. Confirma solo si ya hubo tres iguales y 4 minutos."""
     obs = (
         db.query(ObservacionResultado)
         .filter_by(sorteo_id=sorteo.id, fecha=fecha)

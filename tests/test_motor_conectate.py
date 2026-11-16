@@ -1,4 +1,4 @@
-"""Widget de Conéctate, tres lecturas, diez minutos y premios sin pago automático."""
+"""Widget de Conéctate, tres lecturas, cuatro minutos y premios sin pago automático."""
 from datetime import datetime
 
 from apps.api import conectate_widget, estabilizacion, resultados_auto
@@ -58,17 +58,17 @@ def test_no_hay_tripleta():
     assert codigos == {"QN", "PL", "SP", "TR"}
 
 
-def test_tres_lecturas_iguales_y_diez_minutos_dejan_el_premio_pendiente(entorno, fijar_hora):
+def test_tres_lecturas_iguales_y_cuatro_minutos_dejan_el_premio_pendiente(entorno, fijar_hora):
     b = entorno.banca(saldo=100000)
     s = entorno.sorteo_id("La Primera 12:00 PM")
     ticket = entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "19", "monto": 5}])
     caja = entorno.saldo(b["sucursal"]["id"])
     base = datetime(2026, 11, 14, 12, 5)
     marcas = _pasar(entorno, fijar_hora, "La Primera 12:00 PM", (19, 3, 45), [
-        base, base.replace(minute=9), base.replace(minute=13),
+        base, base.replace(minute=7),
     ])
-    assert marcas == ["provisional", "provisional", "provisional"]
-    marcas = _pasar(entorno, fijar_hora, "La Primera 12:00 PM", (19, 3, 45), [base.replace(minute=15)])
+    assert marcas == ["provisional", "provisional"]
+    marcas = _pasar(entorno, fijar_hora, "La Primera 12:00 PM", (19, 3, 45), [base.replace(minute=9)])
     assert marcas == ["confirmado"]
     consulta = entorno.consultar(ticket)
     assert consulta["estado"] == "ganador"

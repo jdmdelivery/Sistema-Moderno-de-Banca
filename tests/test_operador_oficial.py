@@ -294,7 +294,7 @@ def test_el_manual_confirmado_no_se_reemplaza(entorno, fijar_hora):
     assert _filas()["La Anguila 8:00 AM"] == (1, 2, 3, "manual", None, "liquidado")
 
 
-def test_tres_lecturas_y_diez_minutos_confirman_y_sobreviven_al_reinicio(entorno, fijar_hora):
+def test_tres_lecturas_y_cuatro_minutos_confirman_y_sobreviven_al_reinicio(entorno, fijar_hora):
     firmado = _doc(
         [_juego("Anguila 11:00 AM", "g11", (11, 22, 33))],
         [_juego("Haiti Bolet 11:30 AM", "h11", (19, 3, 45))],
@@ -305,22 +305,13 @@ def test_tres_lecturas_y_diez_minutos_confirman_y_sobreviven_al_reinicio(entorno
         "La Anguila 11:00 AM": {"fecha": FECHA, "numeros": (11, 22, 33)},
         "Haiti Bolet 11:30 AM": {"fecha": FECHA, "numeros": (19, 3, 45)},
     }
+    marcas = []
     for minuto in (0, 4, 8):
         fijar_hora(datetime(2026, 11, 14, 10, minuto))
         paso = resultados_auto.ciclo(forzar=True, payload=[], firmado=firmado, operador=operador)
-        assert paso["confirmados"] == 0
+        marcas.append(paso["confirmados"])
         dbmod.engine().dispose()
-    db = dbmod.nueva_sesion()
-    lecturas = {
-        fila.sorteo_id: fila.lecturas
-        for fila in db.query(ObservacionResultado)
-    }
-    db.close()
-    assert lecturas[entorno.sorteo_id("La Anguila 11:00 AM")] == 3
-    assert lecturas[entorno.sorteo_id("Haiti Bolet 11:30 AM")] == 3
-    fijar_hora(datetime(2026, 11, 14, 10, 10))
-    final = resultados_auto.ciclo(forzar=True, payload=[], firmado=firmado, operador=operador)
-    assert final["confirmados"] == 2
+    assert marcas == [0, 0, 2]
     filas = _filas()
     assert filas["La Anguila 11:00 AM"] == (11, 22, 33, "conectate", "operador", "liquidado")
     assert filas["Haiti Bolet 11:30 AM"] == (19, 3, 45, "conectate", "operador", "liquidado")

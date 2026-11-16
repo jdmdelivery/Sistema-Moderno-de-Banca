@@ -1,5 +1,7 @@
-"""Consulta el widget de Conéctate cada 4 minutos.
+"""Consulta el widget de Conéctate con intervalo adaptativo.
 
+Intervalo normal: 4 minutos. Cerca de un sorteo pendiente o con lectura
+provisional: 60 segundos, sin martillar Conéctate el resto del día.
 No abre una pantalla y no reactiva RDLotto para el catálogo completo.
 King Lottery consulta RDLotto solo como contraste del operador oficial.
 El hilo es uno solo. Si otro proceso ya tomó el candado, esta pasada se
@@ -12,7 +14,7 @@ no crea otra lectura.
 import os
 import threading
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from . import (
     conectate_firmado,
@@ -24,9 +26,15 @@ from . import (
 )
 from .comun import modo_desarrollo
 from .db import nueva_sesion
-from .models import CandadoConsulta, Importacion, Sorteo
+from .models import CandadoConsulta, Importacion, ObservacionResultado, Resultado, Sorteo
 
 INTERVALO_SEGUNDOS = 240
+INTERVALO_RAPIDO_SEGUNDOS = 60
+# Ventana alrededor de la hora del sorteo (minutos) para acelerar.
+_VENTANA_ANTES_MIN = 2
+_VENTANA_DESPUES_MIN = 25
+# Tope de consulta forzada desde terminal (no salta la validación).
+_MINIMO_FORZADO_SEGUNDOS = 45
 # Una ejecución cuenta como reciente si llegó dentro del intervalo más un margen.
 _VENTANA_ACTIVO = timedelta(minutes=6)
 # Pasado este tiempo sin filas nuevas, el reloj está detenido, no solo retrasado.
@@ -39,6 +47,7 @@ _estado = {
     "ultimo_ok": None,
     "ultimo_error": None,
     "fuente": "conectate",
+    "intervalo_actual": INTERVALO_SEGUNDOS,
 }
 _candado = threading.Lock()
 
@@ -63,6 +72,36 @@ def _edad(momento, fila):
     if fila is None or fila.creado_en is None:
         return None
     return momento - _sin_zona(fila.creado_en)
+
+
+def intervalo_actual(db, momento=None):
+    """240 s en calma; 60 s cerca de sorteos pendientes o con provisional."""
+    momento = momento or servicios.ahora_local()
+    hoy = momento.date()
+    for sorteo in db.query(Sorteo).filter_by(activo=True).all():
+        if sorteo.hora_sorteo is None:
+            continue
+        inicio = datetime.combine(hoy, sorteo.hora_sorteo)
+        delta_min = (momento - inicio).total_seconds() / 60.0
+        if not (-_VENTANA_ANTES_MIN <= delta_min <= _VENTANA_DESPUES_MIN):
+            continue
+        fila = db.query(Resultado).filter_by(sorteo_id=sorteo.id, fecha=hoy).first()
+        if fila is None or fila.estado not in ("confirmado", "liquidado"):
+            return INTERVALO_RAPIDO_SEGUNDOS
+    pendientes = (
+        db.query(ObservacionResultado)
+        .filter(
+            ObservacionResultado.fecha == hoy,
+            ObservacionResultado.bloqueado.is_(False),
+            ObservacionResultado.primera_en.isnot(None),
+        )
+        .all()
+    )
+    for obs in pendientes:
+        fila = db.query(Resultado).filter_by(sorteo_id=obs.sorteo_id, fecha=hoy).first()
+        if fila is None or fila.estado not in ("confirmado", "liquidado"):
+            return INTERVALO_RAPIDO_SEGUNDOS
+    return INTERVALO_SEGUNDOS
 
 
 def estado_reloj(db, momento=None):
@@ -91,9 +130,10 @@ def estado_reloj(db, momento=None):
         marca = "ACTIVO"
     else:
         marca = "RETRASADO"
+    intervalo = intervalo_actual(db, momento)
     proxima = None
     if ultima is not None and ultima.creado_en is not None and marca != "DETENIDO":
-        proxima = _sin_zona(ultima.creado_en) + timedelta(seconds=INTERVALO_SEGUNDOS)
+        proxima = _sin_zona(ultima.creado_en) + timedelta(seconds=intervalo)
     return {
         "reloj": marca,
         "ultima_ejecucion": None if ultima is None or ultima.creado_en is None else _sin_zona(ultima.creado_en).isoformat(sep=" ", timespec="minutes"),
@@ -103,10 +143,13 @@ def estado_reloj(db, momento=None):
         "ultimo_error": None if not errores else (errores[0].detalle or "la consulta falló"),
         "errores_recientes": [fila.detalle for fila in errores if fila.detalle],
         "fuente": "conectate",
+        "intervalo_segundos": intervalo,
+        "intervalo_normal": INTERVALO_SEGUNDOS,
+        "intervalo_rapido": INTERVALO_RAPIDO_SEGUNDOS,
     }
 
 
-def _demasiado_pronto(db, momento):
+def _demasiado_pronto(db, momento, segundos=None):
     """Otra pasada de este intervalo ya quedó registrada. Evita un segundo reloj."""
     ultima = (
         db.query(Importacion)
@@ -117,7 +160,8 @@ def _demasiado_pronto(db, momento):
     edad = _edad(momento, ultima)
     if edad is None:
         return False
-    return edad < timedelta(seconds=INTERVALO_SEGUNDOS - 30)
+    limite = segundos if segundos is not None else intervalo_actual(db, momento)
+    return edad < timedelta(seconds=max(15, limite - 15))
 
 
 def _tomar(db, momento):
@@ -184,7 +228,7 @@ def _king(payload, momento, king_html=None, king_rdlotto=None):
 
 
 def ciclo(forzar=False, payload=None, firmado=None, operador=None,
-          king_html=None, king_rdlotto=None):
+          king_html=None, king_rdlotto=None, minimo_segundos=None):
     """Una pasada. payload y firmado evitan la red en las pruebas. No paga."""
     with _candado:
         if _estado["corriendo"]:
@@ -195,9 +239,18 @@ def ciclo(forzar=False, payload=None, firmado=None, operador=None,
         momento = servicios.ahora_local()
         with _candado:
             _estado["ultimo_intento"] = momento.isoformat(sep=" ")
+            _estado["intervalo_actual"] = intervalo_actual(db, momento)
         if not _tomar(db, momento):
             return {"ok": True, "omitido": "otro proceso ya está consultando", "rdlotto": False}
-        if not forzar and _demasiado_pronto(db, momento):
+        if forzar and minimo_segundos is not None:
+            if _demasiado_pronto(db, momento, segundos=minimo_segundos):
+                return {
+                    "ok": True,
+                    "omitido": "consulta reciente; se muestran los datos ya guardados",
+                    "rdlotto": False,
+                    "confirmados": 0,
+                }
+        elif not forzar and _demasiado_pronto(db, momento):
             return {
                 "ok": True,
                 "omitido": "otra consulta ya corrió en este intervalo",
@@ -285,6 +338,7 @@ def ciclo(forzar=False, payload=None, firmado=None, operador=None,
         with _candado:
             _estado["ultimo_ok"] = momento.isoformat(sep=" ")
             _estado["ultimo_error"] = None
+            _estado["intervalo_actual"] = intervalo_actual(db, momento)
         return {
             "ok": True,
             "encontrados": len(encontrados),
@@ -292,6 +346,7 @@ def ciclo(forzar=False, payload=None, firmado=None, operador=None,
             "premios": premios,
             "rdlotto": False,
             "king": len(king_ok),
+            "intervalo_segundos": _estado["intervalo_actual"],
         }
     except Exception as exc:
         db.rollback()
@@ -317,6 +372,11 @@ def ciclo(forzar=False, payload=None, firmado=None, operador=None,
             _estado["corriendo"] = False
 
 
+def ciclo_desde_terminal():
+    """Comprobación pedida por SUNMI: respeta tope anti-abuso y la validación."""
+    return ciclo(forzar=True, minimo_segundos=_MINIMO_FORZADO_SEGUNDOS)
+
+
 def _bucle():
     time.sleep(20)
     while True:
@@ -324,7 +384,16 @@ def _bucle():
             ciclo(forzar=False)
         except Exception:
             pass
-        time.sleep(INTERVALO_SEGUNDOS)
+        db = nueva_sesion()
+        try:
+            espera = intervalo_actual(db)
+        except Exception:
+            espera = INTERVALO_SEGUNDOS
+        finally:
+            db.close()
+        with _candado:
+            _estado["intervalo_actual"] = espera
+        time.sleep(espera)
 
 
 def arrancar_si_esta_activado():

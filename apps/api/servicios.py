@@ -2073,7 +2073,11 @@ def _estado_panel(db, sorteo, resultado, hoy, momento, fallo):
     if resultado is not None and resultado.fecha == hoy and resultado.estado != "error_fuente":
         if resultado.estado in ("confirmado", "liquidado"):
             return "RESULTADO RECIBIDO", resultado.fuente or ""
-        return "EN REVISIÓN", "PROVISIONAL. Faltan tres lecturas iguales o los 10 minutos."
+        from . import estabilizacion as _estab
+        return (
+            "EN REVISIÓN",
+            f"PROVISIONAL. Faltan tres lecturas iguales o los {_estab.MINUTOS_ESTABLES} minutos.",
+        )
     if fallo and momento.time() >= sorteo.hora_cierre:
         return "ERROR DE CONSULTA", fallo
     from .conectate_firmado import es_especial

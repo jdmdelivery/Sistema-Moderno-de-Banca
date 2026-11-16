@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import conectate, conectate_widget, resultados_auto, servicios
+from . import conectate, conectate_widget, estabilizacion, resultados_auto, servicios
 from .comun import D, ErrorServicio, MSG_USUARIO_BLOQUEADO, loterias_abiertas_desarrollo, modo_desarrollo
 from .db import configurar, engine, init_db, nueva_sesion
 from .models import (
@@ -837,9 +837,13 @@ def cobertura_resultados(db=Depends(get_db), usuario=Depends(panel_actual)):
         "fuente": "conectate",
         "nombre_fuente": "Conéctate.com",
         "url": conectate_widget.URL_WIDGET,
-        "aviso": "Fuente: Conéctate.com. Tres lecturas iguales y 10 minutos "
-                 "antes de confirmar. No paga solo. No inventa números si la fuente falla.",
+        "aviso": "Fuente: Conéctate.com. Tres lecturas iguales y 4 minutos "
+                 "estables antes de confirmar. Intervalo adaptativo cerca del sorteo. "
+                 "No paga solo. No inventa números si la fuente falla.",
         "intervalo_segundos": resultados_auto.INTERVALO_SEGUNDOS,
+        "intervalo_rapido_segundos": resultados_auto.INTERVALO_RAPIDO_SEGUNDOS,
+        "minutos_estables": estabilizacion.MINUTOS_ESTABLES,
+        "lecturas_minimas": estabilizacion.LECTURAS_MINIMAS,
         "trabajador": trabajador,
         "ultimo_resultado": trabajador.get("ultimo_detalle"),
         "sorteos": [
@@ -1204,7 +1208,31 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
 @app.get("/terminal/resultados")
 def terminal_resultados(db=Depends(get_db), terminal=Depends(terminal_actual),
                         operador=Depends(operador_actual)):
-    return servicios.tablero_resultados(db, servicios.ahora_local().date())
+    tablero = servicios.tablero_resultados(db, servicios.ahora_local().date())
+    tablero["actualizado_en"] = servicios.ahora_local().isoformat(sep=" ", timespec="seconds")
+    return tablero
+
+
+@app.post("/terminal/resultados/actualizar")
+def terminal_actualizar_resultados(db=Depends(get_db), terminal=Depends(terminal_actual),
+                                   operador=Depends(operador_actual)):
+    """Pide una comprobación segura a Conéctate sin saltarse la validación.
+
+    No paga premios. Respeta el tope anti-abuso del reloj. La SUNMI solo
+    refresca lo ya confirmado o deja PENDIENTE.
+    """
+    sync = resultados_auto.ciclo_desde_terminal()
+    momento = servicios.ahora_local()
+    tablero = servicios.tablero_resultados(db, momento.date())
+    tablero["actualizado_en"] = momento.isoformat(sep=" ", timespec="seconds")
+    tablero["sincronizacion"] = {
+        "ok": bool(sync.get("ok")),
+        "omitido": sync.get("omitido"),
+        "confirmados": sync.get("confirmados", 0),
+        "premios": sync.get("premios", 0),
+        "motivo": sync.get("motivo"),
+    }
+    return tablero
 
 
 @app.get("/terminal/sorteos")

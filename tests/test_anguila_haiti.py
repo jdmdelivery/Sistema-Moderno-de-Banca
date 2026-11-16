@@ -362,11 +362,12 @@ def test_el_reloj_de_cuatro_minutos_guarda_la_firma_y_usa_la_foto(entorno, fijar
             forzar=True, payload=[], firmado=firmado, operador=_operador(firmado),
         )
         assert paso["ok"] is True and paso["rdlotto"] is False
-    fijar_hora(base.replace(minute=12))
+    # Con intervalo adaptativo (60 s cerca de pendientes), basta con <45 s.
+    fijar_hora(base.replace(minute=10, second=30))
     repetida = resultados_auto.ciclo(
         forzar=False, payload=[], firmado=firmado, operador=_operador(firmado),
     )
-    assert repetida["omitido"] == "otra consulta ya corrió en este intervalo"
+    assert repetida.get("omitido") == "otra consulta ya corrió en este intervalo"
     db = dbmod.nueva_sesion()
     vendidas = db.query(Jugada).filter_by(ticket_id=ticket["id"]).all()
     foto = {j.tipo.codigo: json.loads(j.factores_json) for j in vendidas}
