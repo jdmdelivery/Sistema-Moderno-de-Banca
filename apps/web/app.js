@@ -85,14 +85,31 @@ async function restaurarSesion() {
 
 /* --------------------------------------------------------------------- nav */
 let GANADORES_RELOJ = null;
+let MENU_SCROLL_Y = 0;
+
+/** Bloquea el scroll del Dashboard detrás del menú móvil (Safari iPhone). */
+function bloquearScrollFondo(activo) {
+  if (activo) {
+    MENU_SCROLL_Y = window.scrollY || window.pageYOffset || 0;
+    document.body.classList.add("menu-abierto");
+    document.body.style.top = "-" + MENU_SCROLL_Y + "px";
+  } else {
+    document.body.classList.remove("menu-abierto");
+    document.body.style.top = "";
+    window.scrollTo(0, MENU_SCROLL_Y);
+  }
+}
+
 function cerrarMenuMovil() {
   const nav = $("#nav");
   const fondo = $("#nav-fondo");
   const btn = $("#btn-menu");
   if (!nav) return;
+  const estaba = nav.classList.contains("abierto");
   nav.classList.remove("abierto");
   if (fondo) { fondo.classList.remove("abierto"); fondo.hidden = true; }
   if (btn) btn.setAttribute("aria-expanded", "false");
+  if (estaba) bloquearScrollFondo(false);
 }
 function alternarMenuMovil() {
   const nav = $("#nav");
@@ -102,6 +119,7 @@ function alternarMenuMovil() {
   nav.classList.toggle("abierto", abierto);
   if (fondo) { fondo.classList.toggle("abierto", abierto); fondo.hidden = !abierto; }
   if (btn) btn.setAttribute("aria-expanded", abierto ? "true" : "false");
+  bloquearScrollFondo(abierto);
 }
 function ir(sec) {
   if (GANADORES_RELOJ) {
