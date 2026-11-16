@@ -79,3 +79,29 @@ def test_exige_confirmacion(entorno):
     cajero = next(u for u in entorno.c.get("/usuarios", headers=entorno.admin).json() if u["usuario"] == "conf1")
     r = entorno.c.post(f"/usuarios/{cajero['id']}/eliminar", json={"confirmar": False}, headers=entorno.admin)
     assert r.status_code == 400
+
+
+def test_eliminar_con_auditoria_es_logica(entorno):
+    """Filas en auditoría (FK) bloquean borrado físico; debe quedar ELIMINADO sin 500."""
+    from apps.api import db as dbmod
+    from apps.api.models import Auditoria
+
+    entorno.banca(usuario="aud1", clave="prueba123")
+    cajero = next(u for u in entorno.c.get("/usuarios", headers=entorno.admin).json() if u["usuario"] == "aud1")
+    db = dbmod.nueva_sesion()
+    try:
+        db.add(Auditoria(
+            entidad="usuario", entidad_id=str(cajero["id"]), accion="login_test",
+            usuario_id=cajero["id"], detalle_json="{}",
+        ))
+        db.commit()
+    finally:
+        db.close()
+    baja = entorno.c.post(
+        f"/usuarios/{cajero['id']}/eliminar",
+        json={"confirmar": True, "motivo": "auditoria"},
+        headers=entorno.admin,
+    )
+    assert baja.status_code == 200, baja.text
+    assert baja.json()["modo"] == "logica"
+    assert baja.json()["usuario"]["estado"] == "ELIMINADO"

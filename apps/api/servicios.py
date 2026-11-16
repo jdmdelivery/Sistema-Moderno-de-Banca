@@ -190,28 +190,70 @@ def desbloquear_usuario(db, admin, usuario_id):
 
 
 def _usuario_tiene_historial(db, usuario_id):
-    """True si hay referencias financieras o tickets que deben conservarse."""
+    """True si hay FKs a usuarios que impiden borrar la fila (tickets, caja, auditoría…)."""
     if db.query(Ticket.id).filter(
-        (Ticket.usuario_id == usuario_id) | (Ticket.pagado_por_usuario_id == usuario_id)
+        (Ticket.usuario_id == usuario_id)
+        | (Ticket.pagado_por_usuario_id == usuario_id)
+        | (Ticket.anulado_por == usuario_id)
     ).first():
         return True
     if db.query(Jugada.id).filter(Jugada.pagado_por_usuario_id == usuario_id).first():
         return True
     if db.query(MovimientoCajera.id).filter(MovimientoCajera.usuario_id == usuario_id).first():
         return True
-    if db.query(FondoAsignado.id).filter(FondoAsignado.usuario_id == usuario_id).first():
+    if db.query(FondoAsignado.id).filter(
+        (FondoAsignado.usuario_id == usuario_id) | (FondoAsignado.autorizado_por == usuario_id)
+    ).first():
         return True
     if db.query(LimiteCajera.id).filter(LimiteCajera.usuario_id == usuario_id).first():
         return True
     if db.query(ComisionCajera.id).filter(ComisionCajera.usuario_id == usuario_id).first():
         return True
-    if db.query(LiquidacionComision.id).filter(LiquidacionComision.usuario_id == usuario_id).first():
+    if db.query(LiquidacionComision.id).filter(
+        (LiquidacionComision.usuario_id == usuario_id)
+        | (LiquidacionComision.pagada_por == usuario_id)
+    ).first():
+        return True
+    if db.query(Entrega.id).filter(
+        (Entrega.usuario_id == usuario_id) | (Entrega.recibida_por == usuario_id)
+    ).first():
+        return True
+    if db.query(TablaPagos.id).filter(TablaPagos.creado_por == usuario_id).first():
+        return True
+    if db.query(Resultado.id).filter(
+        (Resultado.confirmado_por == usuario_id) | (Resultado.propuesto_por == usuario_id)
+    ).first():
+        return True
+    if db.query(Auditoria.id).filter(Auditoria.usuario_id == usuario_id).first():
         return True
     return False
 
 
+def _eliminacion_logica(db, admin, objetivo, motivo_limpio, cuando):
+    objetivo.activo = False
+    objetivo.eliminado = True
+    objetivo.eliminado_en = cuando
+    objetivo.eliminado_por = admin.id
+    objetivo.motivo_eliminacion = motivo_limpio
+    auditar(
+        db, "usuario", objetivo.id, "eliminacion_logica", usuario_id=admin.id,
+        detalle={
+            "eliminado_usuario": objetivo.usuario,
+            "eliminado_nombre": objetivo.nombre,
+            "eliminado_rol": objetivo.rol,
+            "tipo": "logica",
+            "motivo": motivo_limpio,
+            "por": admin.usuario,
+            "cuando": cuando.isoformat(sep=" "),
+        },
+    )
+    db.commit()
+    db.refresh(objetivo)
+    return {"modo": "logica", "usuario": objetivo}
+
+
 def eliminar_usuario(db, admin, usuario_id, motivo=None):
-    """Elimina un usuario: físico sin historial, lógico si hay movimientos."""
+    """Elimina un usuario: físico sin historial, lógico si hay movimientos o FKs."""
     if admin.rol != "admin":
         raise ErrorServicio(403, "Solo un administrador puede eliminar usuarios")
     objetivo = db.get(Usuario, usuario_id)
@@ -236,26 +278,7 @@ def eliminar_usuario(db, admin, usuario_id, motivo=None):
     motivo_limpio = (motivo or "").strip()[:200] or None
     cuando = ahora_oficial(db)
     if _usuario_tiene_historial(db, objetivo.id):
-        objetivo.activo = False
-        objetivo.eliminado = True
-        objetivo.eliminado_en = cuando
-        objetivo.eliminado_por = admin.id
-        objetivo.motivo_eliminacion = motivo_limpio
-        auditar(
-            db, "usuario", objetivo.id, "eliminacion_logica", usuario_id=admin.id,
-            detalle={
-                "eliminado_usuario": objetivo.usuario,
-                "eliminado_nombre": objetivo.nombre,
-                "eliminado_rol": objetivo.rol,
-                "tipo": "logica",
-                "motivo": motivo_limpio,
-                "por": admin.usuario,
-                "cuando": cuando.isoformat(sep=" "),
-            },
-        )
-        db.commit()
-        db.refresh(objetivo)
-        return {"modo": "logica", "usuario": objetivo}
+        return _eliminacion_logica(db, admin, objetivo, motivo_limpio, cuando)
     datos = {
         "eliminado_usuario": objetivo.usuario,
         "eliminado_nombre": objetivo.nombre,
@@ -266,9 +289,19 @@ def eliminar_usuario(db, admin, usuario_id, motivo=None):
         "cuando": cuando.isoformat(sep=" "),
     }
     uid = objetivo.id
-    auditar(db, "usuario", uid, "eliminacion_fisica", usuario_id=admin.id, detalle=datos)
-    db.delete(objetivo)
-    db.commit()
+    try:
+        auditar(db, "usuario", uid, "eliminacion_fisica", usuario_id=admin.id, detalle=datos)
+        db.delete(objetivo)
+        db.commit()
+    except IntegrityError:
+        # Cualquier FK no cubierta (p. ej. auditoría previa) → baja lógica.
+        db.rollback()
+        objetivo = db.get(Usuario, uid)
+        if objetivo is None:
+            raise ErrorServicio(404, "El usuario no existe")
+        if getattr(objetivo, "eliminado", False):
+            raise ErrorServicio(409, "El usuario ya está eliminado")
+        return _eliminacion_logica(db, admin, objetivo, motivo_limpio, cuando)
     return {"modo": "fisica", "id": uid, "detalle": datos}
 
 
