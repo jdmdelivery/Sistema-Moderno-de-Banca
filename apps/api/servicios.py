@@ -793,6 +793,7 @@ def _linea_premio(db, ticket, jugada):
         "tipo": codigo,
         "tipo_nombre": tipo,
         "numeros": jugada.numeros,
+        "monto_jugado": str(D(jugada.monto)),
         "numero_ganador": " · ".join(numeros),
         "acierto": jugada.detalle_eval or "",
         "premio": str(D(jugada.premio)),
@@ -805,9 +806,45 @@ def _linea_premio(db, ticket, jugada):
     }
 
 
+def _linea_sin_premio(jugada):
+    codigo = jugada.tipo.codigo if jugada.tipo else ""
+    tipo = _NOMBRE_JUGADA.get(codigo, jugada.tipo.nombre if jugada.tipo else "?")
+    loterias = []
+    for sorteo in (jugada.sorteo, jugada.sorteo2):
+        if sorteo is not None:
+            loterias.append(sorteo.nombre)
+    return {
+        "loteria": " · ".join(loterias),
+        "fecha": jugada.fecha.isoformat() if jugada.fecha else "",
+        "tipo": codigo,
+        "tipo_nombre": tipo,
+        "numeros": jugada.numeros,
+        "monto_jugado": str(D(jugada.monto)),
+    }
+
+
+def _agregar_bloque_premio(lineas, fila):
+    lineas.extend([
+        fila["tipo_nombre"],
+        f"Lotería: {fila['loteria']}",
+        f"Fecha: {fila['fecha']}",
+        f"Número ganador: {fila['numero_ganador']}",
+        f"Jugada: {fila['numeros']}",
+        f"Monto jugado: ${fila['monto_jugado']}",
+        f"Premio: RD${fila['premio']}",
+        "Estado: PAGADO" if fila["estado_pago"] == "pagado" else "Estado: PENDIENTE DE PAGO",
+    ])
+    if fila["estado_pago"] == "pagado" and fila["cajero"]:
+        lineas.append(f"Cajero: {fila['cajero']}")
+    if fila["pagado_en"]:
+        lineas.append(f"Fecha de pago: {fila['pagado_en']}")
+    lineas.append("")
+
+
 def _vista_pago(db, ticket):
-    """Pantalla de pago: solo premios, sorteos todavía sin resultado y el total pendiente."""
+    """Pantalla de pago: ganadoras, pagadas, sin premio y sorteos sin liquidar."""
     premios = []
+    perdedoras = []
     pendientes = []
     vistos = set()
     for jugada in ticket.jugadas:
@@ -815,6 +852,7 @@ def _vista_pago(db, ticket):
             premios.append(_linea_premio(db, ticket, jugada))
             continue
         if jugada.evaluada:
+            perdedoras.append(_linea_sin_premio(jugada))
             continue
         for sorteo in (jugada.sorteo, jugada.sorteo2):
             if sorteo is None:
@@ -827,8 +865,10 @@ def _vista_pago(db, ticket):
                 "loteria": sorteo.nombre,
                 "fecha": jugada.fecha.isoformat() if jugada.fecha else "",
             })
-    pendiente = sum((D(fila["premio"]) for fila in premios if fila["estado_pago"] == "pendiente"), D(0))
-    pagado = sum((D(fila["premio"]) for fila in premios if fila["estado_pago"] == "pagado"), D(0))
+    por_cobrar = [fila for fila in premios if fila["estado_pago"] == "pendiente"]
+    ya_pagados = [fila for fila in premios if fila["estado_pago"] == "pagado"]
+    pendiente = sum((D(fila["premio"]) for fila in por_cobrar), D(0))
+    pagado = sum((D(fila["premio"]) for fila in ya_pagados), D(0))
     if ticket.estado == "pagado":
         # Ticket cerrado a nivel cabecera: nada queda por cobrar (código viejo o pago total).
         pendiente = D(0)
@@ -849,27 +889,34 @@ def _vista_pago(db, ticket):
         lineas.append("TICKET ANULADO")
     elif ticket.estado == "vencido":
         lineas.append("TICKET VENCIDO")
-    elif not premios:
+    elif not premios and not perdedoras and not pendientes:
         lineas.append("TICKET SIN PREMIOS")
-    for fila in premios:
-        lineas.extend([
-            fila["tipo_nombre"],
-            f"Lotería: {fila['loteria']}",
-            f"Fecha: {fila['fecha']}",
-            f"Número ganador: {fila['numero_ganador']}",
-            f"Jugada: {fila['numeros']}",
-            f"Premio: RD${fila['premio']}",
-            "Estado: PAGADO" if fila["estado_pago"] == "pagado" else "Estado: PENDIENTE DE PAGO",
-        ])
-        if fila["estado_pago"] == "pagado" and fila["cajero"]:
-            lineas.append(f"Cajero: {fila['cajero']}")
-        if fila["pagado_en"]:
-            lineas.append(f"Fecha de pago: {fila['pagado_en']}")
-        lineas.append("")
+    elif not premios and not pendientes:
+        lineas.append("TICKET SIN PREMIOS")
+    if por_cobrar:
+        lineas.append("PREMIOS POR PAGAR")
+        for fila in por_cobrar:
+            _agregar_bloque_premio(lineas, fila)
+    if ya_pagados:
+        lineas.append("PREMIOS PAGADOS")
+        for fila in ya_pagados:
+            _agregar_bloque_premio(lineas, fila)
+    if perdedoras and ticket.estado not in ("anulado", "vencido"):
+        lineas.append("NO GANARON")
+        for fila in perdedoras:
+            lineas.extend([
+                fila["tipo_nombre"],
+                f"Lotería: {fila['loteria']}",
+                f"Fecha: {fila['fecha']}",
+                f"Jugada: {fila['numeros']}",
+                f"Monto jugado: ${fila['monto_jugado']}",
+                "Estado: NO GANÓ",
+                "",
+            ])
     if pendientes and ticket.estado not in ("anulado", "vencido", "pagado"):
         lineas.append("SORTEOS PENDIENTES")
         for fila in pendientes:
-            lineas.append(f"{fila['loteria']} {fila['fecha']}")
+            lineas.append(f"{fila['loteria']} {fila['fecha']} — PENDIENTE")
         lineas.append("Esos sorteos no se pagan todavía.")
         lineas.append("")
     if premios and ticket.estado not in ("anulado", "vencido"):
@@ -884,6 +931,9 @@ def _vista_pago(db, ticket):
     )
     return {
         "premios": premios,
+        "premios_por_pagar": por_cobrar,
+        "premios_pagados": ya_pagados,
+        "jugadas_sin_premio": perdedoras,
         "sorteos_pendientes": pendientes,
         "premio_pendiente": str(pendiente),
         "premio_pagado": str(pagado),
@@ -904,13 +954,16 @@ def consultar_ticket(db, ticket_id, serial):
         datos.update(_vista_pago(db, ticket))
         datos["puede_pagar"] = False
         return datos
-    datos["puede_pagar"] = ticket.estado == "ganador"
+    datos["puede_pagar"] = ticket.estado in ("ganador", "parcial")
     if ticket.estado == "ganador":
         datos["veredicto"] = (
             "TICKET GANADOR — PENDIENTE DE PAGO — NO OFICIAL"
             if ticket.es_prueba else "TICKET GANADOR — PENDIENTE DE PAGO"
         )
         datos["mensaje"] = f"Ticket ganador: pague ${D(ticket.premio_total)}"
+    elif ticket.estado == "parcial":
+        datos["veredicto"] = "PAGO PARCIAL"
+        datos["mensaje"] = "Ticket con pago parcial"
     elif ticket.estado == "pagado":
         p = datos["pago"]
         datos["veredicto"] = "TICKET YA PAGADO — NO OFICIAL" if ticket.es_prueba else "TICKET YA PAGADO"
@@ -938,11 +991,15 @@ def consultar_ticket(db, ticket_id, serial):
         datos["puede_pagar"] = False
         datos["premio_pendiente"] = "0.00"
         datos["importe_a_cobrar"] = "0.00"
-    if ticket.estado == "ganador":
-        datos["mensaje"] = f"Ticket ganador: pague ${datos['premio_pendiente']}"
+    if D(datos["premio_pendiente"]) > 0:
+        if ticket.estado == "parcial" or datos.get("sorteos_pendientes"):
+            datos["veredicto"] = "PREMIOS CONFIRMADOS — SE PUEDEN PAGAR"
+            datos["mensaje"] = f"Cobrar ahora ${datos['importe_a_cobrar']}"
+        elif ticket.estado == "ganador":
+            datos["mensaje"] = f"Ticket ganador: pague ${datos['premio_pendiente']}"
     elif ticket.estado == "parcial":
-        datos["veredicto"] = "PAGO PARCIAL — QUEDA PREMIO PENDIENTE"
-        datos["mensaje"] = f"Cobrar ahora ${datos['importe_a_cobrar']}"
+        datos["veredicto"] = "PAGO PARCIAL — QUEDAN SORTEOS PENDIENTES"
+        datos["mensaje"] = "Ya se cobraron los premios confirmados. Esperando sorteos pendientes."
     texto = comprobante_premio(db, ticket)
     if texto:
         datos["comprobante"] = texto
@@ -1857,6 +1914,26 @@ def consulta_resultados(db, hoy):
                 "pendiente": True,
             })
             continue
+        vigente = elegido.fecha == hoy
+        # Sin resultado de hoy no se muestran cifras de días anteriores como
+        # si fueran el sorteo actual: eso confundía PENDIENTE con números viejos.
+        if not vigente:
+            filas.append({
+                "id": sorteo.id,
+                "nombre": sorteo.nombre,
+                "hora": sorteo.hora_sorteo.strftime("%H:%M"),
+                "fecha": None,
+                "fecha_anterior": elegido.fecha.isoformat(),
+                "premio1": None,
+                "premio2": None,
+                "premio3": None,
+                "estado": None,
+                "confirmado": False,
+                "vigente": False,
+                "pendiente": True,
+                "referencia": f"{elegido.premio1:02d}-{elegido.premio2:02d}-{elegido.premio3:02d}",
+            })
+            continue
         filas.append({
             "id": sorteo.id,
             "nombre": sorteo.nombre,
@@ -1867,7 +1944,7 @@ def consulta_resultados(db, hoy):
             "premio3": f"{elegido.premio3:02d}",
             "estado": elegido.estado,
             "confirmado": elegido.estado in _RESULTADOS_CONFIRMADOS,
-            "vigente": elegido.fecha == hoy,
+            "vigente": True,
             "pendiente": False,
         })
     return {"hoy": hoy.isoformat(), "zona": "America/Santo_Domingo", "sorteos": filas}
@@ -2149,6 +2226,7 @@ def indicadores_caja(db, usuario):
         ahora = ahora_local()
         return {
             "mi_caja": cero,
+            "premios_por_pagar": cero,
             "ventas_dia": cero,
             "fecha_local": ahora.date().isoformat(),
             "zona": "America/Santo_Domingo",
@@ -2201,6 +2279,7 @@ def indicadores_caja(db, usuario):
     cuadre = fondo + recaudacion - entregas
     return {
         "mi_caja": str(saldo),
+        "premios_por_pagar": str(_premios_por_pagar_sucursal(db, usuario)),
         "ventas_dia": ventas_hoy,
         "fecha_local": ahora.date().isoformat(),
         "zona": "America/Santo_Domingo",
@@ -2214,6 +2293,32 @@ def indicadores_caja(db, usuario):
         "diferencia": str(saldo - cuadre),
         "es_prueba": prueba,
     }
+
+
+def _premios_por_pagar_sucursal(db, usuario):
+    """Suma de premios confirmados sin pagar de la sucursal del cajero.
+
+    Solo cuenta jugadas evaluadas con premio > 0 y pagada=False, respaldadas
+    por un resultado confirmado/liquidado (o simulado de prueba). No inventa.
+    """
+    if usuario is None or usuario.sucursal_id is None:
+        return D(0)
+    prueba = modo_desarrollo()
+    candidatos = (
+        db.query(Ticket)
+        .filter(
+            Ticket.sucursal_vendedora_id == usuario.sucursal_id,
+            Ticket.es_prueba.is_(prueba),
+            Ticket.estado.in_(("ganador", "parcial", "vendido")),
+        )
+        .order_by(Ticket.id)
+        .all()
+    )
+    total = D(0)
+    for ticket in candidatos:
+        if _premio_pendiente_valido(db, ticket):
+            total += _importe_sin_cobrar(ticket)
+    return total
 
 
 def estado_entrega(db, operador, sucursal, terminal):
@@ -3449,7 +3554,10 @@ def _bloque_resumen(db, desde, hasta, sucursal_id, usuario_id, prueba):
     nulos = [t for t in tickets if t.estado == "anulado"]
     pagados = [t for t in tickets if t.estado == "pagado"]
     otra = [t for t in pagados if t.pagado_en_sucursal_id not in (None, sucursal_id)]
-    pendientes = [t for t in tickets if t.estado in ("ganador", "parcial")]
+    pendientes = [
+        t for t in tickets
+        if t.estado in ("ganador", "parcial", "vendido") and _importe_sin_cobrar(t) > 0
+    ]
     ventas = sum((D(t.total) for t in vigentes), D(0))
     premios_pagados = sum((D(t.premio_total) for t in pagados), D(0))
     monto_pendiente = sum((_importe_sin_cobrar(t) for t in pendientes), D(0))
@@ -3463,7 +3571,7 @@ def _bloque_resumen(db, desde, hasta, sucursal_id, usuario_id, prueba):
         "total_pagado": str(D(premios_pagados)),
         "neto": str(D(ventas - premios_pagados)),
         "pendientes": [
-            {"id": t.id, "premio": str(D(t.premio_total)), "fecha": t.fecha.strftime("%d-%m-%Y")}
+            {"id": t.id, "premio": str(_importe_sin_cobrar(t)), "fecha": t.fecha.strftime("%d-%m-%Y")}
             for t in pendientes
         ],
     }
@@ -3545,8 +3653,12 @@ def _premio_pendiente_valido(db, ticket):
 
     Un resultado simulado solo respalda un ticket de prueba. Un ticket real
     exige un resultado confirmado o liquidado, y nunca uno simulado.
+    Acepta cabeceras ganador/parcial y también vendido con premios ya
+    evaluados (tickets multi-sorteo a media jornada).
     """
-    if ticket.estado not in ("ganador", "parcial") or _importe_sin_cobrar(ticket) <= 0:
+    if ticket.estado in ("anulado", "vencido", "pagado", "no_ganador"):
+        return False
+    if _importe_sin_cobrar(ticket) <= 0:
         return False
     jugadas = [
         j for j in ticket.jugadas
@@ -3630,7 +3742,7 @@ def _bloque_periodo(db, desde, hasta, prueba, sucursal_id=None, usuario_id=None)
     candidatos = (
         db.query(Ticket)
         .filter(
-            Ticket.estado.in_(("ganador", "parcial")),
+            Ticket.estado.in_(("ganador", "parcial", "vendido")),
             Ticket.es_prueba.is_(prueba),
             Ticket.fecha >= desde,
             Ticket.fecha <= hasta,
@@ -3683,7 +3795,12 @@ def reporte_resumen(db, desde, hasta, vista, sucursal_id=None, usuario_id=None):
         ventas = sum((D(t.total) for t in vigentes), D(0))
         premios_pagados = sum((D(t.premio_total) for t in tickets if t.estado == "pagado"), D(0))
         premios_pendientes = sum(
-            (_importe_sin_cobrar(t) for t in tickets if t.estado in ("ganador", "parcial")), D(0),
+            (
+                _importe_sin_cobrar(t)
+                for t in tickets
+                if t.estado in ("ganador", "parcial", "vendido") and _importe_sin_cobrar(t) > 0
+            ),
+            D(0),
         )
         comision = D(0)
         for t in vigentes:
@@ -3726,7 +3843,10 @@ def reporte_resumen(db, desde, hasta, vista, sucursal_id=None, usuario_id=None):
     if vista == "premios":  # todos los que ganaron (pagados o no)
         elegidos = [t for t in tickets if t.estado in ("ganador", "parcial", "pagado")]
     elif vista == "ganadores":  # ganadores aún sin pagar
-        elegidos = [t for t in tickets if t.estado in ("ganador", "parcial")]
+        elegidos = [
+            t for t in tickets
+            if t.estado in ("ganador", "parcial", "vendido") and _importe_sin_cobrar(t) > 0
+        ]
     elif vista == "pagados":
         elegidos = [t for t in tickets if t.estado == "pagado"]
     elif vista == "nulos":
@@ -3747,7 +3867,10 @@ def reporte_resumen(db, desde, hasta, vista, sucursal_id=None, usuario_id=None):
 
 def reporte_pendientes(db, desde, hasta, sucursal_id, usuario_id=None):
     tickets = _tickets_rango(db, desde, hasta, sucursal_id, usuario_id)
-    pendientes = [t for t in tickets if t.estado in ("ganador", "parcial")]
+    pendientes = [
+        t for t in tickets
+        if t.estado in ("ganador", "parcial", "vendido") and _importe_sin_cobrar(t) > 0
+    ]
     pagados_en_otra = [
         t for t in tickets
         if t.estado == "pagado" and t.pagado_en_sucursal_id not in (None, sucursal_id)
@@ -3865,10 +3988,10 @@ def panel_movil(db, usuario, seccion, desde, hasta, sucursal_id=None, usuario_id
         observaciones = estabilizacion.resumen_observaciones(db, hasta)
         momento = ahora_local()
         proceso = resultados_auto.estado_reloj(db, momento)
-        pendientes = (
-            db.query(Ticket)
-            .filter(Ticket.estado.in_(("ganador", "parcial")), Ticket.premio_total > 0)
-            .count()
+        pendientes = sum(
+            1
+            for t in db.query(Ticket).filter(Ticket.premio_total > 0).all()
+            if t.estado in ("ganador", "parcial", "vendido") and _importe_sin_cobrar(t) > 0
         )
         recientes = (
             db.query(Resultado)

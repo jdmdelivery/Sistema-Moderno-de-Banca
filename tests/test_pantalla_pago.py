@@ -64,8 +64,9 @@ def test_una_loteria_muestra_el_premio_y_oculta_la_perdedora(entorno, monkeypatc
     assert "Número ganador: 25-54-78" in consulta["texto_pago"]
     assert "Jugada: 25" in consulta["texto_pago"]
     assert "Premio: RD$600.00" in consulta["texto_pago"]
-    assert "99" not in consulta["texto_pago"]
-    assert "RD$10.00" not in consulta["texto_pago"]
+    assert "Monto jugado: $10.00" in consulta["texto_pago"]
+    assert "NO GANARON" in consulta["texto_pago"]
+    assert "Jugada: 99" in consulta["texto_pago"]
     assert "EMPRESA: BANCA CASTILLO (PRUEBA)" in consulta["texto_pago"]
 
 
@@ -83,11 +84,11 @@ def test_dos_loterias_y_pale_se_listan_aparte_y_se_cobran_juntos(entorno, monkey
     _simular(entorno, primera, 19, 3, 45)
     consulta = _consultar(entorno, b["headers"], ticket)
     assert consulta["premio_pendiente"] == "6600.00"
-    assert consulta["texto_pago"].count("Lotería:") == 2
     assert "Lotería: Lotedom 12:00 PM" in consulta["texto_pago"]
     assert "Lotería: La Primera 12:00 PM" in consulta["texto_pago"]
     assert "PALÉ" in consulta["texto_pago"]
-    assert "77" not in consulta["texto_pago"]
+    assert "NO GANARON" in consulta["texto_pago"]
+    assert "Jugada: 77" in consulta["texto_pago"]
     antes = float(_consultar(entorno, b["headers"], ticket) and entorno.c.get(
         "/terminal/sorteos", headers=b["headers"]).json()["mi_caja"])
     pago = entorno.c.post("/terminal/tickets/pagar", json={
@@ -121,19 +122,22 @@ def test_tres_loterias_cobra_las_listas_y_deja_la_pendiente(entorno, monkeypatch
     _simular(entorno, lotedom, 25, 1, 2)
     _simular(entorno, primera, 25, 3, 4)
     consulta = _consultar(entorno, b["headers"], ticket)
-    assert consulta["estado"] == "vendido"
+    assert consulta["estado"] == "ganador"
     assert consulta["puede_pagar"] is True
     assert consulta["premio_pendiente"] == "1200.00"
     assert "SORTEOS PENDIENTES" in consulta["texto_pago"]
     assert "Florida 2:30 PM" in consulta["texto_pago"]
     assert "Esos sorteos no se pagan todavía." in consulta["texto_pago"]
-    antes = float(entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()["mi_caja"])
+    caja = entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()
+    antes = float(caja["mi_caja"])
+    assert float(caja["premios_por_pagar"]) == 1200.00
     parcial = entorno.c.post("/terminal/tickets/pagar", json={
         "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "pago-parcial",
     }, headers=b["headers"])
     assert parcial.status_code == 200, parcial.text
-    assert parcial.json()["estado"] == "vendido"
+    assert parcial.json()["estado"] == "parcial"
     assert float(parcial.json()["mi_caja"]) == antes - 1200
+    assert float(parcial.json()["premios_por_pagar"]) == 0.00
     anulacion = entorno.c.post("/terminal/tickets/anular", json={
         "id": ticket["id"], "serial": ticket["serial"], "motivo": "despues del pago",
     }, headers=b["headers"])

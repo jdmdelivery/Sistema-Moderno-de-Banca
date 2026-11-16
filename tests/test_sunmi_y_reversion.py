@@ -59,7 +59,8 @@ def test_la_pantalla_muestra_total_pagado_y_cobra_solo_el_pendiente(entorno, mon
     assert "PREMIO YA PAGADO: RD$0.00" in consulta["texto_pago"]
     assert "PREMIO PENDIENTE: RD$600.00" in consulta["texto_pago"]
     assert "SE COBRARÁ: RD$600.00" in consulta["texto_pago"]
-    assert "Jugada: 99" not in consulta["texto_pago"]
+    assert "NO GANARON" in consulta["texto_pago"]
+    assert "Jugada: 99" in consulta["texto_pago"]
     assert len(consulta["jugadas"]) == 3
     assert "Florida 2:30 PM" in consulta["texto_pago"]
     caja_real = entorno.saldo(b["sucursal"]["id"])
@@ -178,7 +179,8 @@ def test_varias_loterias_dejan_el_pendiente_fuera_del_cobro(entorno, monkeypatch
     assert consulta["importe_a_cobrar"] == "1200.00"
     assert "SE COBRARÁ: RD$1200.00" in consulta["texto_pago"]
     assert "PREMIO TOTAL: RD$1200.00" in consulta["texto_pago"]
-    assert "Jugada: 99" not in consulta["texto_pago"]
+    assert "NO GANARON" in consulta["texto_pago"]
+    assert "Jugada: 99" in consulta["texto_pago"]
     assert any(j["numeros"] == "99" for j in consulta["jugadas"])
     assert "Florida 2:30 PM" in consulta["texto_pago"]
     antes = _caja(entorno, b["headers"])

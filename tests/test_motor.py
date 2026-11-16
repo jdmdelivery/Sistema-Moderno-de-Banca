@@ -84,7 +84,8 @@ def test_ticket_mixto_acumula_premio_parcial(entorno):
     ])
     entorno.liquidar(s_primera, 19, 58, 0)  # QN gana 600; el SP sigue esperando a Real
     c = entorno.consultar(t)
-    assert c["estado"] == "vendido" and float(c["premio_total"]) == 600.00
+    assert c["estado"] == "ganador" and float(c["premio_total"]) == 600.00
+    assert c["puede_pagar"] is True
     entorno.liquidar(s_real, 26, 4, 5)  # SP: 1.º Real=26 y 1.º Primera=19 → no gana (58 era 2.º)
     c = entorno.consultar(t)
     assert c["estado"] == "ganador" and float(c["premio_total"]) == 600.00

@@ -65,10 +65,12 @@ def test_el_dia_cambia_a_medianoche_y_el_resultado_nuevo_reemplaza_al_anterior(e
     assert gris["hoy"] == "2026-11-15"
     assert gris["zona"] == "America/Santo_Domingo"
     anterior = _fila(gris, "La Primera 12:00 PM")
-    assert anterior["fecha"] == "2026-11-14"
+    assert anterior["pendiente"] is True
     assert anterior["vigente"] is False
-    assert anterior["premio1"] == "19"
-    assert anterior["premio3"] == "45"
+    assert anterior["premio1"] is None
+    assert anterior["fecha"] is None
+    assert anterior["fecha_anterior"] == "2026-11-14"
+    assert anterior["referencia"] == "19-03-45"
 
     _guardar("La Primera 12:00 PM", datetime(2026, 11, 15).date(), (7, 11, 22), "en_verificacion")
     nuevo = _fila(entorno.c.get("/terminal/resultados", headers=b["headers"]).json(), "La Primera 12:00 PM")
@@ -92,9 +94,8 @@ def test_un_error_de_fuente_no_tapa_el_ultimo_resultado_util(entorno):
     _guardar("Quiniela Real 12:55 PM", datetime(2026, 11, 13).date(), (10, 20, 30), "liquidado")
     _guardar("Quiniela Real 12:55 PM", datetime(2026, 11, 14).date(), (1, 2, 3), "error_fuente")
     fila = _fila(entorno.c.get("/terminal/resultados", headers=b["headers"]).json(), "Quiniela Real 12:55 PM")
-    assert fila["fecha"] == "2026-11-13"
+    assert fila["pendiente"] is True
     assert fila["vigente"] is False
-    assert fila["confirmado"] is True
-    assert fila["premio1"] == "10"
-    assert fila["premio2"] == "20"
-    assert fila["premio3"] == "30"
+    assert fila["premio1"] is None
+    assert fila["fecha_anterior"] == "2026-11-13"
+    assert fila["referencia"] == "10-20-30"

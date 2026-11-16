@@ -49,10 +49,10 @@ def evaluar_jugada(jugada, res_a, res_b=None):
 def recomputar_ticket(db, ticket):
     """Recalcula premio_total y estado de un ticket según sus jugadas evaluadas.
 
-    Un premio ya cobrado no vuelve a quedar pendiente. Si todavía hay un
-    sorteo sin resultado, el ticket sigue vendido aunque otra jugada ya se haya pagado.
-    Si un sorteo posterior confirma un premio nuevo sobre un ticket ya cobrado,
-    se reabre a parcial sin tocar los pagos previos.
+    Un premio ya cobrado no vuelve a quedar pendiente. Si hay premios
+    confirmados sin cobrar, el ticket pasa a ganador/parcial aunque otros
+    sorteos sigan abiertos. Si un sorteo posterior confirma un premio nuevo
+    sobre un ticket ya cobrado, se reabre a parcial sin tocar los pagos previos.
     """
     if ticket.estado in ("anulado", "vencido"):
         return
@@ -70,15 +70,19 @@ def recomputar_ticket(db, ticket):
         if impagos:
             ticket.estado = "parcial"
         return
-    if not ticket.jugadas or not all(j.evaluada for j in ticket.jugadas):
-        ticket.estado = "vendido"
-        return
+    hay_pagadas = any(j.pagada for j in ticket.jugadas)
+    todas_evaluadas = bool(ticket.jugadas) and all(j.evaluada for j in ticket.jugadas)
     if impagos:
-        # Un tramo ya cobrado no vuelve a estado ganador. El código anterior
-        # cobra premio_total completo solo cuando el estado es ganador.
-        ticket.estado = "parcial" if any(j.pagada for j in ticket.jugadas) else "ganador"
+        # Premios confirmados se pueden cobrar aunque otros sorteos sigan abiertos.
+        # Un tramo ya cobrado no vuelve a "ganador": queda "parcial".
+        ticket.estado = "parcial" if hay_pagadas else "ganador"
         return
-    if any(j.pagada for j in ticket.jugadas):
+    if not todas_evaluadas:
+        # Sin premio pendiente: si ya hubo cobro parcial, el ticket sigue parcial
+        # hasta que cierren los sorteos restantes; si no, permanece vendido.
+        ticket.estado = "parcial" if hay_pagadas else "vendido"
+        return
+    if hay_pagadas:
         ticket.estado = "pagado"
         if ticket.pagado_en is None:
             pagadas = [j for j in ticket.jugadas if j.pagada and j.pagado_en is not None]
