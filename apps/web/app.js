@@ -113,7 +113,8 @@ function ir(sec) {
   $$(".seccion").forEach((s) => s.classList.toggle("activo", s.id === "sec-" + sec));
   const cargar = {
     inicio: cargarInicio, sucursales: cargarSucursales, terminales: cargarTerminales,
-    usuarios: cargarUsuarios, sorteos: cargarSorteos, tabla: cargarTabla,
+    usuarios: cargarUsuarios, "ventas-cajeros": cargarVentasCajeros,
+    sorteos: cargarSorteos, tabla: cargarTabla,
     limites: cargarLimites, resultados: cargarResultados, tickets: async () => {},
     fuente: cargarFuente, ganadores: cargarGanadores,
     caja: cargarCaja, entregas: cargarEntregas, fondos: cargarFondos, comisiones: cargarComisiones,
@@ -281,34 +282,43 @@ async function reactivarTerminal(id) {
 }
 
 /* ----------------------------------------------------------------- usuarios */
+function pillEstadoUsuario(u) {
+  const e = u.estado || (u.eliminado ? "ELIMINADO" : (u.activo ? "ACTIVO" : "BLOQUEADO"));
+  const cls = e === "ACTIVO" ? "activo" : (e === "ELIMINADO" ? "eliminado" : "bloqueado");
+  return `<span class="pill ${cls}">${esc(e)}</span>`;
+}
 async function cargarUsuarios() {
-  const usuarios = await api("/usuarios");
+  const filtro = ($("#usu-filtro") && $("#usu-filtro").value) || "";
+  const ruta = filtro ? `/usuarios?estado=${encodeURIComponent(filtro)}` : "/usuarios";
+  const usuarios = await api(ruta);
   const soyAdmin = YO && YO.rol === "admin";
   tabla("#usu-tabla", ["Nombre", "Usuario", "Rol", "Sucursal", "Caja", "Caja de prueba", "Estado", "Acciones"],
     usuarios.map((u) => {
       const suc = SUCURSALES.find((s) => s.id === u.sucursal_id);
       const caja = u.saldo_caja == null ? "—" : fmt(u.saldo_caja);
       const prueba = u.saldo_caja_prueba == null ? "—" : fmt(u.saldo_caja_prueba);
-      const estado = u.activo
-        ? '<span class="pill activo">ACTIVO</span>'
-        : '<span class="pill bloqueado">BLOQUEADO</span>';
-      let acciones = `<button class="btn fila" onclick="editarUsuario(${u.id})">EDITAR</button>`;
-      if (soyAdmin) {
+      let acciones = "";
+      if (!u.eliminado) {
+        acciones += `<button class="btn fila" onclick="editarUsuario(${u.id})">EDITAR</button>`;
+      }
+      if (soyAdmin && !u.eliminado) {
         if (u.activo) {
           acciones += ` <button class="btn fila peligro" onclick="bloquearUsuario(${u.id})">BLOQUEAR</button>`;
         } else {
           acciones += ` <button class="btn fila primario" onclick="desbloquearUsuario(${u.id})">DESBLOQUEAR</button>`;
         }
+        acciones += ` <button class="btn fila peligro" onclick="eliminarUsuario(${u.id})">ELIMINAR</button>`;
       }
       return `<tr><td>${esc(u.nombre)}</td><td>${esc(u.usuario)}</td><td>${esc(u.rol)}</td>
         <td>${esc(suc ? suc.nombre : "—")}</td><td>${caja}</td><td>${prueba}</td>
-        <td>${estado}</td>
-        <td><div class="acciones-fila">${acciones}</div></td></tr>`;
+        <td>${pillEstadoUsuario(u)}</td>
+        <td><div class="acciones-fila">${acciones || "—"}</div></td></tr>`;
     }));
   window._usuarios = usuarios;
 }
 function editarUsuario(id) {
   const u = (window._usuarios || []).find((x) => x.id === id); if (!u) return;
+  if (u.eliminado) { msg("#usu-msg", "Un usuario eliminado no se puede editar", false); return; }
   $("#usu-id").value = u.id; $("#usu-nombre").value = u.nombre; $("#usu-usuario").value = u.usuario;
   $("#usu-rol").value = u.rol; $("#usu-sucursal").value = u.sucursal_id || "";
   $("#usu-clave").value = ""; $("#usu-activo").checked = u.activo;
@@ -340,6 +350,7 @@ async function bloquearUsuario(id) {
 }
 async function desbloquearUsuario(id) {
   const u = (window._usuarios || []).find((x) => x.id === id); if (!u) return;
+  if (u.eliminado) { msg("#usu-msg", "Un usuario eliminado no se puede desbloquear", false); return; }
   if (!confirm(`¿DESBLOQUEAR a ${u.nombre} (${u.usuario})?\nPodrá iniciar sesión de nuevo con sus credenciales.`)) return;
   try {
     await post(`/usuarios/${id}/desbloquear`);
@@ -347,6 +358,135 @@ async function desbloquearUsuario(id) {
     await cargarUsuarios();
   } catch (e) { msg("#usu-msg", e.message, false); }
 }
+async function eliminarUsuario(id) {
+  const u = (window._usuarios || []).find((x) => x.id === id); if (!u) return;
+  const suc = SUCURSALES.find((s) => s.id === u.sucursal_id);
+  const ok = confirm(
+    `¿ESTÁS SEGURO DE QUE DESEAS ELIMINAR ESTE USUARIO?\n\n` +
+    `Nombre: ${u.nombre}\nUsuario: ${u.usuario}\nSucursal: ${suc ? suc.nombre : "—"}\n\n` +
+    `Si tiene historial financiero se desactivará de forma permanente y se conservarán tickets, pagos y saldos.`
+  );
+  if (!ok) return;
+  const motivo = prompt("Motivo de la eliminación (opcional):", "") || "";
+  try {
+    const r = await post(`/usuarios/${id}/eliminar`, { confirmar: true, motivo });
+    msg("#usu-msg", r.modo === "fisica"
+      ? `${u.usuario} eliminado definitivamente.`
+      : `${u.usuario} quedó ELIMINADO (historial conservado).`);
+    await cargarUsuarios();
+  } catch (e) { msg("#usu-msg", e.message, false); }
+}
+
+/* ---------------------------------------------------------- ventas cajeros */
+function rangoVentasCajeros(tipo) {
+  const hoy = hoyISO();
+  if (tipo === "ayer") return [sumarDias(hoy, -1), sumarDias(hoy, -1)];
+  if (tipo === "semana") return [sumarDias(hoy, -6), hoy];
+  if (tipo === "mes") {
+    const [y, m] = hoy.split("-");
+    return [`${y}-${m}-01`, hoy];
+  }
+  return [hoy, hoy];
+}
+function tarjetaCajero(c) {
+  return `<article class="caj-card">
+    <div class="gan-card-top">
+      <div>
+        <h4>${esc(c.nombre)}</h4>
+        <div class="meta">${esc(c.usuario)} · ${esc(c.sucursal || "—")}</div>
+      </div>
+      ${pillEstadoUsuario(c)}
+    </div>
+    <div class="montos">
+      <div>Ventas brutas<b>${fmt(c.ventas_brutas)}</b></div>
+      <div>Anulaciones<b>${fmt(c.anulaciones)}</b></div>
+      <div>Ventas netas<b>${fmt(c.ventas_netas)}</b></div>
+      <div>Premios pagados<b>${fmt(c.premios_pagados)}</b></div>
+      <div>Recaudación período<b>${fmt(c.recaudacion)}</b></div>
+      <div>Fondo asignado<b>${fmt(c.fondo_asignado)}</b></div>
+      <div>Entregas<b>${fmt(c.entregas)}</b></div>
+      <div>MI CAJA<b>${fmt(c.mi_caja)}</b></div>
+    </div>
+    <div class="meta">Tickets: ${esc(c.tickets_vendidos)} · Última operación: ${esc(c.ultima_operacion || "—")}</div>
+    <button type="button" class="btn primario" onclick="verDetalleCajero(${c.usuario_id})">VER DETALLE</button>
+  </article>`;
+}
+async function cargarVentasCajeros() {
+  await cargarCatalogos();
+  const ops = (await api("/usuarios?estado=activos")).filter((u) => u.rol === "operador");
+  const bloq = (await api("/usuarios?estado=bloqueados")).filter((u) => u.rol === "operador");
+  const cajeros = [...ops, ...bloq];
+  $("#vc-cajero").innerHTML = '<option value="">Todos</option>' + cajeros.map(
+    (u) => `<option value="${u.id}">${esc(u.nombre)} (${esc(u.usuario)})</option>`
+  ).join("");
+  $("#vc-sucursal").innerHTML = '<option value="">Todas</option>' + SUCURSALES.map(
+    (s) => `<option value="${s.id}">${esc(s.codigo)} — ${esc(s.nombre)}</option>`
+  ).join("");
+  if (!$("#vc-desde").value || !$("#vc-hasta").value) {
+    const [d, h] = rangoVentasCajeros("hoy");
+    $("#vc-desde").value = d; $("#vc-hasta").value = h;
+  }
+  await refrescarVentasCajeros();
+}
+async function refrescarVentasCajeros() {
+  const q = new URLSearchParams();
+  if ($("#vc-desde").value) q.set("desde", $("#vc-desde").value);
+  if ($("#vc-hasta").value) q.set("hasta", $("#vc-hasta").value);
+  if ($("#vc-cajero").value) q.set("usuario_id", $("#vc-cajero").value);
+  if ($("#vc-sucursal").value) q.set("sucursal_id", $("#vc-sucursal").value);
+  try {
+    const datos = await api("/reportes/ventas-cajeros?" + q.toString());
+    $("#vc-periodo").textContent = `DESDE ${datos.desde}  HASTA ${datos.hasta} · ${datos.total_cajeros} cajero(s)` +
+      (datos.es_prueba ? " · PRUEBA" : "");
+    $("#vc-lista").innerHTML = (datos.cajeros || []).length
+      ? datos.cajeros.map(tarjetaCajero).join("")
+      : '<p class="nota">Sin cajeros con estos filtros.</p>';
+    msg("#vc-msg", "");
+  } catch (e) { msg("#vc-msg", e.message, false); }
+}
+async function verDetalleCajero(id) {
+  const modal = $("#vc-modal");
+  const cuerpo = $("#vc-modal-cuerpo");
+  $("#vc-modal-titulo").textContent = "Detalle del cajero";
+  cuerpo.innerHTML = '<p class="nota">Cargando…</p>';
+  modal.hidden = false;
+  try {
+    const q = new URLSearchParams();
+    if ($("#vc-desde").value) q.set("desde", $("#vc-desde").value);
+    if ($("#vc-hasta").value) q.set("hasta", $("#vc-hasta").value);
+    const d = await api(`/reportes/ventas-cajeros/${id}?` + q.toString());
+    const r = d.resumen || {};
+    $("#vc-modal-titulo").textContent = `${r.nombre || "Cajero"} (${r.usuario || ""})`;
+    const ventas = (d.ventas || []).map((t) =>
+      `<div class="gan-jugada"><b>#${esc(t.id)}</b> · ${esc(t.estado)} · ${fmt(t.total)}
+      <br><span class="meta">${esc(t.vendido_en || t.fecha)} · vendió este ticket</span></div>`
+    ).join("") || '<p class="nota">Sin ventas en el período.</p>';
+    const pagos = (d.premios_pagados || []).map((p) =>
+      `<div class="gan-jugada"><b>Ticket #${esc(p.ticket_id)}</b> · ${fmt(p.premio)} · ${esc(p.numeros || "")}
+      <br><span class="meta">${esc(p.pagado_en || "—")} · pagó este cajero · vendió: ${esc(p.vendedor || "—")}</span></div>`
+    ).join("") || '<p class="nota">Sin premios pagados por este cajero en el período.</p>';
+    const movs = (d.movimientos || []).map((m) =>
+      `<div class="gan-jugada"><b>${esc(m.tipo)}</b> · ${fmt(m.monto)}
+      <br><span class="meta">${esc(m.creado_en || "—")} · ${esc(m.referencia || "")}</span></div>`
+    ).join("") || '<p class="nota">Sin movimientos en el período.</p>';
+    cuerpo.innerHTML = `
+      <div class="meta" style="margin-bottom:12px">${pillEstadoUsuario(r)} · ${esc(r.sucursal || "—")}<br>
+      Ventas netas ${fmt(r.ventas_netas)} · Premios pagados ${fmt(r.premios_pagados)} · Recaudación ${fmt(r.recaudacion)}<br>
+      Fondo ${fmt(r.fondo_asignado)} · Entregas ${fmt(r.entregas)} · MI CAJA ${fmt(r.mi_caja)}</div>
+      <div class="gan-grupo"><h5>Tickets vendidos</h5>${ventas}</div>
+      <div class="gan-grupo"><h5>Premios que pagó</h5>${pagos}</div>
+      <div class="gan-grupo"><h5>Movimientos de caja</h5>${movs}</div>`;
+  } catch (e) {
+    cuerpo.innerHTML = `<p class="msg error">${esc(e.message)}</p>`;
+  }
+}
+function cerrarDetalleCajero() {
+  const modal = $("#vc-modal");
+  if (modal) modal.hidden = true;
+}
+window.verDetalleCajero = verDetalleCajero;
+window.cerrarDetalleCajero = cerrarDetalleCajero;
+window.eliminarUsuario = eliminarUsuario;
 
 /* ------------------------------------------------------------------ sorteos */
 async function cargarSorteos() {
@@ -1007,6 +1147,19 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-movimientos").addEventListener("click", () => verMovimientos().catch((e) => alert(e.message)));
   $("#btn-usu-guardar").addEventListener("click", guardarUsuario);
   $("#btn-usu-limpiar").addEventListener("click", limpiarUsuario);
+  if ($("#btn-usu-filtrar")) $("#btn-usu-filtrar").addEventListener("click", () => cargarUsuarios().catch((e) => msg("#usu-msg", e.message, false)));
+  if ($("#usu-filtro")) $("#usu-filtro").addEventListener("change", () => cargarUsuarios().catch((e) => msg("#usu-msg", e.message, false)));
+  if ($("#btn-vc-ver")) $("#btn-vc-ver").addEventListener("click", () => refrescarVentasCajeros());
+  if ($("#vc-chips")) {
+    $$("#vc-chips .btn").forEach((b) => b.addEventListener("click", () => {
+      const [d, h] = rangoVentasCajeros(b.dataset.rango);
+      $("#vc-desde").value = d; $("#vc-hasta").value = h;
+      $$("#vc-chips .btn").forEach((x) => x.classList.toggle("activo", x === b));
+      refrescarVentasCajeros();
+    }));
+  }
+  if ($("#vc-modal-cerrar")) $("#vc-modal-cerrar").addEventListener("click", cerrarDetalleCajero);
+  if ($("#vc-modal")) $("#vc-modal").addEventListener("click", (e) => { if (e.target === $("#vc-modal")) cerrarDetalleCajero(); });
   $("#btn-sor-guardar").addEventListener("click", guardarSorteo);
   $("#btn-sor-limpiar").addEventListener("click", limpiarSorteo);
   $("#tab-tipo").addEventListener("change", actualizarClavesTabla);

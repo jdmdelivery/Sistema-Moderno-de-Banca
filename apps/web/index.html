@@ -37,6 +37,7 @@
   <button class="navbtn" data-sec="sucursales">Sucursales</button>
   <button class="navbtn" data-sec="terminales">Terminales</button>
   <button class="navbtn" data-sec="usuarios">Usuarios</button>
+  <button class="navbtn" data-sec="ventas-cajeros">Ventas por Cajero</button>
   <button class="navbtn" data-sec="sorteos">Sorteos</button>
   <button class="navbtn" data-sec="tabla">Tabla de Pagos</button>
   <button class="navbtn" data-sec="limites">Límites</button>
@@ -56,9 +57,11 @@
 <section id="sec-inicio" class="seccion activo">
   <h2>Resumen</h2>
   <div class="form">
-    <button type="button" id="ini-hoy" class="btn">HOY</button>
-    <button type="button" id="ini-ayer" class="btn">AYER</button>
-    <button type="button" id="ini-quince" class="btn">15 DÍAS</button>
+    <div class="chips">
+      <button type="button" id="ini-hoy" class="btn">HOY</button>
+      <button type="button" id="ini-ayer" class="btn">AYER</button>
+      <button type="button" id="ini-quince" class="btn">15 DÍAS</button>
+    </div>
     <label>DESDE<input id="ini-desde" type="date"></label>
     <label>HASTA<input id="ini-hasta" type="date"></label>
     <button type="button" id="ini-consultar" class="btn primario">CONSULTAR</button>
@@ -113,7 +116,17 @@
 
 <section id="sec-usuarios" class="seccion">
   <h2>Usuarios</h2>
-  <p class="nota">BLOQUEAR corta el acceso de inmediato (SUNMI y panel) sin borrar tickets, caja ni historial. Use DESBLOQUEAR para restaurar el acceso.</p>
+  <p class="nota">EDITAR, BLOQUEAR, DESBLOQUEAR y ELIMINAR. BLOQUEAR corta el acceso al instante. ELIMINAR pide confirmación: sin historial se borra; con historial queda ELIMINADO y se conservan tickets, pagos y saldos.</p>
+  <div class="form">
+    <label>Estado<select id="usu-filtro">
+      <option value="">Operativos</option>
+      <option value="activos">ACTIVOS</option>
+      <option value="bloqueados">BLOQUEADOS</option>
+      <option value="eliminados">ELIMINADOS</option>
+      <option value="todos">Todos</option>
+    </select></label>
+    <button type="button" id="btn-usu-filtrar" class="btn">FILTRAR</button>
+  </div>
   <div id="usu-tabla"></div>
   <h3>Crear / editar usuario</h3>
   <div class="form">
@@ -133,6 +146,37 @@
     <p id="usu-msg" class="msg"></p>
   </div>
 </section>
+
+<section id="sec-ventas-cajeros" class="seccion">
+  <h2>Ventas por Cajero</h2>
+  <p class="nota">Cada cajero por separado. Los premios cuentan para quien los pagó, no automáticamente para quien vendió el ticket. El fondo asignado no se mezcla con las ventas.</p>
+  <div class="form">
+    <div class="chips" id="vc-chips">
+      <button type="button" class="btn" data-rango="hoy">HOY</button>
+      <button type="button" class="btn" data-rango="ayer">AYER</button>
+      <button type="button" class="btn" data-rango="semana">ESTA SEMANA</button>
+      <button type="button" class="btn" data-rango="mes">ESTE MES</button>
+    </div>
+    <label>DESDE<input id="vc-desde" type="date"></label>
+    <label>HASTA<input id="vc-hasta" type="date"></label>
+    <label>Cajero<select id="vc-cajero"><option value="">Todos</option></select></label>
+    <label>Sucursal<select id="vc-sucursal"><option value="">Todas</option></select></label>
+    <button type="button" id="btn-vc-ver" class="btn primario">CONSULTAR</button>
+    <p id="vc-msg" class="msg"></p>
+  </div>
+  <p id="vc-periodo" class="nota"></p>
+  <div id="vc-lista" class="caj-lista"></div>
+</section>
+
+<div id="vc-modal" class="modal" hidden>
+  <div class="modal-caja">
+    <div class="modal-cab">
+      <h3 id="vc-modal-titulo">Detalle del cajero</h3>
+      <button type="button" id="vc-modal-cerrar" class="btn chico">Cerrar</button>
+    </div>
+    <div id="vc-modal-cuerpo" class="modal-cuerpo"></div>
+  </div>
+</div>
 
 <section id="sec-sorteos" class="seccion">
   <h2>Sorteos (loterías)</h2>

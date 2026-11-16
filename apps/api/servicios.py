@@ -93,8 +93,8 @@ def sesion_y_usuario(db, token, tipo=None):
     if tipo is not None and sesion.tipo != tipo:
         raise ErrorServicio(401, "Esa sesión no sirve para esta operación")
     usuario = db.get(Usuario, sesion.usuario_id)
-    if usuario is None or not usuario.activo:
-        # Token vigente no sirve si el usuario quedó bloqueado.
+    if usuario is None or getattr(usuario, "eliminado", False) or not usuario.activo:
+        # Token vigente no sirve si el usuario quedó bloqueado o eliminado.
         if sesion is not None:
             db.delete(sesion)
             db.flush()
@@ -123,6 +123,8 @@ def bloquear_usuario(db, admin, usuario_id):
     objetivo = db.get(Usuario, usuario_id)
     if objetivo is None:
         raise ErrorServicio(404, "El usuario no existe")
+    if getattr(objetivo, "eliminado", False):
+        raise ErrorServicio(409, "Un usuario eliminado no se puede bloquear ni reactivar")
     if objetivo.id == admin.id:
         raise ErrorServicio(400, "No puede bloquearse a sí mismo")
     if not objetivo.activo:
@@ -130,7 +132,10 @@ def bloquear_usuario(db, admin, usuario_id):
     if objetivo.rol == "admin":
         activos = (
             db.query(Usuario)
-            .filter(Usuario.rol == "admin", Usuario.activo.is_(True), Usuario.id != objetivo.id)
+            .filter(
+                Usuario.rol == "admin", Usuario.activo.is_(True),
+                Usuario.eliminado.is_(False), Usuario.id != objetivo.id,
+            )
             .count()
         )
         if activos < 1:
@@ -159,6 +164,8 @@ def desbloquear_usuario(db, admin, usuario_id):
     objetivo = db.get(Usuario, usuario_id)
     if objetivo is None:
         raise ErrorServicio(404, "El usuario no existe")
+    if getattr(objetivo, "eliminado", False):
+        raise ErrorServicio(409, "Un usuario eliminado no se puede desbloquear")
     if objetivo.activo:
         raise ErrorServicio(409, "El usuario ya está activo")
     objetivo.activo = True
@@ -175,6 +182,89 @@ def desbloquear_usuario(db, admin, usuario_id):
     db.commit()
     db.refresh(objetivo)
     return objetivo
+
+
+def _usuario_tiene_historial(db, usuario_id):
+    """True si hay referencias financieras o tickets que deben conservarse."""
+    if db.query(Ticket.id).filter(
+        (Ticket.usuario_id == usuario_id) | (Ticket.pagado_por_usuario_id == usuario_id)
+    ).first():
+        return True
+    if db.query(Jugada.id).filter(Jugada.pagado_por_usuario_id == usuario_id).first():
+        return True
+    if db.query(MovimientoCajera.id).filter(MovimientoCajera.usuario_id == usuario_id).first():
+        return True
+    if db.query(FondoAsignado.id).filter(FondoAsignado.usuario_id == usuario_id).first():
+        return True
+    if db.query(LimiteCajera.id).filter(LimiteCajera.usuario_id == usuario_id).first():
+        return True
+    if db.query(ComisionCajera.id).filter(ComisionCajera.usuario_id == usuario_id).first():
+        return True
+    if db.query(LiquidacionComision.id).filter(LiquidacionComision.usuario_id == usuario_id).first():
+        return True
+    return False
+
+
+def eliminar_usuario(db, admin, usuario_id, motivo=None):
+    """Elimina un usuario: físico sin historial, lógico si hay movimientos."""
+    if admin.rol != "admin":
+        raise ErrorServicio(403, "Solo un administrador puede eliminar usuarios")
+    objetivo = db.get(Usuario, usuario_id)
+    if objetivo is None:
+        raise ErrorServicio(404, "El usuario no existe")
+    if getattr(objetivo, "eliminado", False):
+        raise ErrorServicio(409, "El usuario ya está eliminado")
+    if objetivo.id == admin.id:
+        raise ErrorServicio(400, "No puede eliminarse a sí mismo")
+    if objetivo.rol == "admin":
+        activos = (
+            db.query(Usuario)
+            .filter(
+                Usuario.rol == "admin", Usuario.activo.is_(True),
+                Usuario.eliminado.is_(False), Usuario.id != objetivo.id,
+            )
+            .count()
+        )
+        if activos < 1:
+            raise ErrorServicio(400, "No se puede eliminar la última cuenta administradora activa")
+    invalidar_sesiones_usuario(db, objetivo.id)
+    motivo_limpio = (motivo or "").strip()[:200] or None
+    cuando = ahora_oficial(db)
+    if _usuario_tiene_historial(db, objetivo.id):
+        objetivo.activo = False
+        objetivo.eliminado = True
+        objetivo.eliminado_en = cuando
+        objetivo.eliminado_por = admin.id
+        objetivo.motivo_eliminacion = motivo_limpio
+        auditar(
+            db, "usuario", objetivo.id, "eliminacion_logica", usuario_id=admin.id,
+            detalle={
+                "eliminado_usuario": objetivo.usuario,
+                "eliminado_nombre": objetivo.nombre,
+                "eliminado_rol": objetivo.rol,
+                "tipo": "logica",
+                "motivo": motivo_limpio,
+                "por": admin.usuario,
+                "cuando": cuando.isoformat(sep=" "),
+            },
+        )
+        db.commit()
+        db.refresh(objetivo)
+        return {"modo": "logica", "usuario": objetivo}
+    datos = {
+        "eliminado_usuario": objetivo.usuario,
+        "eliminado_nombre": objetivo.nombre,
+        "eliminado_rol": objetivo.rol,
+        "tipo": "fisica",
+        "motivo": motivo_limpio,
+        "por": admin.usuario,
+        "cuando": cuando.isoformat(sep=" "),
+    }
+    uid = objetivo.id
+    auditar(db, "usuario", uid, "eliminacion_fisica", usuario_id=admin.id, detalle=datos)
+    db.delete(objetivo)
+    db.commit()
+    return {"modo": "fisica", "id": uid, "detalle": datos}
 
 
 # ---------------------------------------------------------------- terminales
@@ -3648,12 +3738,293 @@ def _contar_jugadas(db, desde, hasta, prueba, sucursal_id, usuario_id):
     return consulta.count()
 
 
+def _estado_usuario_panel(u):
+    if getattr(u, "eliminado", False):
+        return "ELIMINADO"
+    return "ACTIVO" if u.activo else "BLOQUEADO"
+
+
+def _premios_pagados_por_cajero(db, usuario_id, desde, hasta, prueba):
+    """Premios cobrados por este cajero (no por el vendedor del ticket)."""
+    inicio = datetime.combine(desde, time.min)
+    fin = datetime.combine(hasta, time.min) + timedelta(days=1)
+    total = D(0)
+    jugadas = (
+        db.query(Jugada)
+        .join(Ticket, Jugada.ticket_id == Ticket.id)
+        .filter(
+            Ticket.es_prueba.is_(prueba),
+            Jugada.pagada.is_(True),
+            Jugada.pagado_por_usuario_id == usuario_id,
+            Jugada.pagado_en.isnot(None),
+            Jugada.pagado_en >= inicio,
+            Jugada.pagado_en < fin,
+        )
+        .all()
+    )
+    vistos = set()
+    for jugada in jugadas:
+        vistos.add(jugada.id)
+        total += D(jugada.premio or 0)
+    # Tickets pagados enteros sin marca por jugada (histórico).
+    tickets = (
+        db.query(Ticket)
+        .filter(
+            Ticket.es_prueba.is_(prueba),
+            Ticket.estado == "pagado",
+            Ticket.pagado_por_usuario_id == usuario_id,
+            Ticket.pagado_en.isnot(None),
+            Ticket.pagado_en >= inicio,
+            Ticket.pagado_en < fin,
+        )
+        .all()
+    )
+    for ticket in tickets:
+        if any(j.id in vistos for j in ticket.jugadas if j.pagada):
+            continue
+        total += D(ticket.premio_total or 0)
+    return total
+
+
+def _periodo_ventas_cajero(db, cajero, desde, hasta, prueba):
+    tickets = (
+        db.query(Ticket)
+        .filter(
+            Ticket.usuario_id == cajero.id,
+            Ticket.fecha >= desde,
+            Ticket.fecha <= hasta,
+            Ticket.es_prueba.is_(prueba),
+        )
+        .all()
+    )
+    brutas = sum((D(t.total) for t in tickets), D(0))
+    anulados = [t for t in tickets if t.estado == "anulado"]
+    anulaciones = sum((D(t.total) for t in anulados), D(0))
+    vigentes = [t for t in tickets if t.estado != "anulado"]
+    netas = sum((D(t.total) for t in vigentes), D(0))
+    premios = _premios_pagados_por_cajero(db, cajero.id, desde, hasta, prueba)
+    return {
+        "ventas_brutas": str(D(brutas)),
+        "anulaciones": str(D(anulaciones)),
+        "ventas_netas": str(D(netas)),
+        "premios_pagados": str(D(premios)),
+        "recaudacion": str(D(netas - premios)),
+        "tickets_vendidos": len(tickets),
+        "tickets_anulados": len(anulados),
+        "tickets_vigentes": len(vigentes),
+    }
+
+
+def _ultima_operacion_cajero(db, usuario_id):
+    momentos = []
+    t = (
+        db.query(Ticket.vendido_en)
+        .filter(Ticket.usuario_id == usuario_id, Ticket.vendido_en.isnot(None))
+        .order_by(Ticket.vendido_en.desc())
+        .first()
+    )
+    if t and t[0]:
+        momentos.append(t[0])
+    p = (
+        db.query(Ticket.pagado_en)
+        .filter(Ticket.pagado_por_usuario_id == usuario_id, Ticket.pagado_en.isnot(None))
+        .order_by(Ticket.pagado_en.desc())
+        .first()
+    )
+    if p and p[0]:
+        momentos.append(p[0])
+    j = (
+        db.query(Jugada.pagado_en)
+        .filter(Jugada.pagado_por_usuario_id == usuario_id, Jugada.pagado_en.isnot(None))
+        .order_by(Jugada.pagado_en.desc())
+        .first()
+    )
+    if j and j[0]:
+        momentos.append(j[0])
+    m = (
+        db.query(MovimientoCajera.creado_en)
+        .filter(MovimientoCajera.usuario_id == usuario_id, MovimientoCajera.creado_en.isnot(None))
+        .order_by(MovimientoCajera.creado_en.desc())
+        .first()
+    )
+    if m and m[0]:
+        momentos.append(m[0])
+    if not momentos:
+        return None
+    return max(momentos).isoformat(sep=" ")
+
+
+def resumen_ventas_cajeros(db, admin, desde, hasta, sucursal_id=None, usuario_id=None):
+    """Listado admin: un bloque por cajero, premios atribuidos a quien pagó."""
+    if admin is None or admin.rol != "admin":
+        raise ErrorServicio(403, "Solo un administrador puede consultar las ventas por cajero")
+    if hasta < desde:
+        raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+    q = db.query(Usuario).filter(Usuario.rol == "operador").order_by(Usuario.nombre)
+    if sucursal_id is not None:
+        q = q.filter(Usuario.sucursal_id == sucursal_id)
+    if usuario_id is not None:
+        q = q.filter(Usuario.id == usuario_id)
+    # Operativos + eliminados con historial en el período.
+    cajeros = q.all()
+    prueba = modo_desarrollo()
+    filas = []
+    for cajero in cajeros:
+        if getattr(cajero, "eliminado", False):
+            periodo = _periodo_ventas_cajero(db, cajero, desde, hasta, prueba)
+            if float(periodo["tickets_vendidos"]) == 0 and float(periodo["premios_pagados"]) == 0:
+                continue
+        else:
+            periodo = _periodo_ventas_cajero(db, cajero, desde, hasta, prueba)
+        caja = indicadores_caja(db, cajero)
+        suc = db.get(Sucursal, cajero.sucursal_id) if cajero.sucursal_id else None
+        filas.append({
+            "usuario_id": cajero.id,
+            "nombre": cajero.nombre,
+            "usuario": cajero.usuario,
+            "sucursal_id": cajero.sucursal_id,
+            "sucursal": suc.nombre if suc else "—",
+            "estado": _estado_usuario_panel(cajero),
+            "activo": bool(cajero.activo),
+            "eliminado": bool(getattr(cajero, "eliminado", False)),
+            **periodo,
+            "fondo_asignado": caja["fondo_asignado"],
+            "entregas": caja["entregas_ciclo"],
+            "mi_caja": caja["mi_caja"],
+            "recaudacion_ciclo": caja["recaudacion_ciclo"],
+            "ultima_operacion": _ultima_operacion_cajero(db, cajero.id),
+            "es_prueba": prueba,
+        })
+    return {
+        "desde": desde.isoformat(),
+        "hasta": hasta.isoformat(),
+        "zona": "America/Santo_Domingo",
+        "hoy": ahora_local().date().isoformat(),
+        "es_prueba": prueba,
+        "cajeros": filas,
+        "total_cajeros": len(filas),
+    }
+
+
+def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
+    if admin is None or admin.rol != "admin":
+        raise ErrorServicio(403, "Solo un administrador puede consultar el detalle de un cajero")
+    if hasta < desde:
+        raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+    cajero = db.get(Usuario, usuario_id)
+    if cajero is None or cajero.rol != "operador":
+        raise ErrorServicio(404, "Cajero no encontrado")
+    prueba = modo_desarrollo()
+    resumen = resumen_ventas_cajeros(db, admin, desde, hasta, None, usuario_id)
+    fila = next((f for f in resumen["cajeros"] if f["usuario_id"] == usuario_id), None)
+    if fila is None:
+        # Cajero eliminado sin movimiento en el rango: igual devolver estructura.
+        caja = indicadores_caja(db, cajero)
+        suc = db.get(Sucursal, cajero.sucursal_id) if cajero.sucursal_id else None
+        periodo = _periodo_ventas_cajero(db, cajero, desde, hasta, prueba)
+        fila = {
+            "usuario_id": cajero.id, "nombre": cajero.nombre, "usuario": cajero.usuario,
+            "sucursal_id": cajero.sucursal_id, "sucursal": suc.nombre if suc else "—",
+            "estado": _estado_usuario_panel(cajero), **periodo,
+            "fondo_asignado": caja["fondo_asignado"], "entregas": caja["entregas_ciclo"],
+            "mi_caja": caja["mi_caja"], "recaudacion_ciclo": caja["recaudacion_ciclo"],
+            "ultima_operacion": _ultima_operacion_cajero(db, cajero.id), "es_prueba": prueba,
+        }
+    tickets = (
+        db.query(Ticket)
+        .filter(
+            Ticket.usuario_id == cajero.id,
+            Ticket.fecha >= desde, Ticket.fecha <= hasta,
+            Ticket.es_prueba.is_(prueba),
+        )
+        .order_by(Ticket.id.desc())
+        .limit(200)
+        .all()
+    )
+    inicio = datetime.combine(desde, time.min)
+    fin = datetime.combine(hasta, time.min) + timedelta(days=1)
+    pagos = (
+        db.query(Jugada)
+        .join(Ticket, Jugada.ticket_id == Ticket.id)
+        .filter(
+            Ticket.es_prueba.is_(prueba),
+            Jugada.pagada.is_(True),
+            Jugada.pagado_por_usuario_id == cajero.id,
+            Jugada.pagado_en >= inicio,
+            Jugada.pagado_en < fin,
+        )
+        .order_by(Jugada.pagado_en.desc())
+        .limit(200)
+        .all()
+    )
+    movs = (
+        db.query(MovimientoCajera)
+        .filter(
+            MovimientoCajera.usuario_id == cajero.id,
+            MovimientoCajera.creado_en >= inicio,
+            MovimientoCajera.creado_en < fin,
+        )
+        .order_by(MovimientoCajera.id.desc())
+        .limit(300)
+        .all()
+    )
+    fondos = (
+        db.query(FondoAsignado)
+        .filter(FondoAsignado.usuario_id == cajero.id)
+        .order_by(FondoAsignado.id.desc())
+        .limit(50)
+        .all()
+    )
+    historial_ventas = []
+    for t in tickets:
+        historial_ventas.append({
+            "id": t.id, "serial": t.serial, "fecha": t.fecha.isoformat(),
+            "vendido_en": t.vendido_en.isoformat(sep=" ") if t.vendido_en else None,
+            "total": str(D(t.total)), "estado": t.estado,
+            "premio_total": str(D(t.premio_total or 0)),
+            "rol": "vendedor",
+        })
+    historial_pagos = []
+    for j in pagos:
+        ticket = j.ticket
+        vendedor = db.get(Usuario, ticket.usuario_id) if ticket and ticket.usuario_id else None
+        historial_pagos.append({
+            "ticket_id": ticket.id if ticket else None,
+            "serial": ticket.serial if ticket else "",
+            "jugada_id": j.id,
+            "numeros": j.numeros,
+            "premio": str(D(j.premio or 0)),
+            "pagado_en": j.pagado_en.isoformat(sep=" ") if j.pagado_en else None,
+            "vendedor": vendedor.nombre if vendedor else "",
+            "vendedor_usuario": vendedor.usuario if vendedor else "",
+            "rol": "pagador",
+        })
+    movimientos = [{
+        "id": m.id, "tipo": m.tipo, "monto": str(D(m.monto)),
+        "referencia": m.referencia or "", "motivo": m.motivo or "",
+        "creado_en": m.creado_en.isoformat(sep=" ") if m.creado_en else None,
+        "saldo_resultante": str(D(m.saldo_resultante)) if m.saldo_resultante is not None else None,
+    } for m in movs]
+    return {
+        "desde": desde.isoformat(),
+        "hasta": hasta.isoformat(),
+        "resumen": fila,
+        "ventas": historial_ventas,
+        "premios_pagados": historial_pagos,
+        "movimientos": movimientos,
+        "fondos": [fondo_a_dict(db, f) for f in fondos],
+        "es_prueba": prueba,
+    }
+
+
 def _ventas_por_cajera(db, desde, hasta, sucursal_id):
     consulta = db.query(Usuario).filter(Usuario.rol == "operador").order_by(Usuario.nombre)
     if sucursal_id is not None:
         consulta = consulta.filter(Usuario.sucursal_id == sucursal_id)
     filas = []
     for cajera in consulta.all():
+        if getattr(cajera, "eliminado", False):
+            continue
         reales = _bloque_periodo(db, desde, hasta, False, cajera.sucursal_id, cajera.id)
         prueba = _bloque_periodo(db, desde, hasta, True, cajera.sucursal_id, cajera.id)
         filas.append({

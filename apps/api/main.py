@@ -116,11 +116,21 @@ def terminal_dict(t):
 
 
 def usuario_dict(u, con_cajas=False):
+    eliminado = bool(getattr(u, "eliminado", False))
+    if eliminado:
+        estado = "ELIMINADO"
+    elif u.activo:
+        estado = "ACTIVO"
+    else:
+        estado = "BLOQUEADO"
     datos = {
         "id": u.id, "nombre": u.nombre, "usuario": u.usuario, "rol": u.rol,
-        "sucursal_id": u.sucursal_id, "activo": bool(u.activo),
-        "estado": "ACTIVO" if u.activo else "BLOQUEADO",
+        "sucursal_id": u.sucursal_id, "activo": bool(u.activo) and not eliminado,
+        "eliminado": eliminado,
+        "estado": estado,
         "tiene_clave": bool(u.clave_hash), "tiene_pin": bool(u.pin_hash),
+        "eliminado_en": u.eliminado_en.isoformat(sep=" ") if getattr(u, "eliminado_en", None) else None,
+        "motivo_eliminacion": getattr(u, "motivo_eliminacion", None),
     }
     if con_cajas:
         datos["saldo_caja"] = str(D(u.saldo_caja or 0))
@@ -238,7 +248,7 @@ def login(datos: LoginIn, db=Depends(get_db)):
     if (usuario is None or usuario.rol not in ("admin", "supervisor")
             or not usuario.clave_hash or not verificar_clave(datos.clave, usuario.clave_hash)):
         raise ErrorServicio(401, "Usuario o clave incorrectos")
-    if not usuario.activo:
+    if getattr(usuario, "eliminado", False) or not usuario.activo:
         raise ErrorServicio(401, MSG_USUARIO_BLOQUEADO)
     token = servicios.crear_sesion(db, usuario, tipo="panel")
     db.commit()
@@ -426,8 +436,22 @@ class UsuarioIn(BaseModel):
 
 
 @app.get("/usuarios")
-def listar_usuarios(db=Depends(get_db), usuario=Depends(requiere_rol("admin", "supervisor"))):
-    return [usuario_dict(u, con_cajas=usuario.rol == "admin") for u in db.query(Usuario).order_by(Usuario.nombre).all()]
+def listar_usuarios(estado: str | None = None, db=Depends(get_db),
+                    usuario=Depends(requiere_rol("admin", "supervisor"))):
+    q = db.query(Usuario).order_by(Usuario.nombre)
+    clave = (estado or "").strip().lower()
+    if clave in ("activos", "activo"):
+        q = q.filter(Usuario.activo.is_(True), Usuario.eliminado.is_(False))
+    elif clave in ("bloqueados", "bloqueado"):
+        q = q.filter(Usuario.activo.is_(False), Usuario.eliminado.is_(False))
+    elif clave in ("eliminados", "eliminado"):
+        q = q.filter(Usuario.eliminado.is_(True))
+    elif clave in ("todos", "all"):
+        pass
+    else:
+        # Default / operativos: sin eliminados.
+        q = q.filter(Usuario.eliminado.is_(False))
+    return [usuario_dict(u, con_cajas=usuario.rol == "admin") for u in q.all()]
 
 
 @app.post("/usuarios", status_code=201)
@@ -459,6 +483,8 @@ def editar_usuario(usuario_id: int, datos: UsuarioIn, db=Depends(get_db),
     u = db.get(Usuario, usuario_id)
     if u is None:
         raise ErrorServicio(404, "El usuario no existe")
+    if getattr(u, "eliminado", False):
+        raise ErrorServicio(409, "Un usuario eliminado no se puede editar")
     # El estado ACTIVO/BLOQUEADO se cambia solo con /bloquear y /desbloquear
     # para exigir confirmación, auditoría e invalidación de sesiones.
     u.nombre, u.rol, u.sucursal_id = datos.nombre.strip(), datos.rol, datos.sucursal_id
@@ -487,6 +513,27 @@ def desbloquear_usuario(usuario_id: int, db=Depends(get_db),
         servicios.desbloquear_usuario(db, usuario, usuario_id),
         con_cajas=True,
     )
+
+
+class EliminarUsuarioIn(BaseModel):
+    motivo: str | None = None
+    confirmar: bool = False
+
+
+@app.post("/usuarios/{usuario_id}/eliminar")
+def eliminar_usuario(usuario_id: int, datos: EliminarUsuarioIn, db=Depends(get_db),
+                     usuario=Depends(requiere_rol("admin"))):
+    """Eliminación física sin historial o lógica si hay movimientos financieros."""
+    if not datos.confirmar:
+        raise ErrorServicio(400, "Debe confirmar la eliminación del usuario")
+    resultado = servicios.eliminar_usuario(db, usuario, usuario_id, datos.motivo)
+    if resultado["modo"] == "fisica":
+        return {"ok": True, "modo": "fisica", "id": resultado["id"], "detalle": resultado["detalle"]}
+    return {
+        "ok": True,
+        "modo": "logica",
+        "usuario": usuario_dict(resultado["usuario"], con_cajas=True),
+    }
 
 
 # ------------------------------------------------------------------ sorteos
@@ -959,6 +1006,30 @@ def reporte_ventas(desde: str, hasta: str, usuario_id: int | None = None,
     return servicios.reporte_ventas(db, _fecha(desde), _fecha(hasta), usuario_id, sucursal_id, limite)
 
 
+@app.get("/reportes/ventas-cajeros")
+def reporte_ventas_cajeros(desde: str | None = None, hasta: str | None = None,
+                           usuario_id: int | None = None, sucursal_id: int | None = None,
+                           db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+    hoy = servicios.ahora_local().date()
+    return servicios.resumen_ventas_cajeros(
+        db, usuario,
+        _fecha(desde) if desde else hoy,
+        _fecha(hasta) if hasta else hoy,
+        sucursal_id, usuario_id,
+    )
+
+
+@app.get("/reportes/ventas-cajeros/{usuario_id}")
+def detalle_ventas_cajero(usuario_id: int, desde: str | None = None, hasta: str | None = None,
+                          db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+    hoy = servicios.ahora_local().date()
+    return servicios.detalle_ventas_cajero(
+        db, usuario, usuario_id,
+        _fecha(desde) if desde else hoy,
+        _fecha(hasta) if hasta else hoy,
+    )
+
+
 @app.get("/reportes/pendientes")
 def reporte_pendientes(desde: str, hasta: str, sucursal_id: int, formato: str = "json",
                        db=Depends(get_db), usuario=Depends(panel_actual)):
@@ -1010,7 +1081,7 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
         or not verificar_clave(datos.clave, usuario.clave_hash)
     ):
         raise ErrorServicio(401, "Usuario o contraseña incorrectos")
-    if not usuario.activo:
+    if getattr(usuario, "eliminado", False) or not usuario.activo:
         raise ErrorServicio(401, MSG_USUARIO_BLOQUEADO)
     if usuario.rol == "admin":
         token = servicios.crear_sesion(db, usuario, tipo="panel")

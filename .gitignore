@@ -17,6 +17,17 @@ __pycache__/
 .env
 .env.*
 
+# Respaldos PostgreSQL (nunca subir dumps ni SQL con datos)
+docs/respaldos/banca_moderna_*.dump
+docs/respaldos/banca_moderna_*.sql
+docs/respaldos/banca_moderna_*.list
+docs/respaldos/backup_meta_*.json
+docs/respaldos/config_render_*.json
+docs/respaldos/inventario_*.json
+docs/respaldos/restore_verify_*.json
+docs/respaldos/_*.py
+docs/capturas/
+
 # Sistema / editores
 .DS_Store
 .idea/

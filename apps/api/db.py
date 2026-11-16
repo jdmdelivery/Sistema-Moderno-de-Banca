@@ -124,6 +124,7 @@ def _columnas_faltantes():
     if "usuarios" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("usuarios")}
         tipo = "NUMERIC(12,2) NOT NULL DEFAULT 0"
+        bandera = "BOOLEAN NOT NULL DEFAULT FALSE" if eng.dialect.name == "postgresql" else "INTEGER NOT NULL DEFAULT 0"
         with eng.begin() as conn:
             for columna in ("saldo_caja", "saldo_caja_prueba"):
                 if columna not in cols:
@@ -131,6 +132,14 @@ def _columnas_faltantes():
             for columna in ("ciclo_caja_movimiento_id", "ciclo_caja_prueba_movimiento_id"):
                 if columna not in cols:
                     conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} {columna} INTEGER"))
+            if "eliminado" not in cols:
+                conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} eliminado {bandera}"))
+            if "eliminado_en" not in cols:
+                conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} eliminado_en TIMESTAMP"))
+            if "eliminado_por" not in cols:
+                conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} eliminado_por INTEGER"))
+            if "motivo_eliminacion" not in cols:
+                conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} motivo_eliminacion VARCHAR(200)"))
     if "terminales" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("terminales")}
         with eng.begin() as conn:

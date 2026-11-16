@@ -4,8 +4,18 @@
   --rojo:#e5534b; --amarillo:#e8b93e; --azul:#3e9be8;
 }
 *{box-sizing:border-box}
-body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--fondo);color:var(--texto)}
-header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--borde);position:sticky;top:0;z-index:5}
+html,body{margin:0;max-width:100%;overflow-x:hidden}
+body{
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  background:var(--fondo);color:var(--texto);
+  padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);
+  padding-bottom:env(safe-area-inset-bottom);
+}
+header{
+  display:flex;justify-content:space-between;align-items:center;gap:8px;
+  padding:10px 16px;padding-top:calc(10px + env(safe-area-inset-top));
+  background:var(--panel);border-bottom:1px solid var(--borde);position:sticky;top:0;z-index:5
+}
 .marca{font-size:18px}.marca .sub{color:var(--suave);font-size:13px;margin-left:6px}
 .sesion{color:var(--suave);font-size:14px}
 nav{display:flex;flex-wrap:wrap;gap:6px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--borde)}
@@ -16,9 +26,9 @@ main{padding:16px;max-width:1180px;margin:0 auto}
 .seccion{display:none}.seccion.activo{display:block}
 h2{margin:8px 0 12px;font-size:20px}h3{margin:22px 0 8px;font-size:16px;color:var(--suave)}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
-.card{background:var(--panel);border:1px solid var(--borde);border-radius:12px;padding:14px}
-.card .num{font-size:24px;font-weight:700;color:var(--verde)}
-.card .lbl{color:var(--suave);font-size:13px;margin-top:2px}
+.card{background:var(--panel);border:1px solid var(--borde);border-radius:12px;padding:14px;min-width:0}
+.card .num{font-size:clamp(16px,4.2vw,24px);font-weight:700;color:var(--verde);overflow-wrap:anywhere;word-break:break-word;line-height:1.15}
+.card .lbl{color:var(--suave);font-size:13px;margin-top:2px;line-height:1.35}
 table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--borde);border-radius:10px;overflow:hidden;font-size:14px}
 th,td{padding:8px 10px;border-bottom:1px solid var(--borde);text-align:left;vertical-align:top}
 th{color:var(--suave);font-weight:600;background:var(--panel2)}
@@ -53,37 +63,65 @@ input:focus,select:focus{outline:2px solid var(--verde-osc)}
 .pill.vendido{background:#3d3410}.pill.no_ganador{background:#333}.pill.liquidado{background:#14532d}
 .pill.propuesto{background:#3d3410}.pill.confirmado{background:#1e3a5f}
 .pill.activo{background:#14532d;color:#d8ffe6}.pill.bloqueado{background:#5f1e1e;color:#ffd6d6}
-.tabla-scroll{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:10px}
+.pill.eliminado{background:#3a3a3a;color:#ddd}
+.tabla-scroll{width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:10px}
 .tabla-scroll table{min-width:640px}
 .acciones-fila{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .btn-menu{display:none;background:var(--panel2);color:var(--texto);border:1px solid var(--borde);border-radius:10px;width:44px;height:44px;font-size:22px;line-height:1;cursor:pointer;flex-shrink:0}
 .nav-fondo{display:none}
+.caj-lista{display:grid;grid-template-columns:1fr;gap:12px;margin:12px 0}
+.caj-card{background:var(--panel);border:1px solid var(--borde);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.caj-card h4{margin:0;font-size:16px}
+.caj-card .meta{color:var(--suave);font-size:13px;line-height:1.45}
+.caj-card .montos{display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px}
+.caj-card .montos b{display:block;color:var(--texto);font-size:15px;overflow-wrap:anywhere}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chips .btn.activo{background:var(--verde-osc);border-color:var(--verde-osc);color:#fff}
 @media(max-width:640px){
-  main{padding:10px}
-  .marca{font-size:15px}
+  main{padding:10px;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
+  .marca{font-size:14px;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .marca .sub{display:none}
-  header{gap:8px;padding:8px 10px}
+  .sesion{font-size:12px;flex-shrink:0;max-width:42%;text-align:right}
+  .sesion #yo-nombre{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
+  main{width:100%;max-width:100%}
+  .cards,.caj-lista,.form,.tabla-scroll{width:100%}
+  header{gap:8px;padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top))}
   .btn-menu{display:inline-flex;align-items:center;justify-content:center}
   nav{
-    display:none;position:fixed;inset:56px 0 auto 0;max-height:calc(100vh - 56px);
+    display:none;position:fixed;
+    top:calc(56px + env(safe-area-inset-top)); left:0; right:0;
+    max-height:calc(100dvh - 56px - env(safe-area-inset-top));
     overflow:auto;z-index:40;padding:12px;gap:8px;flex-direction:column;
     background:var(--panel);border-bottom:1px solid var(--borde);
     box-shadow:0 12px 28px rgba(0,0,0,.35);
+    padding-bottom:calc(12px + env(safe-area-inset-bottom));
   }
   nav.abierto{display:flex}
-  .nav-fondo.abierto{display:block;position:fixed;inset:56px 0 0 0;background:rgba(0,0,0,.45);z-index:30}
+  .nav-fondo.abierto{
+    display:block;position:fixed;
+    top:calc(56px + env(safe-area-inset-top)); left:0; right:0; bottom:0;
+    background:rgba(0,0,0,.45);z-index:30
+  }
   .navbtn{width:100%;min-height:48px;border-radius:12px;font-size:16px;text-align:left;padding:12px 16px}
   .btn,.btn.primario,.btn.peligro{min-height:46px;padding:12px 16px;font-size:15px}
   .btn.fila,.btn.chico{min-height:40px;padding:8px 12px;font-size:14px}
   .form{flex-direction:column;align-items:stretch}
   .form label{width:100%}
   input,select,textarea{width:100%;min-width:0;min-height:44px;font-size:16px}
-  .cards{grid-template-columns:1fr 1fr}
-  .card .num{font-size:20px}
-  .tabla-scroll table{min-width:720px;font-size:13px}
+  .cards{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .card{padding:12px}
+  .card .num{font-size:clamp(15px,4.5vw,20px)}
+  .tabla-scroll table{min-width:680px;font-size:13px}
   th,td{padding:10px 8px}
-  .login-box{padding:22px 18px}
+  .login-box{padding:22px 18px;width:min(360px,94vw)}
   .login-box .btn.primario{width:100%;min-height:48px}
+  .caj-card .montos{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .modal{padding:0;padding-bottom:env(safe-area-inset-bottom)}
+  .modal-caja{width:100%;max-height:94dvh;border-radius:16px 16px 0 0}
+}
+@media(max-width:380px){
+  .cards{grid-template-columns:1fr}
+  .caj-card .montos{grid-template-columns:1fr}
 }
 @media(min-width:641px){
   .btn-menu{display:none !important}

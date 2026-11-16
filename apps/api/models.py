@@ -49,13 +49,17 @@ class Usuario(Base):
     rol = Column(String(20), nullable=False, default="operador")  # admin|supervisor|operador
     sucursal_id = Column(Integer, ForeignKey("sucursales.id"))
     activo = Column(Boolean, nullable=False, default=True)
+    eliminado = Column(Boolean, nullable=False, default=False)
+    eliminado_en = Column(DateTime)
+    eliminado_por = Column(Integer, ForeignKey("usuarios.id"))
+    motivo_eliminacion = Column(String(200))
     saldo_caja = Column(DINERO, nullable=False, default=0)
     saldo_caja_prueba = Column(DINERO, nullable=False, default=0)
     ciclo_caja_movimiento_id = Column(Integer)
     ciclo_caja_prueba_movimiento_id = Column(Integer)
     creado_en = Column(DateTime, nullable=False, default=ahora_local)
 
-    sucursal = relationship("Sucursal")
+    sucursal = relationship("Sucursal", foreign_keys=[sucursal_id])
 
 
 class Sesion(Base):
