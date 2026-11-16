@@ -115,7 +115,7 @@ function ir(sec) {
     inicio: cargarInicio, sucursales: cargarSucursales, terminales: cargarTerminales,
     usuarios: cargarUsuarios, "ventas-cajeros": cargarVentasCajeros,
     sorteos: cargarSorteos, tabla: cargarTabla,
-    limites: cargarLimites, resultados: cargarResultados, tickets: async () => {},
+    limites: cargarLimites, resultados: cargarResultados, tickets: cargarTicketsLista,
     fuente: cargarFuente, ganadores: cargarGanadores,
     caja: cargarCaja, entregas: cargarEntregas, fondos: cargarFondos, comisiones: cargarComisiones,
     reportes: cargarReportes, auditoria: async () => {},
@@ -762,7 +762,173 @@ async function anularTicketPanel() {
   try {
     const d = await post("/panel/tickets/anular", { ...llaveTicket(), motivo });
     pintarTicket(d); msg("#tic-msg", "Ticket ANULADO ✔ El efectivo salió de la caja de la banca vendedora.");
+    await pintarListaTickets().catch(() => {});
   } catch (e) { msg("#tic-msg", e.message, false); }
+}
+
+/* -------------------------------------------------------- lista tickets admin */
+let TIC_PAGINA = 1;
+let TIC_CAJERAS = [];
+
+function rangoTickets(tipo) {
+  const hoy = hoyISO();
+  if (tipo === "ayer") return [sumarDias(hoy, -1), sumarDias(hoy, -1)];
+  if (tipo === "semana") {
+    const d = new Date(hoy + "T12:00:00");
+    const dia = (d.getDay() + 6) % 7;
+    d.setDate(d.getDate() - dia);
+    const desde = d.toISOString().slice(0, 10);
+    return [desde, hoy];
+  }
+  if (tipo === "mes") return [hoy.slice(0, 8) + "01", hoy];
+  return [hoy, hoy];
+}
+
+async function cargarTicketsLista() {
+  const hoy = hoyISO();
+  if (!$("#tic-lista-desde").value) $("#tic-lista-desde").value = hoy;
+  if (!$("#tic-lista-hasta").value) $("#tic-lista-hasta").value = hoy;
+  $("#tic-lista-sucursal").innerHTML =
+    '<option value="">Todas</option>' +
+    opciones(SUCURSALES, (s) => s.id, (s) => `${s.codigo} — ${s.nombre}`);
+  TIC_CAJERAS = (await api("/usuarios")).filter((u) => u.rol === "operador");
+  $("#tic-lista-cajera").innerHTML =
+    '<option value="">Todas</option>' +
+    opciones(TIC_CAJERAS, (u) => u.id, (u) => `${u.nombre} (${u.usuario})`);
+  TIC_PAGINA = 1;
+  await pintarListaTickets();
+}
+
+async function pintarListaTickets() {
+  const qs = new URLSearchParams();
+  const id = ($("#tic-lista-id").value || "").trim();
+  if (id) qs.set("ticket_id", id);
+  else {
+    if ($("#tic-lista-desde").value) qs.set("desde", $("#tic-lista-desde").value);
+    if ($("#tic-lista-hasta").value) qs.set("hasta", $("#tic-lista-hasta").value);
+  }
+  if ($("#tic-lista-sucursal").value) qs.set("sucursal_id", $("#tic-lista-sucursal").value);
+  if ($("#tic-lista-cajera").value) qs.set("usuario_id", $("#tic-lista-cajera").value);
+  if ($("#tic-lista-estado").value) qs.set("estado", $("#tic-lista-estado").value);
+  qs.set("pagina", String(TIC_PAGINA));
+  qs.set("por_pagina", "30");
+  try {
+    const datos = await api(`/panel/tickets?${qs.toString()}`);
+    $("#tic-lista-meta").textContent =
+      `${datos.total || 0} ticket(s) · página ${datos.pagina}/${datos.paginas}` +
+      (datos.modo_desarrollo ? " · PRUEBA" : "");
+    const filas = datos.tickets || [];
+    if (!filas.length) {
+      $("#tic-lista").innerHTML = '<p class="nota">No hay tickets con esos filtros.</p>';
+    } else {
+      $("#tic-lista").innerHTML = filas.map((t) => {
+        const lot = (t.loterias || []).join(", ") || "—";
+        const anular = t.puede_anular
+          ? `<button type="button" class="btn peligro" data-tic-anular="${t.id}" data-tic-serial="${esc(t.serial)}" data-tic-total="${esc(t.total)}" data-tic-cajera="${esc(t.cajera)}">ELIMINAR / ANULAR</button>`
+          : "";
+        return `<article class="tic-card">
+          <div class="tic-cab">
+            <h4>#${esc(t.id)} · ${esc(t.serial)}</h4>
+            <span class="estado-pill">${esc(String(t.estado).toUpperCase())}${t.es_prueba ? " · PRUEBA" : ""}</span>
+          </div>
+          <div class="meta">${esc(t.vendido_en || t.fecha || "—")} · ${esc(t.cajera)} (${esc(t.cajera_usuario)}) · ${esc(t.sucursal)}</div>
+          <div class="meta">Loterías: ${esc(lot)}</div>
+          <div class="montos"><div>Total <b>${fmt(t.total)}</b></div><div>Premio <b>${fmt(t.premio_total)}</b></div></div>
+          <div class="tic-acciones">
+            <button type="button" class="btn primario" data-tic-ver="${t.id}">VER TICKET</button>
+            ${anular}
+          </div>
+        </article>`;
+      }).join("");
+    }
+    const pag = $("#tic-paginacion");
+    pag.innerHTML = "";
+    if ((datos.paginas || 1) > 1) {
+      if (datos.pagina > 1) {
+        pag.innerHTML += `<button type="button" class="btn" data-tic-pag="${datos.pagina - 1}">Anterior</button>`;
+      }
+      if (datos.pagina < datos.paginas) {
+        pag.innerHTML += `<button type="button" class="btn" data-tic-pag="${datos.pagina + 1}">Siguiente</button>`;
+      }
+    }
+    document.querySelectorAll("[data-tic-ver]").forEach((b) => {
+      b.addEventListener("click", () => verTicketDetalle(parseInt(b.dataset.ticVer, 10)));
+    });
+    document.querySelectorAll("[data-tic-anular]").forEach((b) => {
+      b.addEventListener("click", () => anularTicketLista(b));
+    });
+    document.querySelectorAll("[data-tic-pag]").forEach((b) => {
+      b.addEventListener("click", () => {
+        TIC_PAGINA = parseInt(b.dataset.ticPag, 10);
+        pintarListaTickets().catch((e) => msg("#tic-lista-msg", e.message, false));
+      });
+    });
+    msg("#tic-lista-msg", "Lista actualizada ✔");
+  } catch (e) {
+    msg("#tic-lista-msg", e.message, false);
+  }
+}
+
+async function verTicketDetalle(id) {
+  try {
+    const d = await api(`/panel/tickets/${id}`);
+    $("#tic-id").value = d.id;
+    $("#tic-serial").value = d.serial;
+    pintarTicket(d);
+    const jugadas = (d.jugadas || []).map((j) =>
+      `<li><b>${esc(j.tipo_nombre)}</b> ${esc(j.numeros)} → ${esc((j.loterias || []).join(" + "))} · ${fmt(j.monto)}` +
+      (j.evaluada ? ` · premio ${fmt(j.premio || 0)}${j.pagada ? " (pagado)" : ""}` : " · sin evaluar") +
+      `</li>`).join("");
+    $("#tic-modal-titulo").textContent = `Ticket #${d.id} · ${d.serial}`;
+    $("#tic-modal-cuerpo").innerHTML = `
+      <p class="meta">${esc(d.fecha_hora || "—")} · ${esc(d.cajero || "—")} · ${esc(d.banca || "—")}</p>
+      <p><b>Estado:</b> ${esc(String(d.estado).toUpperCase())} · <b>Total:</b> ${fmt(d.total)} · <b>Premio:</b> ${fmt(d.premio_total)}</p>
+      ${d.es_prueba ? '<p class="nota">Ticket de PRUEBA</p>' : ""}
+      <h4>Jugadas</h4><ul class="tic-jugadas">${jugadas || "<li>Sin jugadas</li>"}</ul>
+      ${d.estado === "anulado" ? `<p class="nota">Anulado: ${esc(d.anulado_en || "—")} · ${esc(d.anulado_por || "—")} · ${esc(d.anulado_motivo || "—")}</p>` : ""}
+      ${d.pago ? `<p class="nota">Pago: ${esc(d.pago.fecha_hora || "—")} · ${esc(d.pago.sucursal || "—")} · cajero ${esc(d.pago.cajero || "—")}</p>` : ""}`;
+    $("#tic-modal").hidden = false;
+    const btn = $("#tic-modal-anular");
+    btn.hidden = d.estado !== "vendido";
+    btn.dataset.ticAnular = String(d.id);
+    btn.dataset.ticSerial = d.serial;
+    btn.dataset.ticTotal = String(d.total);
+    btn.dataset.ticCajera = d.cajero || "";
+    btn.onclick = () => anularTicketLista(btn);
+  } catch (e) {
+    msg("#tic-lista-msg", e.message, false);
+  }
+}
+
+async function anularTicketLista(boton) {
+  const id = boton.dataset.ticAnular;
+  const serial = boton.dataset.ticSerial;
+  const total = boton.dataset.ticTotal;
+  const cajera = boton.dataset.ticCajera || "—";
+  const motivo = prompt(
+    `¿ESTÁ SEGURO DE ANULAR EL TICKET #${id}?\n` +
+    `Importe: RD$${total}\nCajera: ${cajera}\n\nEscriba el motivo (obligatorio):`,
+    ""
+  );
+  if (motivo === null) return;
+  const texto = String(motivo).trim();
+  if (!texto) {
+    msg("#tic-lista-msg", "Indique el motivo de la anulación.", false);
+    return;
+  }
+  if (!confirm(`Confirmar anulación del ticket #${id} (${serial}) por RD$${total}. No se borra el historial.`)) return;
+  try {
+    const d = await post("/panel/tickets/anular", { id: parseInt(id, 10), serial, motivo: texto });
+    $("#tic-motivo").value = texto;
+    $("#tic-id").value = d.id;
+    $("#tic-serial").value = d.serial;
+    pintarTicket(d);
+    $("#tic-modal").hidden = true;
+    msg("#tic-lista-msg", `Ticket #${d.id} ANULADO ✔`);
+    await pintarListaTickets();
+  } catch (e) {
+    msg("#tic-lista-msg", e.message, false);
+  }
 }
 
 /* --------------------------------------------------------------------- caja */
@@ -1177,6 +1343,24 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-tic-consultar").addEventListener("click", consultarTicket);
   $("#btn-tic-pagar").addEventListener("click", pagarTicketPanel);
   $("#btn-tic-anular").addEventListener("click", anularTicketPanel);
+  $("#btn-tic-lista")?.addEventListener("click", () => {
+    TIC_PAGINA = 1;
+    pintarListaTickets().catch((e) => msg("#tic-lista-msg", e.message, false));
+  });
+  document.querySelectorAll("[data-tic-rango]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const [d, h] = rangoTickets(b.dataset.ticRango);
+      $("#tic-lista-desde").value = d;
+      $("#tic-lista-hasta").value = h;
+      $("#tic-lista-id").value = "";
+      TIC_PAGINA = 1;
+      pintarListaTickets().catch((e) => msg("#tic-lista-msg", e.message, false));
+    });
+  });
+  $("#tic-modal-cerrar")?.addEventListener("click", () => { $("#tic-modal").hidden = true; });
+  $("#tic-modal")?.addEventListener("click", (ev) => {
+    if (ev.target === $("#tic-modal")) $("#tic-modal").hidden = true;
+  });
   $("#btn-caj-recibir").addEventListener("click", recibirEfectivo);
   $("#btn-caj-gasto").addEventListener("click", registrarGasto);
   $("#btn-caj-listar").addEventListener("click", () => listarCaja().catch((e) => msg("#caj-msg", e.message, false)));

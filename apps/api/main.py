@@ -7,7 +7,7 @@ import json
 from datetime import date, datetime, time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -24,6 +24,7 @@ from .models import (
     Sucursal,
     TablaPagos,
     Terminal,
+    Ticket,
     TipoJugada,
     TransaccionCaja,
     Usuario,
@@ -895,6 +896,42 @@ class AnularIn(BaseModel):
     id: int
     serial: str
     motivo: str | None = None
+
+
+@app.get("/panel/tickets")
+def panel_listar_tickets(
+    desde: date | None = None,
+    hasta: date | None = None,
+    sucursal_id: int | None = None,
+    usuario_id: int | None = None,
+    estado: str | None = None,
+    ticket_id: int | None = None,
+    pagina: int = 1,
+    por_pagina: int = 50,
+    db=Depends(get_db),
+    usuario=Depends(requiere_rol("admin", "supervisor")),
+):
+    """Lista filtrada de tickets del consorcio. Solo lectura."""
+    return servicios.listar_tickets_panel(
+        db,
+        desde=desde,
+        hasta=hasta,
+        sucursal_id=sucursal_id,
+        usuario_id=usuario_id,
+        estado=estado,
+        ticket_id=ticket_id,
+        pagina=pagina,
+        por_pagina=por_pagina,
+    )
+
+
+@app.get("/panel/tickets/{ticket_id}")
+def panel_detalle_ticket(ticket_id: int, db=Depends(get_db),
+                         usuario=Depends(requiere_rol("admin", "supervisor"))):
+    ticket = db.get(Ticket, ticket_id)
+    if ticket is None:
+        raise HTTPException(404, "Ticket no encontrado")
+    return servicios.ticket_a_dict(db, ticket)
 
 
 @app.post("/panel/tickets/consultar")

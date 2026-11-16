@@ -279,7 +279,50 @@
 </section>
 
 <section id="sec-tickets" class="seccion">
-  <h2>Consultar / pagar / anular un ticket</h2>
+  <h2>Tickets</h2>
+  <p class="nota">Lista de todos los tickets vendidos. VER TICKET muestra jugadas y premios. ELIMINAR / ANULAR es solo administrativo, con motivo obligatorio; no borra el historial.</p>
+  <div class="form">
+    <div class="rango-btns">
+      <button type="button" class="btn" data-tic-rango="hoy">HOY</button>
+      <button type="button" class="btn" data-tic-rango="ayer">AYER</button>
+      <button type="button" class="btn" data-tic-rango="semana">ESTA SEMANA</button>
+      <button type="button" class="btn" data-tic-rango="mes">ESTE MES</button>
+    </div>
+    <label>DESDE<input id="tic-lista-desde" type="date"></label>
+    <label>HASTA<input id="tic-lista-hasta" type="date"></label>
+    <label>Cajera<select id="tic-lista-cajera"><option value="">Todas</option></select></label>
+    <label>Sucursal<select id="tic-lista-sucursal"><option value="">Todas</option></select></label>
+    <label>Estado<select id="tic-lista-estado">
+      <option value="">Todos</option>
+      <option value="vendido">VENDIDO</option>
+      <option value="ganador">GANADOR</option>
+      <option value="pagado">PAGADO</option>
+      <option value="anulado">ANULADO</option>
+      <option value="no_ganador">NO GANADOR</option>
+      <option value="vencido">VENCIDO</option>
+    </select></label>
+    <label>N.º ticket<input id="tic-lista-id" type="number" min="1" placeholder="Opcional"></label>
+    <button id="btn-tic-lista" class="btn primario" type="button">CONSULTAR</button>
+    <p id="tic-lista-msg" class="msg"></p>
+  </div>
+  <p id="tic-lista-meta" class="meta"></p>
+  <div id="tic-lista" class="tic-lista"></div>
+  <div class="rango-btns" id="tic-paginacion"></div>
+
+  <div id="tic-modal" class="modal" hidden>
+    <div class="modal-caja">
+      <div class="modal-cab">
+        <h3 id="tic-modal-titulo">Detalle del ticket</h3>
+        <button type="button" class="btn" id="tic-modal-cerrar">Cerrar</button>
+      </div>
+      <div class="modal-cuerpo" id="tic-modal-cuerpo"></div>
+      <div class="modal-cuerpo" style="padding-top:0">
+        <button type="button" class="btn peligro" id="tic-modal-anular" hidden>ELIMINAR / ANULAR</button>
+      </div>
+    </div>
+  </div>
+
+  <h3>Consultar / pagar / anular por ID o serial</h3>
   <div class="form">
     <label>ID del ticket<input id="tic-id" type="number"></label>
     <label>Serial<input id="tic-serial" placeholder="Código del ticket impreso"></label>
@@ -293,7 +336,7 @@
     <button id="btn-tic-pagar" class="btn peligro">PAGAR TICKET</button>
     <button id="btn-tic-anular" class="btn">ANULAR TICKET</button>
   </div>
-  <p class="nota">Pagar es una operación única en todo el consorcio: si el ticket ya se pagó en otra sucursal, el servidor lo rechaza y dice dónde y cuándo se pagó. La cajera solo puede anular sus tickets en los primeros 5 minutos desde la SUNMI. Pasado ese plazo, solo el administrador anula aquí (con motivo). No se anulan tickets pagados ni sorteos ya cerrados.</p>
+  <p class="nota">Pagar es una operación única en todo el consorcio: si el ticket ya se pagó en otra sucursal, el servidor lo rechaza y dice dónde y cuándo se pagó. La cajera solo puede anular sus tickets en los primeros 5 minutos desde la SUNMI. Pasado ese plazo, solo el administrador anula aquí (con motivo). No se anulan tickets pagados ni sorteos ya cerrados. Los tickets no se borran físicamente.</p>
 </section>
 
 <section id="sec-caja" class="seccion">

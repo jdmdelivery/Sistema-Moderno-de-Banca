@@ -2786,6 +2786,89 @@ def reporte_ventas(db, desde, hasta, usuario_id=None, sucursal_id=None, limite=5
     }
 
 
+def _loterias_ticket(ticket):
+    nombres = []
+    vistos = set()
+    for j in ticket.jugadas or []:
+        for s in (j.sorteo, j.sorteo2):
+            if s is None or s.nombre in vistos:
+                continue
+            vistos.add(s.nombre)
+            nombres.append(s.nombre)
+    return nombres
+
+
+def listar_tickets_panel(
+    db,
+    desde=None,
+    hasta=None,
+    sucursal_id=None,
+    usuario_id=None,
+    estado=None,
+    ticket_id=None,
+    pagina=1,
+    por_pagina=50,
+):
+    """Lista administrativa de tickets. Más recientes primero. No borra nada."""
+    pagina = max(1, int(pagina or 1))
+    por_pagina = min(max(1, int(por_pagina or 50)), 100)
+    q = db.query(Ticket)
+    if ticket_id is not None and str(ticket_id).strip() != "":
+        if not str(ticket_id).isdigit():
+            raise ErrorServicio(400, "El número de ticket no es válido")
+        q = q.filter(Ticket.id == int(ticket_id))
+    else:
+        if desde is not None:
+            q = q.filter(Ticket.fecha >= desde)
+        if hasta is not None:
+            q = q.filter(Ticket.fecha <= hasta)
+    if sucursal_id:
+        q = q.filter(Ticket.sucursal_vendedora_id == int(sucursal_id))
+    if usuario_id:
+        q = q.filter(Ticket.usuario_id == int(usuario_id))
+    if estado:
+        clave = str(estado).strip().lower()
+        if clave not in ("", "todos", "todas"):
+            q = q.filter(Ticket.estado == clave)
+    total = q.count()
+    tickets = (
+        q.order_by(Ticket.id.desc())
+        .offset((pagina - 1) * por_pagina)
+        .limit(por_pagina)
+        .all()
+    )
+    filas = []
+    for t in tickets:
+        vendedor = db.get(Usuario, t.usuario_id) if t.usuario_id else None
+        filas.append({
+            "id": t.id,
+            "serial": t.serial,
+            "vendido_en": t.vendido_en.isoformat(sep=" ") if t.vendido_en else None,
+            "fecha": t.fecha.isoformat() if t.fecha else None,
+            "cajera": vendedor.nombre if vendedor else "—",
+            "cajera_usuario": vendedor.usuario if vendedor else "—",
+            "usuario_id": t.usuario_id,
+            "sucursal_id": t.sucursal_vendedora_id,
+            "sucursal": t.sucursal_vendedora.nombre if t.sucursal_vendedora else "—",
+            "sucursal_codigo": t.sucursal_vendedora.codigo if t.sucursal_vendedora else "—",
+            "loterias": _loterias_ticket(t),
+            "total": str(D(t.total)),
+            "estado": t.estado,
+            "premio_total": str(D(t.premio_total)),
+            "es_prueba": bool(t.es_prueba),
+            "puede_anular": t.estado == "vendido",
+        })
+    paginas = max(1, (total + por_pagina - 1) // por_pagina) if total else 1
+    return {
+        "tickets": filas,
+        "total": total,
+        "pagina": pagina,
+        "por_pagina": por_pagina,
+        "paginas": paginas,
+        "modo_desarrollo": modo_desarrollo(),
+    }
+
+
 _NOMBRE_JUGADA = {"QN": "QUINIELA", "PL": "PALÉ", "SP": "SÚPER PALÉ"}
 
 
