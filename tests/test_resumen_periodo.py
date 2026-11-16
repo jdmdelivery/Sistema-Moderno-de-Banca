@@ -1,4 +1,4 @@
-"""HOY, AYER y un rango leen el mismo resumen. No mueven dinero ni borran entregas."""
+"""HOY, AYER, rango y mes leen el mismo resumen. No mueven dinero ni borran entregas."""
 from datetime import datetime
 
 from apps.api import db as dbmod
@@ -33,31 +33,30 @@ def test_hoy_ayer_y_rango_imprimen_el_periodo_sin_alterar_saldos(entorno, monkey
     assert hoy["real"]["premios_pagados"] == "0.00"
     assert hoy["real"]["premios_pendientes"] == "0.00"
     assert hoy["real"]["pagado_en_otra"] == "0.00"
+    assert hoy["real"]["quedo"] == "10.00"
     assert hoy["real"]["neto"] == "10.00"
     assert hoy["desde"] == "14-11-2026"
     assert hoy["hasta"] == "14-11-2026"
-    assert "BANCA CASTILLO" in hoy["texto"]
-    assert "Sucursal: BANCA CASTILLO" in hoy["texto"]
-    assert "Terminal:" in hoy["texto"]
     assert "Cajero: Operador vend1" in hoy["texto"]
-    assert "DESDE: 14-11-2026" in hoy["texto"]
-    assert "HASTA: 14-11-2026" in hoy["texto"]
-    assert "IMPRESO:" in hoy["texto"]
-    assert "VENTAS: RD$ 10.00" in hoy["texto"]
+    assert "FECHA: 14/11/2026" in hoy["texto"]
+    assert "Sucursal:" not in hoy["texto"]
+    assert "VENTAS DEL DÍA: RD$10.00" in hoy["texto"]
+    assert "PREMIOS PAGADOS: RD$0.00" in hoy["texto"]
+    assert "QUEDÓ: RD$10.00" in hoy["texto"]
+    assert "TICKET" not in hoy["texto"]
     assert entorno.saldo(b["sucursal"]["id"]) == antes
 
     ayer = _resumen(entorno, b["headers"], "2026-11-13", "2026-11-13")
     assert ayer["real"]["ventas"] == "0.00"
-    assert ayer["real"]["neto"] == "0.00"
-    assert "DESDE: 13-11-2026" in ayer["texto"]
-    assert "HASTA: 13-11-2026" in ayer["texto"]
-    assert "VENTAS: RD$ 0.00" in ayer["texto"]
+    assert ayer["real"]["quedo"] == "0.00"
+    assert "FECHA: 13/11/2026" in ayer["texto"]
+    assert "VENTAS DEL DÍA: RD$0.00" in ayer["texto"]
 
     rango = _resumen(entorno, b["headers"], "2026-11-13", "2026-11-14")
     assert rango["real"]["ventas"] == "10.00"
-    assert rango["real"]["neto"] == "10.00"
-    assert "DESDE: 13-11-2026" in rango["texto"]
-    assert "HASTA: 14-11-2026" in rango["texto"]
+    assert rango["real"]["quedo"] == "10.00"
+    assert "DESDE: 13/11/2026" in rango["texto"]
+    assert "HASTA: 14/11/2026" in rango["texto"]
 
     entrega = entorno.c.post(
         "/terminal/entregas",
@@ -67,8 +66,8 @@ def test_hoy_ayer_y_rango_imprimen_el_periodo_sin_alterar_saldos(entorno, monkey
     assert entrega.status_code == 201, entrega.text
     despues = _resumen(entorno, b["headers"], "2026-11-14", "2026-11-14")
     assert despues["real"]["ventas"] == "10.00"
-    assert despues["real"]["neto"] == "10.00"
-    assert despues["texto"] == hoy["texto"] or "VENTAS: RD$ 10.00" in despues["texto"]
+    assert despues["real"]["quedo"] == "10.00"
+    assert "VENTAS DEL DÍA: RD$10.00" in despues["texto"]
     assert entorno.saldo(b["sucursal"]["id"]) == antes
     db = dbmod.nueva_sesion()
     assert db.query(Entrega).count() == 1
@@ -89,12 +88,10 @@ def test_hoy_ayer_y_rango_imprimen_el_periodo_sin_alterar_saldos(entorno, monkey
     assert medianoche["desde"] == "15-11-2026"
     assert medianoche["hasta"] == "15-11-2026"
     assert medianoche["real"]["ventas"] == "0.00"
-    assert "DESDE: 15-11-2026" in medianoche["texto"]
-    assert "HASTA: 15-11-2026" in medianoche["texto"]
+    assert "FECHA: 15/11/2026" in medianoche["texto"]
     conservado = _resumen(entorno, b["headers"], "2026-11-14", "2026-11-14")
     assert conservado["real"]["ventas"] == "10.00"
-    assert "DESDE: 14-11-2026" in conservado["texto"]
-    assert "HASTA: 14-11-2026" in conservado["texto"]
+    assert "FECHA: 14/11/2026" in conservado["texto"]
     assert entorno.saldo(b["sucursal"]["id"]) == antes
 
 
@@ -109,3 +106,51 @@ def test_el_rango_no_mezcla_la_prueba_con_lo_real(entorno, monkeypatch):
     ayer = _resumen(entorno, b["headers"], "2026-11-13", "2026-11-13")
     assert ayer["prueba"]["ventas"] == "0.00"
     assert entorno.saldo(b["sucursal"]["id"]) == 5764
+
+
+def test_mes_completo_incluye_todos_los_dias_y_totales(entorno, monkeypatch):
+    b = entorno.banca(saldo=5764)
+    _vender(entorno, b["headers"], 10)
+    s = entorno.sorteo_id("La Primera 12")
+    ganador = entorno.vender_ok(b["headers"], [
+        {"tipo": "QN", "sorteos": [s], "numeros": "19", "monto": 5},
+    ])
+    entorno.liquidar(s, 19, 3, 45)
+    pago = entorno.c.post(
+        "/terminal/tickets/pagar",
+        json={"id": ganador["id"], "serial": ganador["serial"]},
+        headers=b["headers"],
+    )
+    assert pago.status_code == 200, pago.text
+    antes = entorno.saldo(b["sucursal"]["id"])
+
+    r = entorno.c.get("/terminal/reportes/mes?anio=2026&mes=11", headers=b["headers"])
+    assert r.status_code == 200, r.text
+    datos = r.json()
+    assert datos["dias_en_mes"] == 30
+    assert len(datos["dias"]) == 30
+    assert datos["dias"][0]["dia"] == 1
+    assert datos["dias"][0]["ventas"] == "0.00"
+    assert datos["dias"][13]["dia"] == 14
+    assert datos["dias"][13]["ventas"] == "15.00"
+    assert datos["dias"][13]["premios_pagados"] == "300.00"
+    assert datos["dias"][13]["quedo"] == "-285.00"
+    assert datos["totales"]["ventas"] == "15.00"
+    assert datos["totales"]["premios_pagados"] == "300.00"
+    assert datos["totales"]["quedo"] == "-285.00"
+    assert "DÍA | VENTAS | PAGADOS | QUEDÓ" in datos["texto"]
+    assert "TOTAL VENTAS: RD$15.00" in datos["texto"]
+    assert "TOTAL PAGADOS: RD$300.00" in datos["texto"]
+    assert "TOTAL QUEDÓ: RD$-285.00" in datos["texto"]
+    assert entorno.saldo(b["sucursal"]["id"]) == antes
+
+    febrero = entorno.c.get("/terminal/reportes/mes?anio=2024&mes=2", headers=b["headers"])
+    assert febrero.status_code == 200, febrero.text
+    assert febrero.json()["dias_en_mes"] == 29
+    assert len(febrero.json()["dias"]) == 29
+    assert febrero.json()["totales"]["ventas"] == "0.00"
+
+    malo = entorno.c.get("/terminal/reportes/mes?anio=2026&mes=13", headers=b["headers"])
+    assert malo.status_code == 400
+    prohibido = entorno.c.get("/terminal/reportes/mes?anio=2026&mes=11&alcance=sucursal", headers=b["headers"])
+    assert prohibido.status_code == 403

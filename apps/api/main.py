@@ -1436,6 +1436,14 @@ def terminal_resumen_dia(desde: str | None = None, hasta: str | None = None, alc
     return servicios.resumen_dia(db, inicio, fin, operador, sucursal, terminal, alcance)
 
 
+@app.get("/terminal/reportes/mes")
+def terminal_resumen_mes(anio: int, mes: int, alcance: str = "cajero",
+                         db=Depends(get_db), terminal=Depends(terminal_actual),
+                         operador=Depends(operador_actual)):
+    sucursal = db.get(Sucursal, terminal.sucursal_id)
+    return servicios.resumen_mes(db, anio, mes, operador, sucursal, terminal, alcance)
+
+
 @app.get("/terminal/reportes/resumen")
 def terminal_reporte_resumen(desde: str, hasta: str, vista: str = "final",
                              db=Depends(get_db), terminal=Depends(terminal_actual),

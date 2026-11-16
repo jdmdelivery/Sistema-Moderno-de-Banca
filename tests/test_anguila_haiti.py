@@ -276,10 +276,10 @@ def test_identifica_quiniela_y_pale_y_no_paga_dos_veces(entorno, fijar_hora, mon
     }, headers=b["headers"])
     assert consulta.status_code == 200, consulta.text
     cuerpo = consulta.json()
-    assert cuerpo["estado"] == "vendido"
+    # Con premios por cobrar y sorteos abiertos el estado es GANADOR (pago parcial por lotería).
+    assert cuerpo["estado"] == "ganador"
     assert cuerpo["puede_pagar"] is True
     assert cuerpo["premio_pendiente"] == "7200.00"
-    assert cuerpo["texto_pago"].count("Lotería:") == 3
     assert "La Anguila 11:00 AM" in cuerpo["texto_pago"]
     assert "Haiti Bolet 11:30 AM" in cuerpo["texto_pago"]
     assert "La Primera 12:00 PM" in cuerpo["texto_pago"]
@@ -290,8 +290,11 @@ def test_identifica_quiniela_y_pale_y_no_paga_dos_veces(entorno, fijar_hora, mon
     assert "Premio: RD$600.00" in cuerpo["texto_pago"]
     assert "Premio: RD$6000.00" in cuerpo["texto_pago"]
     assert "Jugada: 99" not in cuerpo["texto_pago"]
-    assert "Florida 2:30 PM" in cuerpo["texto_pago"]
+    assert "Número: 99" not in cuerpo["texto_pago"]
+    assert "TOTAL NUEVO POR PAGAR: RD$7200.00" in cuerpo["texto_pago"]
+    assert "Florida" in cuerpo["texto_pago"]
     assert "SORTEOS PENDIENTES" in cuerpo["texto_pago"]
+    assert "PENDIENTE DE SORTEO" in cuerpo["texto_pago"]
     antes = float(entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()["mi_caja"])
     caja_real = entorno.saldo(b["sucursal"]["id"])
     pago = entorno.c.post("/terminal/tickets/pagar", json={

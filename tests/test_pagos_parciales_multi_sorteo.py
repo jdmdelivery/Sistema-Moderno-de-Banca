@@ -109,7 +109,7 @@ def test_varias_jugadas_del_mismo_sorteo_se_cobran_juntas(entorno, monkeypatch):
     _simular(entorno, loteria, 25, 1, 2)
     vista = _consultar(entorno, b["headers"], ticket)
     assert vista["premio_pendiente"] == "900.00"
-    assert vista["texto_pago"].count("Estado: PENDIENTE DE PAGO") == 2
+    assert vista["texto_pago"].count("Estado: GANADOR") == 2
     pago = _pagar(entorno, b["headers"], ticket, "op-doble-jugada")
     assert pago.status_code == 200
     assert pago.json()["estado"] == "pagado"

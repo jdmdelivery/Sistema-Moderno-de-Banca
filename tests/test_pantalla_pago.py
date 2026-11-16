@@ -62,11 +62,13 @@ def test_una_loteria_muestra_el_premio_y_oculta_la_perdedora(entorno, monkeypatc
     assert "QUINIELA" in consulta["texto_pago"]
     assert "Lotería: Lotedom 12:00 PM" in consulta["texto_pago"]
     assert "Número ganador: 25-54-78" in consulta["texto_pago"]
-    assert "Jugada: 25" in consulta["texto_pago"]
+    assert "Número: 25" in consulta["texto_pago"]
     assert "Premio: RD$600.00" in consulta["texto_pago"]
     assert "Monto jugado: $10.00" in consulta["texto_pago"]
-    assert "NO GANARON" in consulta["texto_pago"]
-    assert "Jugada: 99" in consulta["texto_pago"]
+    assert "Estado: GANADOR" in consulta["texto_pago"]
+    # La perdedora 99 no se lista; Lotedom sí ganó con 25.
+    assert "Jugada: 99" not in consulta["texto_pago"]
+    assert "Número: 99" not in consulta["texto_pago"]
     assert "EMPRESA: BANCA CASTILLO (PRUEBA)" in consulta["texto_pago"]
 
 
@@ -87,8 +89,8 @@ def test_dos_loterias_y_pale_se_listan_aparte_y_se_cobran_juntos(entorno, monkey
     assert "Lotería: Lotedom 12:00 PM" in consulta["texto_pago"]
     assert "Lotería: La Primera 12:00 PM" in consulta["texto_pago"]
     assert "PALÉ" in consulta["texto_pago"]
-    assert "NO GANARON" in consulta["texto_pago"]
-    assert "Jugada: 77" in consulta["texto_pago"]
+    assert "Jugada: 77" not in consulta["texto_pago"]
+    assert "Número: 77" not in consulta["texto_pago"]
     antes = float(_consultar(entorno, b["headers"], ticket) and entorno.c.get(
         "/terminal/sorteos", headers=b["headers"]).json()["mi_caja"])
     pago = entorno.c.post("/terminal/tickets/pagar", json={
@@ -161,7 +163,7 @@ def test_tres_loterias_cobra_las_listas_y_deja_la_pendiente(entorno, monkeypatch
     assert resto["premio_pendiente"] == "600.00"
     assert resto["premio_pagado"] == "1200.00"
     assert "Estado: PAGADO" in resto["texto_pago"]
-    assert "Estado: PENDIENTE DE PAGO" in resto["texto_pago"]
+    assert "Estado: GANADOR" in resto["texto_pago"]
     final = entorno.c.post("/terminal/tickets/pagar", json={
         "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "pago-resto",
     }, headers=b["headers"])

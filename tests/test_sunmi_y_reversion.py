@@ -59,10 +59,11 @@ def test_la_pantalla_muestra_total_pagado_y_cobra_solo_el_pendiente(entorno, mon
     assert "PREMIO YA PAGADO: RD$0.00" in consulta["texto_pago"]
     assert "PREMIO PENDIENTE: RD$600.00" in consulta["texto_pago"]
     assert "SE COBRARÁ: RD$600.00" in consulta["texto_pago"]
-    assert "NO GANARON" in consulta["texto_pago"]
-    assert "Jugada: 99" in consulta["texto_pago"]
+    assert "Jugada: 99" not in consulta["texto_pago"]
+    assert "Número: 99" not in consulta["texto_pago"]
     assert len(consulta["jugadas"]) == 3
     assert "Florida 2:30 PM" in consulta["texto_pago"]
+    assert "Estado: PENDIENTE DE SORTEO" in consulta["texto_pago"]
     caja_real = entorno.saldo(b["sucursal"]["id"])
     antes = _caja(entorno, b["headers"])
     pago = entorno.c.post("/terminal/tickets/pagar", json={
@@ -158,7 +159,10 @@ def test_el_pago_parcial_sigue_despues_de_cerrar_la_sesion(entorno, monkeypatch)
         "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "resto-tras-reinicio",
     }, headers=b["headers"])
     assert segundo.status_code == 200, segundo.text
-    assert "PREMIO PAGADO: RD$1200.00" in segundo.json()["comprobante"]
+    # El recibo de esta operación solo incluye el tramo nuevo (Florida).
+    assert "PREMIO PAGADO: RD$600.00" in segundo.json()["comprobante"]
+    assert "TOTAL PAGADO: RD$600.00" in segundo.json()["comprobante"]
+    assert "Florida" in segundo.json()["comprobante"]
     assert _caja(entorno, b["headers"]) == antes - 1200
 
 
@@ -179,10 +183,11 @@ def test_varias_loterias_dejan_el_pendiente_fuera_del_cobro(entorno, monkeypatch
     assert consulta["importe_a_cobrar"] == "1200.00"
     assert "SE COBRARÁ: RD$1200.00" in consulta["texto_pago"]
     assert "PREMIO TOTAL: RD$1200.00" in consulta["texto_pago"]
-    assert "NO GANARON" in consulta["texto_pago"]
-    assert "Jugada: 99" in consulta["texto_pago"]
+    assert "Jugada: 99" not in consulta["texto_pago"]
+    assert "Número: 99" not in consulta["texto_pago"]
     assert any(j["numeros"] == "99" for j in consulta["jugadas"])
     assert "Florida 2:30 PM" in consulta["texto_pago"]
+    assert "Estado: PENDIENTE DE SORTEO" in consulta["texto_pago"]
     antes = _caja(entorno, b["headers"])
     pago = entorno.c.post("/terminal/tickets/pagar", json={
         "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "varias",
@@ -243,7 +248,11 @@ def test_la_reversion_no_vuelve_a_cobrar_lo_ya_pagado(entorno, monkeypatch):
     }, headers=b["headers"])
     assert resto.status_code == 200, resto.text
     assert resto.json()["estado"] == "pagado"
-    assert "PREMIO PAGADO: RD$1200.00" in resto.json()["comprobante"]
+    # Recibo de la operación 2: solo el tramo nuevo (RD$600).
+    assert "PREMIO PAGADO: RD$600.00" in resto.json()["comprobante"]
+    assert "TOTAL PAGADO: RD$600.00" in resto.json()["comprobante"]
+    assert "BANCA MODERNA" in resto.json()["comprobante"]
+    assert "RECIBO DE PAGO" in resto.json()["comprobante"]
     assert _caja(entorno, b["headers"]) == antes - 1200
     assert entorno.saldo(b["sucursal"]["id"]) == caja_real
 
@@ -262,8 +271,10 @@ def test_el_comprobante_suma_solo_lo_cobrado(entorno, monkeypatch):
     }, headers=b["headers"])
     assert pago.status_code == 200, pago.text
     texto = pago.json()["comprobante"]
+    assert "BANCA MODERNA" in texto
+    assert "RECIBO DE PAGO" in texto
     assert "PREMIO PAGADO: RD$700.00" in texto
-    assert "Monto jugado: RD$10.00" in texto
-    assert "Jugada: QUINIELA 25" in texto
-    assert "Jugada: QUINIELA 54" in texto
+    assert "TOTAL PAGADO: RD$700.00" in texto
+    assert "Número ganador: 25" in texto
+    assert "Número ganador: 54" in texto
     assert "99" not in texto

@@ -1,4 +1,4 @@
-"""El resumen del día solo lee. No mezcla pruebas ni cuenta dos veces un pago."""
+"""El resumen del día solo lee. Premios por fecha de pago; no mezcla pruebas."""
 from apps.api.models import Usuario
 from apps.api import db as dbmod
 
@@ -34,20 +34,27 @@ def test_resumen_de_la_cajera_no_mueve_la_caja_ni_mezcla_pruebas(entorno, monkey
     datos = propio.json()
     assert datos["alcance"] == "cajera autenticada"
     assert datos["real"]["ventas"] == "20.00"
-    assert datos["real"]["premios_pagados"] == "600.00"
+    # Premios por quien pagó (otra sucursal), no por quien vendió.
+    assert datos["real"]["premios_pagados"] == "0.00"
     assert datos["real"]["pagado_en_otra"] == "600.00"
-    assert datos["real"]["total_pagado"] == "600.00"
-    assert datos["real"]["neto"] == "-580.00"
+    assert datos["real"]["total_pagado"] == "0.00"
+    assert datos["real"]["quedo"] == "20.00"
+    assert datos["real"]["neto"] == "20.00"
     assert datos["real"]["premios_pendientes"] == "0.00"
     assert datos["prueba"] is None
     assert "PRUEBA — NO OFICIAL" not in datos["texto"]
-    assert "VENTAS: RD$ 20.00" in datos["texto"]
-    assert "PAGADO EN OTRA SUC.: RD$ 600.00" in datos["texto"]
+    assert "VENTAS DEL DÍA: RD$20.00" in datos["texto"]
+    assert "PREMIOS PAGADOS: RD$0.00" in datos["texto"]
+    assert "QUEDÓ: RD$20.00" in datos["texto"]
+    assert "PAGADO EN OTRA" not in datos["texto"]
+    assert "TICKET" not in datos["texto"]
+    assert "COMISI" not in datos["texto"].upper()
     assert entorno.saldo(b1["sucursal"]["id"]) == antes
     assert vendido["id"] != ganador["id"]
     ajeno = entorno.c.get("/terminal/reportes/dia", headers=otra["headers"]).json()
     assert ajeno["real"]["ventas"] == "0.00"
-    assert ajeno["real"]["premios_pagados"] == "0.00"
+    assert ajeno["real"]["premios_pagados"] == "600.00"
+    assert ajeno["real"]["quedo"] == "-600.00"
     prohibido = entorno.c.get("/terminal/reportes/dia?alcance=sucursal", headers=b1["headers"])
     assert prohibido.status_code == 403
 

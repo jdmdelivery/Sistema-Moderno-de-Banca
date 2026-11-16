@@ -65,11 +65,13 @@ def test_porcentajes_distintos_cambio_anulados_y_entrega(entorno, fijar_hora):
 
     resumen = _dia(entorno, b["headers"])
     assert resumen["real"]["ventas"] == "150.00"
+    assert resumen["real"]["quedo"] == "150.00"
     assert resumen["comision"]["real"]["comision"] == "17.50"
     assert resumen["comision"]["real"]["tickets_anulados"] == 1
-    assert "10% SOBRE RD$100.00 = RD$10.00" in resumen["texto"]
-    assert "15% SOBRE RD$50.00 = RD$7.50" in resumen["texto"]
-    assert "COMISIÓN A COBRAR: RD$17.50" in resumen["texto"]
+    # El texto de caja es compacto; la comisión sigue en el JSON (panel/liquidaciones).
+    assert "VENTAS DEL DÍA: RD$150.00" in resumen["texto"]
+    assert "QUEDÓ: RD$150.00" in resumen["texto"]
+    assert "COMISI" not in resumen["texto"].upper()
     assert "80.00" not in resumen["comision"]["real"]["ventas_validas"]
     ajeno = _dia(entorno, otra["headers"])
     assert ajeno["real"]["ventas"] == "80.00"
@@ -155,15 +157,16 @@ def test_premio_imprime_comprobante_solo_si_el_servidor_confirma(entorno, monkey
     assert cuerpo["estado"] == "pagado"
     texto = cuerpo["comprobante"]
     assert "BANCA CASTILLO (PRUEBA)" in texto
-    assert "COMPROBANTE DE PREMIO PAGADO" in texto
+    assert "RECIBO DE PAGO" in texto
     assert "PRUEBA — NO OFICIAL" in texto
     assert f"Ticket: {ticket['id']}" in texto
-    assert f"Serial: {ticket['serial']}" in texto
     assert "Lotería: Lotedom 12:00 PM" in texto
-    assert "Jugada: QUINIELA 25" in texto
-    assert "Monto jugado: RD$10.00" in texto
+    assert "Número ganador: 25" in texto
+    assert "Premio: RD$600.00" in texto
     assert "PREMIO PAGADO: RD$600.00" in texto
+    assert "TOTAL PAGADO: RD$600.00" in texto
     assert "ESTADO: PAGADO" in texto
+    assert "Monto jugado" not in texto
     assert "COPIA" not in texto
     assert "pago-con-fondo" in texto
     otro = entorno.c.post("/terminal/login", json={
