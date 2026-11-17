@@ -56,8 +56,11 @@ def test_cajero_no_ve_ventas_ni_caja_de_otra_cajera(entorno):
     assert resumen.status_code == 200
     assert resumen.json()["total_tickets"] == 0
     assert ajeno["serial"] not in resumen.text
+    # Spoof alcance=sucursal: se fuerza "cajero" y no revela ventas ajenas.
     sucursal = entorno.c.get("/terminal/reportes/dia?alcance=sucursal&usuario_id=99", headers=b["headers"])
-    assert sucursal.status_code == 403
+    assert sucursal.status_code == 200
+    assert ajeno["serial"] not in sucursal.text
+    assert float(sucursal.json()["real"]["ventas"]) == 0.00
     dia = entorno.c.get("/terminal/reportes/dia?cajero_id=2", headers=b["headers"])
     assert dia.status_code == 200
     assert ajeno["serial"] not in dia.text
@@ -124,3 +127,135 @@ def test_el_consolidado_no_se_suma_a_la_caja_general(entorno):
     assert entorno.saldo(b["sucursal"]["id"]) == 40
     assert entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()["mi_caja"] == "40.00"
     assert entorno.c.get("/terminal/sorteos", headers=ana).json()["mi_caja"] == "15.00"
+
+
+def test_premios_por_pagar_no_se_heredan_entre_cajeros(entorno, monkeypatch):
+    """PAGAR del terminal es del cajero autenticado; no suma premios de otro de la misma banca."""
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    b = entorno.banca(saldo=0, usuario="cajero_a", clave="prueba123")
+    entorno.operador("cajero_b", "prueba123", b["sucursal"]["id"])
+    hb = entorno.login_terminal("cajero_b", "prueba123")
+    sorteo = entorno.sorteo_id("LOTEDOM")
+    ticket = entorno.vender_ok(b["headers"], [
+        {"tipo": "QN", "sorteos": [sorteo], "numeros": "25", "monto": 10},
+    ])
+    sim = entorno.c.post("/resultados", json={
+        "sorteo_id": sorteo, "fecha": "2026-11-14",
+        "premio1": 25, "premio2": 1, "premio3": 2, "simulado": True,
+    }, headers=entorno.admin)
+    assert sim.status_code == 201, sim.text
+
+    propios = entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()
+    ajenos = entorno.c.get("/terminal/sorteos", headers=hb).json()
+    assert float(propios["mi_caja"]) == 10.00
+    assert float(ajenos["mi_caja"]) == 0.00
+    assert float(propios["mi_venta"]) == 10.00
+    assert float(ajenos["mi_venta"]) == 0.00
+    assert float(propios["premios_por_pagar"]) > 0
+    assert float(ajenos["premios_por_pagar"]) == 0.00
+    assert ajenos.get("premios_pendientes_sucursal") in (None, "0.00")
+    assert propios.get("premios_pendientes_mios") == propios["premios_por_pagar"]
+    assert ticket["serial"]  # ticket propio intacto; permiso de pago no se altera aquí
+
+
+def test_ventas_y_reportes_no_mezclan_cajeros_ni_sucursales(entorno, monkeypatch):
+    """Misma banca y bancas distintas: cada cajero solo ve lo suyo; no se spoofea alcance."""
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    peg = entorno.banca(saldo=0, nombre="BANCA PEGUERO TEST", usuario="peg_a", clave="prueba123")
+    entorno.operador("peg_b", "prueba123", peg["sucursal"]["id"])
+    hb = entorno.login_terminal("peg_b", "prueba123")
+    cast = entorno.banca(saldo=0, nombre="BANCA CASTILLO TEST", usuario="cast_a", clave="prueba123")
+    sorteo = entorno.sorteo_id("LOTEDOM")
+
+    t_peg = entorno.vender_ok(peg["headers"], [
+        {"tipo": "QN", "sorteos": [sorteo], "numeros": "11", "monto": 20},
+    ])
+    t_cast = entorno.vender_ok(cast["headers"], [
+        {"tipo": "QN", "sorteos": [sorteo], "numeros": "22", "monto": 30},
+    ])
+
+    ind_a = entorno.c.get("/terminal/sorteos", headers=peg["headers"]).json()
+    ind_b = entorno.c.get("/terminal/sorteos", headers=hb).json()
+    ind_c = entorno.c.get("/terminal/sorteos", headers=cast["headers"]).json()
+    assert float(ind_a["mi_venta"]) == 20.00 and float(ind_a["mi_caja"]) == 20.00
+    assert float(ind_b["mi_venta"]) == 0.00 and float(ind_b["mi_caja"]) == 0.00
+    assert float(ind_c["mi_venta"]) == 30.00 and float(ind_c["mi_caja"]) == 30.00
+
+    # Spoof alcance=sucursal: el operador sigue limitado a sí mismo.
+    dia_b = entorno.c.get(
+        "/terminal/reportes/dia?alcance=sucursal",
+        headers=hb,
+    )
+    assert dia_b.status_code == 200
+    assert float(dia_b.json()["real"]["ventas"]) == 0.00
+
+    res_a = entorno.c.get(
+        "/terminal/reportes/resumen?desde=2026-11-14&hasta=2026-11-14&vista=final",
+        headers=peg["headers"],
+    ).json()
+    res_b = entorno.c.get(
+        "/terminal/reportes/resumen?desde=2026-11-14&hasta=2026-11-14&vista=final",
+        headers=hb,
+    ).json()
+    # Resumen terminal usa tickets reales; en MODO_DESARROLLO las ventas de prueba
+    # no entran a esa vista, pero sí deben permanecer aisladas en indicadores.
+    assert t_peg["serial"] not in str(res_b)
+    assert t_cast["serial"] not in str(res_a)
+
+    pend_b = entorno.c.get(
+        "/terminal/reportes/pendientes?desde=2026-11-14&hasta=2026-11-14",
+        headers=hb,
+    )
+    assert pend_b.status_code == 200
+    assert float(pend_b.json().get("monto_pendiente", 0)) == 0.00
+
+
+def test_premio_pagado_cuenta_al_pagador_no_al_vendedor_ajeno(entorno, monkeypatch):
+    """Si B paga un ticket de A: pendiente baja en A; PREMIOS PAGADOS del día/mes van a B."""
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    b = entorno.banca(saldo=0, usuario="vend_a", clave="prueba123")
+    entorno.operador("pag_b", "prueba123", b["sucursal"]["id"])
+    hb = entorno.login_terminal("pag_b", "prueba123")
+    # Fondo para que B pueda pagar
+    usuarios = entorno.c.get("/usuarios", headers=entorno.admin).json()
+    pag_b = next(u for u in usuarios if u["usuario"] == "pag_b")
+    fondo = entorno.c.post("/fondos", json={
+        "sucursal_id": b["sucursal"]["id"], "usuario_id": pag_b["id"], "monto": 5000,
+        "tipo": "aporte_prueba", "operacion_id": "fondo-pag-b",
+    }, headers=entorno.admin)
+    assert fondo.status_code == 201, fondo.text
+    hb = entorno.login_terminal("pag_b", "prueba123")
+
+    sorteo = entorno.sorteo_id("LOTEDOM")
+    ticket = entorno.vender_ok(b["headers"], [
+        {"tipo": "QN", "sorteos": [sorteo], "numeros": "25", "monto": 10},
+    ])
+    sim = entorno.c.post("/resultados", json={
+        "sorteo_id": sorteo, "fecha": "2026-11-14",
+        "premio1": 25, "premio2": 1, "premio3": 2, "simulado": True,
+    }, headers=entorno.admin)
+    assert sim.status_code == 201, sim.text
+    premio = float(entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()["premios_por_pagar"])
+    assert premio > 0
+
+    pago = entorno.c.post("/terminal/tickets/pagar", json={
+        "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "pago-por-b",
+    }, headers=hb)
+    assert pago.status_code == 200, pago.text
+
+    ind_a = entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()
+    ind_b = entorno.c.get("/terminal/sorteos", headers=hb).json()
+    assert float(ind_a["premios_por_pagar"]) == 0.00
+    assert float(ind_b["premios_por_pagar"]) == 0.00
+    # Caja de B bajó por el pago; ventas siguen en A.
+    assert float(ind_a["mi_venta"]) == 10.00
+    assert float(ind_b["mi_caja"]) == 5000.00 - premio
+
+    q = "desde=2026-11-14&hasta=2026-11-14"
+    dia_a = entorno.c.get(f"/terminal/reportes/dia?{q}", headers=b["headers"]).json()
+    dia_b = entorno.c.get(f"/terminal/reportes/dia?{q}", headers=hb).json()
+    assert float(dia_a["prueba"]["premios_pagados"]) == 0.00
+    assert float(dia_a["prueba"]["ventas"]) == 10.00
+    assert float(dia_b["prueba"]["premios_pagados"]) == premio
+    assert float(dia_b["prueba"]["ventas"]) == 0.00
+

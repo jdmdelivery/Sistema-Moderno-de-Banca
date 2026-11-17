@@ -385,11 +385,14 @@ function sumarDias(iso, dias) {
 }
 
 function tarjetasInicio(bloque) {
+  const etiquetaPendientes = esSuperAdmin()
+    ? "Premios pendientes (alcance)"
+    : (esAdminPanel() ? "Premios pendientes sucursal" : "Premios por pagar (míos)");
   const filas = [
     [fmt(bloque.ventas), "Ventas"],
     [bloque.tickets, "Tickets vendidos"],
     [fmt(bloque.premios_pagados), "Premios pagados"],
-    [fmt(bloque.premios_pendientes), "Premios por pagar"],
+    [fmt(bloque.premios_pendientes), etiquetaPendientes],
     [fmt(bloque.neto), "Neto"],
     [fmt(bloque.comision), "Comisión"],
   ];

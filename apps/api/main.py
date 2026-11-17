@@ -1800,6 +1800,9 @@ def terminal_resumen_dia(desde: str | None = None, hasta: str | None = None, alc
     fin = _fecha(hasta) if hasta else hoy
     if fin < inicio:
         raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+    # Un cajero no puede pedir alcance=sucursal por querystring.
+    if operador.rol == "operador":
+        alcance = "cajero"
     sucursal = db.get(Sucursal, terminal.sucursal_id)
     return servicios.resumen_dia(db, inicio, fin, operador, sucursal, terminal, alcance)
 
@@ -1808,6 +1811,8 @@ def terminal_resumen_dia(desde: str | None = None, hasta: str | None = None, alc
 def terminal_resumen_mes(anio: int, mes: int, alcance: str = "cajero",
                          db=Depends(get_db), terminal=Depends(terminal_actual),
                          operador=Depends(operador_actual)):
+    if operador.rol == "operador":
+        alcance = "cajero"
     sucursal = db.get(Sucursal, terminal.sucursal_id)
     return servicios.resumen_mes(db, anio, mes, operador, sucursal, terminal, alcance)
 
@@ -1816,6 +1821,7 @@ def terminal_resumen_mes(anio: int, mes: int, alcance: str = "cajero",
 def terminal_reporte_resumen(desde: str, hasta: str, vista: str = "final",
                              db=Depends(get_db), terminal=Depends(terminal_actual),
                              operador=Depends(operador_actual)):
+    # Información personal siempre del autenticado; admin/supervisor ven resumen de sucursal.
     propio = operador.id if operador.rol == "operador" else None
     return servicios.reporte_resumen(
         db, _fecha(desde), _fecha(hasta), vista, terminal.sucursal_id, propio,

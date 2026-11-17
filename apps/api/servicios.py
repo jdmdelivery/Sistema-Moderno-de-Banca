@@ -2599,7 +2599,11 @@ def indicadores_caja(db, usuario):
         ahora = ahora_local()
         return {
             "mi_caja": cero,
+            "mi_venta": cero,
             "premios_por_pagar": cero,
+            "premios_pendientes_mios": cero,
+            "premios_pendientes_sucursal": None,
+            "premios_pendientes_globales": None,
             "ventas_dia": cero,
             "fecha_local": ahora.date().isoformat(),
             "zona": "America/Santo_Domingo",
@@ -2650,9 +2654,23 @@ def indicadores_caja(db, usuario):
         elif tipo in entregas_tipos:
             entregas += monto
     cuadre = fondo + recaudacion - entregas
+    # PAGAR en terminal = solo premios del usuario autenticado (no hereda la sucursal).
+    mios = _premios_pendientes_filtro(db, sucursal_id=usuario.sucursal_id, usuario_id=usuario.id)
+    sucursal_pend = None
+    globales = None
+    if getattr(usuario, "rol", None) in ("admin", "supervisor") and usuario.sucursal_id is not None:
+        sucursal_pend = _premios_pendientes_filtro(db, sucursal_id=usuario.sucursal_id, usuario_id=None)
+    if getattr(usuario, "rol", None) == "super_admin":
+        globales = _premios_pendientes_filtro(db, sucursal_id=None, usuario_id=None)
+        if usuario.sucursal_id is not None:
+            sucursal_pend = _premios_pendientes_filtro(db, sucursal_id=usuario.sucursal_id, usuario_id=None)
     return {
         "mi_caja": str(saldo),
-        "premios_por_pagar": str(_premios_por_pagar_sucursal(db, usuario)),
+        "mi_venta": ventas_hoy,
+        "premios_por_pagar": str(mios),
+        "premios_pendientes_mios": str(mios),
+        "premios_pendientes_sucursal": None if sucursal_pend is None else str(sucursal_pend),
+        "premios_pendientes_globales": None if globales is None else str(globales),
         "ventas_dia": ventas_hoy,
         "fecha_local": ahora.date().isoformat(),
         "zona": "America/Santo_Domingo",
@@ -2668,30 +2686,35 @@ def indicadores_caja(db, usuario):
     }
 
 
-def _premios_por_pagar_sucursal(db, usuario):
-    """Suma de premios confirmados sin pagar de la sucursal del cajero.
+def _premios_pendientes_filtro(db, sucursal_id=None, usuario_id=None):
+    """Suma de premios confirmados sin pagar.
 
-    Solo cuenta jugadas evaluadas con premio > 0 y pagada=False, respaldadas
-    por un resultado confirmado/liquidado (o simulado de prueba). No inventa.
+    - usuario_id: solo tickets vendidos por ese cajero (indicador personal).
+    - sucursal_id sin usuario_id: todos los cajeros de esa banca (admins).
+    - ambos None: globales (solo Super Admin).
+    No cambia quién puede pagar un ticket válido; solo el indicador contable.
     """
-    if usuario is None or usuario.sucursal_id is None:
-        return D(0)
     prueba = modo_desarrollo()
-    candidatos = (
-        db.query(Ticket)
-        .filter(
-            Ticket.sucursal_vendedora_id == usuario.sucursal_id,
-            Ticket.es_prueba.is_(prueba),
-            Ticket.estado.in_(("ganador", "parcial", "vendido")),
-        )
-        .order_by(Ticket.id)
-        .all()
+    q = db.query(Ticket).filter(
+        Ticket.es_prueba.is_(prueba),
+        Ticket.estado.in_(("ganador", "parcial", "vendido")),
     )
+    if sucursal_id is not None:
+        q = q.filter(Ticket.sucursal_vendedora_id == sucursal_id)
+    if usuario_id is not None:
+        q = q.filter(Ticket.usuario_id == usuario_id)
     total = D(0)
-    for ticket in candidatos:
+    for ticket in q.order_by(Ticket.id).all():
         if _premio_pendiente_valido(db, ticket):
             total += _importe_sin_cobrar(ticket)
     return total
+
+
+def _premios_por_pagar_sucursal(db, usuario):
+    """Compat: total de la sucursal del usuario (admins / reportes)."""
+    if usuario is None or usuario.sucursal_id is None:
+        return D(0)
+    return _premios_pendientes_filtro(db, sucursal_id=usuario.sucursal_id, usuario_id=None)
 
 
 def estado_entrega(db, operador, sucursal, terminal):
@@ -4235,27 +4258,30 @@ def _bloque_periodo(db, desde, hasta, prueba, sucursal_id=None, usuario_id=None)
     comision = D(0)
     for (_, pct), ventas_grupo in grupos.items():
         comision += D(ventas_grupo * D(pct) / D(100))
-    pagados = (
-        db.query(Ticket)
-        .filter(
-            Ticket.estado == "pagado",
-            Ticket.es_prueba.is_(prueba),
-            Ticket.pagado_en.isnot(None),
+    # Premios pagados: por quien COBRÓ (caja), no por quien vendió.
+    # Pendientes/ventas siguen atribuidos al vendedor.
+    if usuario_id is not None:
+        premios_pagados = _premios_pagados_por_cajero(db, usuario_id, desde, hasta, prueba)
+    elif sucursal_id is not None:
+        premios_pagados = _premios_pagados_sucursal(db, sucursal_id, desde, hasta, prueba)
+    else:
+        pagados = (
+            db.query(Ticket)
+            .filter(
+                Ticket.estado == "pagado",
+                Ticket.es_prueba.is_(prueba),
+                Ticket.pagado_en.isnot(None),
+            )
+            .all()
         )
-        .all()
-    )
-    premios_pagados = D(0)
-    pagados_vistos = set()
-    for ticket in pagados:
-        if ticket.id in pagados_vistos:
-            continue
-        pagados_vistos.add(ticket.id)
-        if sucursal_id is not None and ticket.sucursal_vendedora_id != sucursal_id:
-            continue
-        if usuario_id is not None and ticket.usuario_id != usuario_id:
-            continue
-        if desde <= _dia_guardado(ticket.pagado_en) <= hasta:
-            premios_pagados += D(ticket.premio_total)
+        premios_pagados = D(0)
+        pagados_vistos = set()
+        for ticket in pagados:
+            if ticket.id in pagados_vistos:
+                continue
+            pagados_vistos.add(ticket.id)
+            if desde <= _dia_guardado(ticket.pagado_en) <= hasta:
+                premios_pagados += D(ticket.premio_total)
     candidatos = (
         db.query(Ticket)
         .filter(
@@ -4311,7 +4337,17 @@ def reporte_resumen(db, desde, hasta, vista, sucursal_id=None, usuario_id=None):
         vigentes = [t for t in tickets if t.estado != "anulado"]
         nulos = [t for t in tickets if t.estado == "anulado"]
         ventas = sum((D(t.total) for t in vigentes), D(0))
-        premios_pagados = sum((D(t.premio_total) for t in tickets if t.estado == "pagado"), D(0))
+        # Ventas/pendientes = vendedor; premios pagados = quien cobró (caja).
+        if usuario_id is not None:
+            premios_pagados = _premios_pagados_por_cajero(db, usuario_id, desde, hasta, False)
+            if modo_desarrollo():
+                premios_pagados += _premios_pagados_por_cajero(db, usuario_id, desde, hasta, True)
+        elif sucursal_id is not None:
+            premios_pagados = _premios_pagados_sucursal(db, sucursal_id, desde, hasta, False)
+            if modo_desarrollo():
+                premios_pagados += _premios_pagados_sucursal(db, sucursal_id, desde, hasta, True)
+        else:
+            premios_pagados = sum((D(t.premio_total) for t in tickets if t.estado == "pagado"), D(0))
         premios_pendientes = sum(
             (
                 _importe_sin_cobrar(t)
