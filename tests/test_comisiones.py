@@ -173,15 +173,18 @@ def test_premio_imprime_comprobante_solo_si_el_servidor_confirma(entorno, monkey
         "usuario": "jose", "clave": "prueba123", "dispositivo_id": "TEL-PAGO-2",
     })
     assert otro.status_code == 200
+    # El login con serial toma la terminal del aparato y cierra la sesión previa
+    # del mismo dispositivo/APP- (una sesión activa por aparato).
+    headers_tel = {"Authorization": f"Bearer {otro.json()['token']}"}
     repetido = entorno.c.post("/terminal/tickets/pagar", json={
         "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "pago-segundo-telefono",
-    }, headers={"Authorization": f"Bearer {otro.json()['token']}"})
+    }, headers=headers_tel)
     assert repetido.status_code == 409
     copia = entorno.c.post("/terminal/tickets/reimprimir",
                            json={"id": ticket["id"], "serial": ticket["serial"]},
-                           headers=b["headers"])
+                           headers=headers_tel)
     assert copia.status_code == 200, copia.text
     assert copia.json()["estado"] == "pagado"
     assert "COPIA" not in copia.json()["comprobante"]
-    assert entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()["mi_caja"] == "410.00"
+    assert entorno.c.get("/terminal/sorteos", headers=headers_tel).json()["mi_caja"] == "410.00"
     assert entorno.saldo(b["sucursal"]["id"]) == 5764

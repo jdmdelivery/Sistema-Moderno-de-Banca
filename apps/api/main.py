@@ -1179,13 +1179,28 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
         raise ErrorServicio(403, "La sucursal de este usuario está inactiva")
     terminal = servicios.terminal_para_dispositivo(
         db, sucursal, datos.dispositivo_id, datos.modelo, datos.android, datos.version_app,
+        usuario_id=usuario.id,
     )
     if terminal is None:
         raise ErrorServicio(
             403,
-            "La terminal de esta sucursal está revocada: el consorcio debe reactivarla en el panel.",
+            "Este dispositivo está revocado: el consorcio debe reactivarlo en el panel.",
         )
+    # Aparato físico: una sola sesión activa. Sin serial (login legado/tests)
+    # varias sesiones pueden compartir la terminal APP- de la sucursal.
+    if datos.dispositivo_id and str(datos.dispositivo_id).strip():
+        servicios.invalidar_sesiones_terminal(db, terminal.id)
     token = servicios.crear_sesion(db, usuario, tipo="terminal", terminal_id=terminal.id)
+    servicios.auditar(
+        db, "usuario", usuario.id, "login_terminal", usuario_id=usuario.id,
+        terminal_id=terminal.id,
+        detalle={
+            "dispositivo": datos.dispositivo_id or "",
+            "sucursal_id": sucursal.id,
+            "sucursal": sucursal.nombre,
+            "version": datos.version_app or "",
+        },
+    )
     db.commit()
     return {
         "token": token,

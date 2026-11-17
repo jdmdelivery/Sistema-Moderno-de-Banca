@@ -121,6 +121,15 @@ def invalidar_sesiones_usuario(db, usuario_id):
     db.flush()
 
 
+def invalidar_sesiones_terminal(db, terminal_id):
+    """Cierra todas las sesiones activas de un aparato (cambio de usuario/sucursal)."""
+    if terminal_id is None:
+        return
+    for sesion in db.query(Sesion).filter_by(terminal_id=terminal_id).all():
+        db.delete(sesion)
+    db.flush()
+
+
 def bloquear_usuario(db, admin, usuario_id):
     """Desactiva el acceso (activo=False). No toca caja, tickets ni historial."""
     if admin.rol != "admin":
@@ -334,9 +343,14 @@ def terminal_de_sucursal(db, sucursal):
     return t
 
 
-def terminal_para_dispositivo(db, sucursal, dispositivo_id, modelo=None, android=None, version=None):
-    """Cada aparato conserva su propio serial. Sin serial, sigue la terminal
-    única de la sucursal, para no romper las sesiones que ya existían."""
+def terminal_para_dispositivo(db, sucursal, dispositivo_id, modelo=None, android=None, version=None,
+                              usuario_id=None):
+    """Resuelve la terminal del aparato según el usuario autenticado.
+
+    El serial identifica el dispositivo para auditoría. Si el mismo aparato
+    inicia sesión con un cajero de otra sucursal, se reasigna a esa sucursal
+    (no se bloquea). Un dispositivo revocado sigue bloqueado en todas partes.
+    """
     if not dispositivo_id or not str(dispositivo_id).strip():
         terminal = terminal_de_sucursal(db, sucursal)
         _anotar_terminal(terminal, modelo, android, version)
@@ -350,10 +364,12 @@ def terminal_para_dispositivo(db, sucursal, dispositivo_id, modelo=None, android
     )
     propia = db.query(Terminal).filter_by(serial_sunmi=serial).first()
     if propia is not None:
-        if propia.sucursal_id != sucursal.id:
-            raise ErrorServicio(403, "Este dispositivo ya está registrado en otra sucursal")
         if not propia.activa:
             return None
+        if propia.sucursal_id != sucursal.id:
+            propia = _reasignar_terminal_a_sucursal(
+                db, propia, sucursal, usuario_id=usuario_id,
+            )
         _anotar_terminal(propia, modelo, android, version)
         return propia
     activas = [t for t in todas if t.activa]
@@ -374,6 +390,43 @@ def terminal_para_dispositivo(db, sucursal, dispositivo_id, modelo=None, android
     db.flush()
     _anotar_terminal(nueva, modelo, android, version)
     return nueva
+
+
+def _siguiente_numero_terminal(db, sucursal_id):
+    actual = (
+        db.query(Terminal.numero_terminal)
+        .filter_by(sucursal_id=sucursal_id)
+        .order_by(Terminal.numero_terminal.desc())
+        .first()
+    )
+    return (actual[0] if actual else 0) + 1
+
+
+def _reasignar_terminal_a_sucursal(db, terminal, sucursal, usuario_id=None):
+    """Mueve el aparato a la sucursal del cajero que acaba de autenticarse.
+
+    Cierra sesiones previas del dispositivo. Conserva el mismo serial y el
+    mismo id de terminal (auditoría). Los tickets viejos siguen con su
+    sucursal_vendedora_id; no se mezclan cajas ni ventas.
+    """
+    origen_id = terminal.sucursal_id
+    nuevo_numero = _siguiente_numero_terminal(db, sucursal.id)
+    invalidar_sesiones_terminal(db, terminal.id)
+    terminal.sucursal_id = sucursal.id
+    terminal.numero_terminal = nuevo_numero
+    auditar(
+        db, "terminal", terminal.id, "reasignacion_sucursal",
+        usuario_id=usuario_id, terminal_id=terminal.id,
+        detalle={
+            "serial_sunmi": terminal.serial_sunmi,
+            "sucursal_origen_id": origen_id,
+            "sucursal_destino_id": sucursal.id,
+            "sucursal_destino": sucursal.nombre,
+            "numero_terminal": terminal.numero_terminal,
+        },
+    )
+    db.flush()
+    return terminal
 
 
 def _anotar_terminal(terminal, modelo, android, version):
@@ -599,6 +652,8 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
     ahora = ahora or ahora_local()
     fecha = ahora.date()
     consorcio = db.query(Consorcio).first()
+    if operador is None or getattr(operador, "sucursal_id", None) != terminal.sucursal_id:
+        raise ErrorServicio(403, "La sesión no corresponde a la sucursal de este dispositivo")
     sucursal = db.get(Sucursal, terminal.sucursal_id)
     if sucursal is None or not sucursal.activa:
         raise ErrorServicio(403, "La sucursal de esta terminal está inactiva")
