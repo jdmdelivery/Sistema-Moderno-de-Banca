@@ -27,34 +27,78 @@
 
 <header>
   <button type="button" id="btn-menu" class="btn-menu" aria-label="Abrir menú" aria-expanded="false">☰</button>
-  <div class="marca">🎰 <b>Sistema de Banca Moderna</b> <span class="sub">Panel del Consorcio</span></div>
+  <div class="marca">
+    <b>Sistema de Banca Moderna</b>
+    <span class="sub" id="marca-sub">Panel del Consorcio</span>
+    <span class="suc-chip" id="yo-sucursal" hidden></span>
+  </div>
   <div class="sesion"><span id="yo-nombre"></span> <button id="btn-salir" class="btn chico">Salir</button></div>
 </header>
 
 <div id="nav-fondo" class="nav-fondo" hidden></div>
-<nav id="nav">
-  <button class="navbtn activo" data-sec="inicio">Inicio</button>
-  <button class="navbtn" data-sec="super" id="nav-super" hidden>Super Admin</button>
-  <button class="navbtn" data-sec="sucursales">Sucursales</button>
-  <button class="navbtn" data-sec="terminales">Terminales</button>
-  <button class="navbtn" data-sec="usuarios">Usuarios</button>
-  <button class="navbtn" data-sec="ventas-cajeros">Ventas por Cajero</button>
-  <button class="navbtn" data-sec="sorteos">Sorteos</button>
-  <button class="navbtn" data-sec="tabla">Tabla de Pagos</button>
-  <button class="navbtn" data-sec="limites">Límites</button>
-  <button class="navbtn" data-sec="resultados">Resultados</button>
-  <button class="navbtn" data-sec="fuente">Resultados automáticos</button>
-  <button class="navbtn" data-sec="ganadores">Ganadores en vivo</button>
-  <button class="navbtn" data-sec="tickets">Tickets</button>
-  <button class="navbtn" data-sec="caja">Caja y Cuadre</button>
-  <button class="navbtn" data-sec="entregas">Entregas</button>
-  <button class="navbtn" data-sec="fondos">Asignar fondo</button>
-  <button class="navbtn" data-sec="comisiones">Comisiones</button>
-  <button class="navbtn" data-sec="reportes">Reportes</button>
-  <button class="navbtn" data-sec="auditoria">Auditoría</button>
+<nav id="nav" class="sidebar" aria-label="Menú principal">
+  <div class="sidebar-brand">
+    <div class="sidebar-brand-title">Banca Moderna</div>
+    <div class="sidebar-brand-sub" id="sidebar-contexto">Administración</div>
+  </div>
+
+  <div class="nav-grupo abierto" data-grupo="inicio">
+    <button type="button" class="nav-grupo-titulo" aria-expanded="true">Inicio</button>
+    <div class="nav-grupo-items">
+      <button type="button" class="navbtn activo" data-sec="inicio"><span class="nav-ico">▣</span> Dashboard</button>
+      <button type="button" class="navbtn" data-sec="sucursales"><span class="nav-ico">⌂</span> Sucursales</button>
+    </div>
+  </div>
+
+  <div class="nav-grupo abierto" data-grupo="cajeros">
+    <button type="button" class="nav-grupo-titulo" aria-expanded="true">Cajeros</button>
+    <div class="nav-grupo-items">
+      <button type="button" class="navbtn" data-sec="usuarios"><span class="nav-ico">👤</span> Usuarios</button>
+      <button type="button" class="navbtn" data-sec="ventas-cajeros"><span class="nav-ico">📊</span> Ventas por cajero</button>
+    </div>
+  </div>
+
+  <div class="nav-grupo abierto" data-grupo="operaciones">
+    <button type="button" class="nav-grupo-titulo" aria-expanded="true">Operaciones</button>
+    <div class="nav-grupo-items">
+      <button type="button" class="navbtn" data-sec="ganadores"><span class="nav-ico">★</span> Ganadores en vivo</button>
+      <button type="button" class="navbtn" data-sec="tickets"><span class="nav-ico">▤</span> Tickets</button>
+      <button type="button" class="navbtn" data-sec="caja"><span class="nav-ico">$</span> Caja y cuadre</button>
+      <button type="button" class="navbtn" data-sec="entregas"><span class="nav-ico">⇄</span> Entregas</button>
+      <button type="button" class="navbtn" data-sec="fondos"><span class="nav-ico">＋</span> Asignar fondo</button>
+    </div>
+  </div>
+
+  <div class="nav-grupo abierto" data-grupo="config">
+    <button type="button" class="nav-grupo-titulo" aria-expanded="true">Configuración de banca</button>
+    <div class="nav-grupo-items">
+      <button type="button" class="navbtn" data-sec="tabla"><span class="nav-ico">＃</span> Tabla de pagos</button>
+      <button type="button" class="navbtn" data-sec="limites"><span class="nav-ico">⚙</span> Límites</button>
+      <button type="button" class="navbtn" data-sec="comisiones"><span class="nav-ico">%</span> Comisiones</button>
+    </div>
+  </div>
+
+  <div class="nav-grupo abierto" data-grupo="reportes">
+    <button type="button" class="nav-grupo-titulo" aria-expanded="true">Reportes</button>
+    <div class="nav-grupo-items">
+      <button type="button" class="navbtn" data-sec="reportes"><span class="nav-ico">☰</span> Reportes de la sucursal</button>
+    </div>
+  </div>
+
+  <div class="nav-grupo abierto" data-grupo="consorcio" data-solo-super hidden>
+    <button type="button" class="nav-grupo-titulo" aria-expanded="true">Consorcio</button>
+    <div class="nav-grupo-items">
+      <button type="button" class="navbtn" data-sec="super" id="nav-super"><span class="nav-ico">◆</span> Super Admin</button>
+      <button type="button" class="navbtn" data-sec="terminales" data-solo-super><span class="nav-ico">☎</span> Terminales</button>
+      <button type="button" class="navbtn" data-sec="sorteos" data-solo-super><span class="nav-ico">⏱</span> Sorteos</button>
+      <button type="button" class="navbtn" data-sec="resultados" data-solo-super><span class="nav-ico">◎</span> Resultados</button>
+      <button type="button" class="navbtn" data-sec="fuente" data-solo-super><span class="nav-ico">↻</span> Resultados automáticos</button>
+      <button type="button" class="navbtn" data-sec="auditoria" data-solo-super><span class="nav-ico">⌕</span> Auditoría</button>
+    </div>
+  </div>
 </nav>
 
-<main>
+<main class="panel-principal">
 <section id="sec-super" class="seccion">
   <h2>Panel Super Admin — JDMCASHNOW</h2>
   <p class="nota">Cola de aprobación de cajeros, vista de todas las sucursales y permisos de cada administrador de banca. Los tickets, ventas y saldos no se modifican desde aquí.</p>

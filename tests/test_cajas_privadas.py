@@ -142,7 +142,7 @@ def test_premios_por_pagar_no_se_heredan_entre_cajeros(entorno, monkeypatch):
     sim = entorno.c.post("/resultados", json={
         "sorteo_id": sorteo, "fecha": "2026-11-14",
         "premio1": 25, "premio2": 1, "premio3": 2, "simulado": True,
-    }, headers=entorno.admin)
+    }, headers=entorno._headers_gestion())
     assert sim.status_code == 201, sim.text
 
     propios = entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()
@@ -233,7 +233,7 @@ def test_premio_pagado_cuenta_al_pagador_no_al_vendedor_ajeno(entorno, monkeypat
     sim = entorno.c.post("/resultados", json={
         "sorteo_id": sorteo, "fecha": "2026-11-14",
         "premio1": 25, "premio2": 1, "premio3": 2, "simulado": True,
-    }, headers=entorno.admin)
+    }, headers=entorno._headers_gestion())
     assert sim.status_code == 201, sim.text
     premio = float(entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()["premios_por_pagar"])
     assert premio > 0

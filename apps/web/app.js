@@ -79,10 +79,49 @@ function esAdminPanel() { return !!(YO && (YO.rol === "admin" || YO.rol === "sup
 function adminSucursalRestringido() {
   return !!(YO && YO.rol === "admin" && YO.compat_global === false);
 }
+/** Secciones de consorcio: solo JDMCASHNOW (Super Admin). */
+const SECCIONES_SOLO_SUPER = new Set(["super", "terminales", "sorteos", "resultados", "fuente", "auditoria"]);
+function puedeVerSeccion(sec) {
+  if (!sec) return false;
+  if (SECCIONES_SOLO_SUPER.has(sec)) return esSuperAdmin();
+  return true;
+}
 function etiquetaRol(rol) {
   return ({ super_admin: "Super Admin", admin: "Administrador", supervisor: "Supervisor", operador: "Operador" })[rol] || rol;
 }
+function nombreSucursalActual() {
+  if (!YO || !YO.sucursal_id) return "";
+  const s = (typeof SUCURSALES !== "undefined" ? SUCURSALES : []).find((x) => Number(x.id) === Number(YO.sucursal_id));
+  return s ? (s.nombre || s.codigo || "") : "";
+}
+function actualizarEncabezadoContexto() {
+  const subMarca = $("#marca-sub");
+  const chip = $("#yo-sucursal");
+  const side = $("#sidebar-contexto");
+  const sucNombre = nombreSucursalActual();
+  if (esSuperAdmin()) {
+    if (subMarca) subMarca.textContent = "Super Admin · Consorcio";
+    if (side) side.textContent = "JDMCASHNOW · Consorcio";
+    if (chip) { chip.hidden = true; chip.textContent = ""; }
+  } else if (adminSucursalRestringido() || (YO && YO.rol === "admin")) {
+    if (subMarca) subMarca.textContent = "Admin de sucursal";
+    if (side) side.textContent = (YO && YO.nombre ? YO.nombre : "Administrador") + (sucNombre ? " · " + sucNombre : "");
+    if (chip) {
+      chip.hidden = !sucNombre;
+      chip.textContent = sucNombre || "";
+    }
+  } else {
+    if (subMarca) subMarca.textContent = "Panel del Consorcio";
+    if (side) side.textContent = "Administración";
+    if (chip) { chip.hidden = true; chip.textContent = ""; }
+  }
+}
 function aplicarVisibilidadRol() {
+  $$("[data-solo-super]").forEach((el) => {
+    el.hidden = !esSuperAdmin();
+  });
+  const grupoConsorcio = document.querySelector('.nav-grupo[data-grupo="consorcio"]');
+  if (grupoConsorcio) grupoConsorcio.hidden = !esSuperAdmin();
   const superBtn = $("#nav-super");
   if (superBtn) superBtn.hidden = !esSuperAdmin();
   mostrarFondo(esAdminPanel());
@@ -130,16 +169,11 @@ function aplicarVisibilidadRol() {
       if ($("#usu-sucursal")) $("#usu-sucursal").disabled = false;
     }
   }
+  actualizarEncabezadoContexto();
   const subLogin = document.querySelector("#login .sub");
-  const subMarca = document.querySelector(".marca .sub");
-  if (esSuperAdmin()) {
-    if (subMarca) subMarca.textContent = "Super Admin · Consorcio";
-  } else if (adminSucursalRestringido()) {
-    if (subMarca) subMarca.textContent = "Admin de sucursal";
-  } else if (subMarca) {
-    subMarca.textContent = "Panel del Consorcio";
-  }
   if (subLogin && !TOKEN) subLogin.textContent = "Panel del Consorcio";
+  // Desktop: menú abierto; móvil: cerrado.
+  sincronizarEstadoMenuInicial();
 }
 
 async function entrar() {
@@ -184,8 +218,18 @@ async function restaurarSesion() {
 let GANADORES_RELOJ = null;
 let MENU_SCROLL_Y = 0;
 
+function esEscritorioMenu() {
+  return window.matchMedia("(min-width: 901px)").matches;
+}
+
 /** Bloquea el scroll del Dashboard detrás del menú móvil (Safari iPhone). */
 function bloquearScrollFondo(activo) {
+  if (esEscritorioMenu()) {
+    document.documentElement.classList.remove("menu-abierto");
+    document.body.classList.remove("menu-abierto");
+    document.body.style.top = "";
+    return;
+  }
   if (activo) {
     MENU_SCROLL_Y = window.scrollY || window.pageYOffset || 0;
     document.documentElement.classList.add("menu-abierto");
@@ -199,28 +243,42 @@ function bloquearScrollFondo(activo) {
   }
 }
 
-function cerrarMenuMovil() {
+function setMenuAbierto(abierto) {
   const nav = $("#nav");
   const fondo = $("#nav-fondo");
   const btn = $("#btn-menu");
   if (!nav) return;
-  const estaba = nav.classList.contains("abierto");
-  nav.classList.remove("abierto");
-  if (fondo) { fondo.classList.remove("abierto"); fondo.hidden = true; }
-  if (btn) btn.setAttribute("aria-expanded", "false");
-  if (estaba) bloquearScrollFondo(false);
+  nav.classList.toggle("abierto", abierto);
+  document.body.classList.toggle("sidebar-colapsado", esEscritorioMenu() && !abierto);
+  if (fondo) {
+    const showFondo = abierto && !esEscritorioMenu();
+    fondo.classList.toggle("abierto", showFondo);
+    fondo.hidden = !showFondo;
+  }
+  if (btn) btn.setAttribute("aria-expanded", abierto ? "true" : "false");
+  bloquearScrollFondo(abierto && !esEscritorioMenu());
+}
+function cerrarMenuMovil() {
+  if (esEscritorioMenu()) return;
+  setMenuAbierto(false);
 }
 function alternarMenuMovil() {
   const nav = $("#nav");
-  const fondo = $("#nav-fondo");
-  const btn = $("#btn-menu");
-  const abierto = !nav.classList.contains("abierto");
-  nav.classList.toggle("abierto", abierto);
-  if (fondo) { fondo.classList.toggle("abierto", abierto); fondo.hidden = !abierto; }
-  if (btn) btn.setAttribute("aria-expanded", abierto ? "true" : "false");
-  bloquearScrollFondo(abierto);
+  if (!nav) return;
+  setMenuAbierto(!nav.classList.contains("abierto"));
+}
+function sincronizarEstadoMenuInicial() {
+  if (!TOKEN) {
+    setMenuAbierto(false);
+    return;
+  }
+  // Celular: cerrado. Escritorio: abierto.
+  setMenuAbierto(esEscritorioMenu());
 }
 function ir(sec) {
+  if (!puedeVerSeccion(sec)) {
+    sec = esSuperAdmin() ? "super" : "inicio";
+  }
   if (GANADORES_RELOJ) {
     clearInterval(GANADORES_RELOJ);
     GANADORES_RELOJ = null;
@@ -338,9 +396,17 @@ async function guardarPermisosSuper() {
 }
 
 async function cargarCatalogos() {
-  [SUCURSALES, SORTEOS, TIPOS, TERMINALES] = await Promise.all([
-    api("/sucursales"), api("/sorteos"), api("/tipos-jugada"), api("/terminales"),
+  const base = await Promise.all([
+    api("/sucursales"), api("/sorteos"), api("/tipos-jugada"),
   ]);
+  SUCURSALES = base[0];
+  SORTEOS = base[1];
+  TIPOS = base[2];
+  try {
+    TERMINALES = await api("/terminales");
+  } catch {
+    TERMINALES = [];
+  }
   const suc = (extra) => opciones(SUCURSALES, (s) => s.id, (s) => `${s.codigo} — ${s.nombre}`, extra || "");
   $("#rec-sucursal").innerHTML = suc();
   $("#mov-sucursal").innerHTML = suc();
@@ -371,6 +437,7 @@ async function cargarCatalogos() {
   $("#caj-terminal").innerHTML = opciones(
     TERMINALES, (t) => t.id, (t) => `${t.sucursal} · Terminal ${t.numero_terminal}`, '<option value="">— Todas / ninguna —</option>');
   actualizarClavesTabla();
+  actualizarEncabezadoContexto();
 }
 
 /* ------------------------------------------------------------------- inicio */
@@ -1628,6 +1695,16 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-menu").addEventListener("click", alternarMenuMovil);
   $("#nav-fondo").addEventListener("click", cerrarMenuMovil);
   $$(".navbtn").forEach((b) => b.addEventListener("click", () => ir(b.dataset.sec)));
+  $$(".nav-grupo-titulo").forEach((b) => b.addEventListener("click", () => {
+    const grupo = b.closest(".nav-grupo");
+    if (!grupo) return;
+    const abierto = !grupo.classList.contains("abierto");
+    grupo.classList.toggle("abierto", abierto);
+    b.setAttribute("aria-expanded", abierto ? "true" : "false");
+  }));
+  window.addEventListener("resize", () => {
+    if (TOKEN) sincronizarEstadoMenuInicial();
+  });
   if ($("#btn-super-refrescar")) $("#btn-super-refrescar").addEventListener("click", () => cargarSuperAdmin().catch((e) => msg("#super-msg", e.message, false)));
   if ($("#btn-super-perm-cargar")) $("#btn-super-perm-cargar").addEventListener("click", () => cargarPermisosSuper().catch((e) => msg("#super-perm-msg", e.message, false)));
   if ($("#btn-super-perm-guardar")) $("#btn-super-perm-guardar").addEventListener("click", () => guardarPermisosSuper().catch((e) => msg("#super-perm-msg", e.message, false)));

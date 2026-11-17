@@ -111,14 +111,12 @@ def test_castillo_no_ve_peguero_en_rutas_criticas(entorno):
     assert entorno.c.get(f"/reportes/pendientes?desde={hoy}&hasta={hoy}&sucursal_id={peguero['id']}", headers=hc).status_code == 403
     assert entorno.c.get(f"/movil/admin?sucursal_id={peguero['id']}", headers=hc).status_code == 403
 
-    # Sin parámetro: no debe listar la otra banca en usuarios/terminales
+    # Sin parámetro: no debe listar la otra banca en usuarios
     users_c = entorno.c.get("/usuarios", headers=hc).json()
     assert all(u.get("sucursal_id") in (None, castillo["id"]) or u["rol"] == "admin" for u in users_c)
     assert not any(u.get("usuario") == "cajpeg" for u in users_c)
-    terms = entorno.c.get("/terminales", headers=hc).json()
-    assert all(t["sucursal_id"] == castillo["id"] for t in terms)
-
-    # Terminales: no crear/revocar en la otra banca
+    # Gestión de terminales (listar/crear): solo Super Admin tras aislamiento
+    assert entorno.c.get("/terminales", headers=hc).status_code == 403
     assert entorno.c.post("/terminales", json={
         "sucursal_id": peguero["id"], "numero_terminal": 9, "serial_sunmi": "CROSS-CAST-001",
     }, headers=hc).status_code == 403

@@ -154,13 +154,13 @@ class Entorno:
         r = self.c.post(
             "/resultados",
             json={"sorteo_id": sorteo_id, "fecha": fecha, "premio1": p1, "premio2": p2, "premio3": p3},
-            headers=self.admin,
+            headers=self._headers_gestion(),
         )
         assert r.status_code == 201, r.text
         return r.json()
 
     def confirmar(self, resultado_id):
-        r = self.c.post(f"/resultados/{resultado_id}/confirmar", headers=self.admin)
+        r = self.c.post(f"/resultados/{resultado_id}/confirmar", headers=self._headers_gestion())
         assert r.status_code == 200, r.text
         return r.json()
 

@@ -85,6 +85,15 @@ def requiere_super_admin(usuario=Depends(panel_actual)):
     return usuario
 
 
+def requiere_gestion_consorcio(usuario=Depends(panel_actual), db=Depends(get_db)):
+    """Terminales/sorteos/resultados/auditoría: solo Super Admin (o admin en compat)."""
+    if permisos.es_super_admin(usuario):
+        return usuario
+    if usuario.rol == "admin" and permisos.compat_global_activo(db):
+        return usuario
+    raise ErrorServicio(403, "Solo el Super Admin puede hacer esta operación")
+
+
 def requiere_gestion_sucursales(usuario=Depends(panel_actual), db=Depends(get_db)):
     """Crear/editar sucursales: Super Admin, o admin en modo compat global."""
     if permisos.es_super_admin(usuario):
@@ -409,14 +418,16 @@ class TerminalIn(BaseModel):
 
 
 @app.get("/terminales")
-def listar_terminales(db=Depends(get_db), usuario=Depends(panel_actual)):
+def listar_terminales(db=Depends(get_db), usuario=Depends(requiere_gestion_consorcio)):
+    """Listado de gestión de terminales: solo Super Admin (panel Consorcio).
+    Las SUNMI usan /terminal/* y no dependen de este endpoint."""
     q = db.query(Terminal).order_by(Terminal.sucursal_id, Terminal.numero_terminal)
     q = permisos.filtrar_query_sucursal(q, Terminal.sucursal_id, db, usuario)
     return [terminal_dict(t) for t in q.all()]
 
 
 @app.post("/terminales", status_code=201)
-def crear_terminal(datos: TerminalIn, db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+def crear_terminal(datos: TerminalIn, db=Depends(get_db), usuario=Depends(requiere_gestion_consorcio)):
     permisos.assert_sucursal_permitida(db, usuario, datos.sucursal_id)
     if db.get(Sucursal, datos.sucursal_id) is None:
         raise ErrorServicio(404, "La sucursal no existe")
@@ -440,7 +451,7 @@ def crear_terminal(datos: TerminalIn, db=Depends(get_db), usuario=Depends(requie
 
 @app.put("/terminales/{terminal_id}")
 def editar_terminal(terminal_id: int, datos: TerminalIn, db=Depends(get_db),
-                    usuario=Depends(requiere_rol("admin"))):
+                    usuario=Depends(requiere_gestion_consorcio)):
     t = db.get(Terminal, terminal_id)
     if t is None:
         raise ErrorServicio(404, "La terminal no existe")
@@ -457,7 +468,7 @@ def editar_terminal(terminal_id: int, datos: TerminalIn, db=Depends(get_db),
 
 
 @app.post("/terminales/{terminal_id}/revocar")
-def revocar_terminal(terminal_id: int, db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+def revocar_terminal(terminal_id: int, db=Depends(get_db), usuario=Depends(requiere_gestion_consorcio)):
     t = db.get(Terminal, terminal_id)
     if t is None:
         raise ErrorServicio(404, "La terminal no existe")
@@ -472,7 +483,7 @@ def revocar_terminal(terminal_id: int, db=Depends(get_db), usuario=Depends(requi
 
 
 @app.post("/terminales/{terminal_id}/reactivar")
-def reactivar_terminal(terminal_id: int, db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+def reactivar_terminal(terminal_id: int, db=Depends(get_db), usuario=Depends(requiere_gestion_consorcio)):
     t = db.get(Terminal, terminal_id)
     if t is None:
         raise ErrorServicio(404, "La terminal no existe")
@@ -832,7 +843,7 @@ def listar_sorteos(db=Depends(get_db), usuario=Depends(panel_actual)):
 
 
 @app.post("/sorteos", status_code=201)
-def crear_sorteo(datos: SorteoIn, db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+def crear_sorteo(datos: SorteoIn, db=Depends(get_db), usuario=Depends(requiere_gestion_consorcio)):
     if db.query(Sorteo).filter_by(nombre=datos.nombre.strip()).first():
         raise ErrorServicio(409, f"Ya existe el sorteo {datos.nombre}")
     s = Sorteo(
@@ -851,7 +862,7 @@ def crear_sorteo(datos: SorteoIn, db=Depends(get_db), usuario=Depends(requiere_r
 
 @app.put("/sorteos/{sorteo_id}")
 def editar_sorteo(sorteo_id: int, datos: SorteoIn, db=Depends(get_db),
-                  usuario=Depends(requiere_rol("admin"))):
+                  usuario=Depends(requiere_gestion_consorcio)):
     s = db.get(Sorteo, sorteo_id)
     if s is None:
         raise ErrorServicio(404, "El sorteo no existe")
@@ -1045,7 +1056,7 @@ class ResultadoIn(BaseModel):
 
 @app.get("/resultados")
 def listar_resultados(fecha: str | None = None, sorteo_id: int | None = None,
-                      db=Depends(get_db), usuario=Depends(panel_actual)):
+                      db=Depends(get_db), usuario=Depends(requiere_gestion_consorcio)):
     q = db.query(Resultado)
     if fecha:
         q = q.filter(Resultado.fecha == _fecha(fecha))
@@ -1056,7 +1067,7 @@ def listar_resultados(fecha: str | None = None, sorteo_id: int | None = None,
 
 @app.post("/resultados", status_code=201)
 def guardar_resultado(datos: ResultadoIn, db=Depends(get_db),
-                      usuario=Depends(requiere_rol("admin", "supervisor"))):
+                      usuario=Depends(requiere_gestion_consorcio)):
     r = servicios.guardar_resultado(
         db, datos.sorteo_id, _fecha(datos.fecha),
         datos.premio1, datos.premio2, datos.premio3, usuario, simulado=datos.simulado,
@@ -1068,7 +1079,7 @@ def guardar_resultado(datos: ResultadoIn, db=Depends(get_db),
 
 @app.post("/resultados/{resultado_id}/confirmar")
 def confirmar_resultado(resultado_id: int, db=Depends(get_db),
-                        usuario=Depends(requiere_rol("admin", "supervisor"))):
+                        usuario=Depends(requiere_gestion_consorcio)):
     r, afectados = servicios.confirmar_resultado(db, resultado_id, usuario)
     salida = servicios.resultado_a_dict(r)
     salida["tickets_afectados"] = afectados
@@ -1076,7 +1087,7 @@ def confirmar_resultado(resultado_id: int, db=Depends(get_db),
 
 
 @app.post("/resultados/{resultado_id}/revertir")
-def revertir_resultado(resultado_id: int, db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+def revertir_resultado(resultado_id: int, db=Depends(get_db), usuario=Depends(requiere_gestion_consorcio)):
     r, afectados = servicios.revertir_resultado(db, resultado_id, usuario)
     salida = servicios.resultado_a_dict(r)
     salida["tickets_afectados"] = afectados
@@ -1089,7 +1100,7 @@ class ImportarIn(BaseModel):
 
 @app.post("/resultados/importar")
 def importar_resultados(datos: ImportarIn, db=Depends(get_db),
-                        usuario=Depends(requiere_rol("admin", "supervisor"))):
+                        usuario=Depends(requiere_gestion_consorcio)):
     fecha = _fecha(datos.fecha) if datos.fecha else servicios.ahora_local().date()
     return conectate.importar_resultados(db, fecha, usuario)
 
@@ -1103,6 +1114,12 @@ def tablero_resultados(db=Depends(get_db), usuario=Depends(panel_actual)):
 def movil_admin(seccion: str = "inicio", desde: str | None = None, hasta: str | None = None,
                 sucursal_id: int | None = None, usuario_id: int | None = None, q: str = "",
                 db=Depends(get_db), usuario=Depends(requiere_rol("admin", "supervisor"))):
+    # Resultados automáticos / consorcio: solo Super Admin (o compat global).
+    if (seccion or "").strip().lower() == "resultados":
+        if not permisos.es_super_admin(usuario) and not (
+            usuario.rol == "admin" and permisos.compat_global_activo(db)
+        ):
+            raise ErrorServicio(403, "Solo el Super Admin puede ver resultados del consorcio")
     hoy = servicios.ahora_local().date()
     inicio = _fecha(desde) if desde else hoy
     fin = _fecha(hasta) if hasta else hoy
@@ -1110,7 +1127,7 @@ def movil_admin(seccion: str = "inicio", desde: str | None = None, hasta: str | 
 
 
 @app.get("/fuente-resultados")
-def cobertura_resultados(db=Depends(get_db), usuario=Depends(panel_actual)):
+def cobertura_resultados(db=Depends(get_db), usuario=Depends(requiere_gestion_consorcio)):
     trabajador = resultados_auto.estado_reloj(db)
     return {
         "fuente": "conectate",
@@ -1138,7 +1155,7 @@ def cobertura_resultados(db=Depends(get_db), usuario=Depends(panel_actual)):
 
 
 @app.get("/fuente-resultados/probar")
-def probar_widget(usuario=Depends(requiere_rol("admin", "supervisor"))):
+def probar_widget(usuario=Depends(requiere_gestion_consorcio)):
     """Consulta el widget desde este proceso. No guarda ni confirma."""
     datos, error = conectate_widget.descargar()
     if error:
@@ -1152,7 +1169,7 @@ def probar_widget(usuario=Depends(requiere_rol("admin", "supervisor"))):
 
 
 @app.post("/fuente-resultados/sincronizar")
-def sincronizar_resultados(db=Depends(get_db), usuario=Depends(requiere_rol("admin", "supervisor"))):
+def sincronizar_resultados(db=Depends(get_db), usuario=Depends(requiere_gestion_consorcio)):
     return resultados_auto.ciclo(forzar=True)
 
 
@@ -1409,21 +1426,12 @@ def reporte_pendientes(desde: str, hasta: str, sucursal_id: int, formato: str = 
 # ------------------------------------------------------------------ auditoría
 @app.get("/auditoria")
 def listar_auditoria(entidad: str | None = None, accion: str | None = None, limite: int = 100,
-                     db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+                     db=Depends(get_db), usuario=Depends(requiere_gestion_consorcio)):
     q = db.query(Auditoria)
     if entidad:
         q = q.filter(Auditoria.entidad == entidad)
     if accion:
         q = q.filter(Auditoria.accion == accion)
-    # Aislamiento: admin de sucursal solo ve eventos de actores de su banca.
-    if not permisos.es_super_admin(usuario) and not permisos.compat_global_activo(db):
-        if usuario.sucursal_id is None:
-            raise ErrorServicio(403, "Su cuenta no tiene sucursal asignada")
-        ids = [
-            u.id for u in db.query(Usuario.id).filter(Usuario.sucursal_id == usuario.sucursal_id).all()
-        ]
-        ids.append(usuario.id)
-        q = q.filter(Auditoria.usuario_id.in_(list(set(ids))))
     filas = q.order_by(Auditoria.id.desc()).limit(min(limite, 500)).all()
     return [
         {
