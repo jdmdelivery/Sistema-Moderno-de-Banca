@@ -12,13 +12,14 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import conectate, conectate_widget, estabilizacion, resultados_auto, servicios
+from . import conectate, conectate_widget, estabilizacion, permisos, resultados_auto, servicios
 from .comun import D, ErrorServicio, MSG_USUARIO_BLOQUEADO, loterias_abiertas_desarrollo, modo_desarrollo
 from .db import configurar, engine, init_db, nueva_sesion
 from .models import (
     Auditoria,
     LimiteVenta,
     MovimientoSaldo,
+    PermisoSucursal,
     Resultado,
     Sorteo,
     Sucursal,
@@ -71,11 +72,26 @@ def panel_actual(request: Request, db=Depends(get_db)):
 
 def requiere_rol(*roles):
     def dep(usuario=Depends(panel_actual)):
-        if usuario.rol not in roles:
+        if not permisos.tiene_rol(usuario, *roles):
             raise ErrorServicio(403, f"Su rol ({usuario.rol}) no puede hacer esta operación")
         return usuario
 
     return dep
+
+
+def requiere_super_admin(usuario=Depends(panel_actual)):
+    if not permisos.es_super_admin(usuario):
+        raise ErrorServicio(403, "Solo el Super Admin puede hacer esta operación")
+    return usuario
+
+
+def requiere_gestion_sucursales(usuario=Depends(panel_actual), db=Depends(get_db)):
+    """Crear/editar sucursales: Super Admin, o admin en modo compat global."""
+    if permisos.es_super_admin(usuario):
+        return usuario
+    if usuario.rol == "admin" and permisos.compat_global_activo(db):
+        return usuario
+    raise ErrorServicio(403, "Solo el Super Admin puede crear o editar sucursales")
 
 
 def terminal_actual(request: Request, db=Depends(get_db)):
@@ -118,8 +134,15 @@ def terminal_dict(t):
 
 def usuario_dict(u, con_cajas=False):
     eliminado = bool(getattr(u, "eliminado", False))
+    aprob = permisos.estado_aprobacion_de(u)
     if eliminado:
         estado = "ELIMINADO"
+    elif aprob == permisos.ESTADO_PENDIENTE:
+        estado = "PENDIENTE"
+    elif aprob == permisos.ESTADO_RECHAZADO:
+        estado = "RECHAZADO"
+    elif bool(getattr(u, "suspendido", False)):
+        estado = "SUSPENDIDO"
     elif u.activo:
         estado = "ACTIVO"
     else:
@@ -128,15 +151,36 @@ def usuario_dict(u, con_cajas=False):
         "id": u.id, "nombre": u.nombre, "usuario": u.usuario, "rol": u.rol,
         "sucursal_id": u.sucursal_id, "activo": bool(u.activo) and not eliminado,
         "eliminado": eliminado,
+        "suspendido": bool(getattr(u, "suspendido", False)),
+        "estado_aprobacion": aprob,
         "estado": estado,
         "tiene_clave": bool(u.clave_hash), "tiene_pin": bool(u.pin_hash),
         "eliminado_en": u.eliminado_en.isoformat(sep=" ") if getattr(u, "eliminado_en", None) else None,
         "motivo_eliminacion": getattr(u, "motivo_eliminacion", None),
+        "solicitado_en": u.solicitado_en.isoformat(sep=" ") if getattr(u, "solicitado_en", None) else None,
+        "aprobado_en": u.aprobado_en.isoformat(sep=" ") if getattr(u, "aprobado_en", None) else None,
+        "aprobado_por": getattr(u, "aprobado_por", None),
+        "motivo_rechazo": getattr(u, "motivo_rechazo", None),
     }
     if con_cajas:
         datos["saldo_caja"] = str(D(u.saldo_caja or 0))
         datos["saldo_caja_prueba"] = str(D(u.saldo_caja_prueba or 0))
     return datos
+
+
+def permiso_sucursal_dict(p):
+    return {
+        "sucursal_id": p.sucursal_id,
+        "puede_crear_cajeros": bool(p.puede_crear_cajeros),
+        "puede_asignar_fondos": bool(p.puede_asignar_fondos),
+        "puede_registrar_entregas": bool(p.puede_registrar_entregas),
+        "puede_ajustar_caja": bool(p.puede_ajustar_caja),
+        "puede_configurar_limites": bool(p.puede_configurar_limites),
+        "puede_anular_tickets": bool(p.puede_anular_tickets),
+        "puede_ver_reportes": bool(p.puede_ver_reportes),
+        "actualizado_en": p.actualizado_en.isoformat(sep=" ") if p.actualizado_en else None,
+        "actualizado_por": p.actualizado_por,
+    }
 
 
 def sorteo_dict(s):
@@ -247,14 +291,15 @@ class LoginIn(BaseModel):
 @app.post("/auth/login")
 def login(datos: LoginIn, db=Depends(get_db)):
     usuario = db.query(Usuario).filter_by(usuario=datos.usuario.strip()).first()
-    if (usuario is None or usuario.rol not in ("admin", "supervisor")
+    if (usuario is None or usuario.rol not in ("super_admin", "admin", "supervisor")
             or not usuario.clave_hash or not verificar_clave(datos.clave, usuario.clave_hash)):
         raise ErrorServicio(401, "Usuario o clave incorrectos")
-    if getattr(usuario, "eliminado", False) or not usuario.activo:
-        raise ErrorServicio(401, MSG_USUARIO_BLOQUEADO)
+    permisos.usuario_puede_iniciar_sesion(usuario)
     token = servicios.crear_sesion(db, usuario, tipo="panel")
     db.commit()
-    return {"token": token, "usuario": usuario_dict(usuario)}
+    datos_u = usuario_dict(usuario)
+    datos_u["compat_global"] = permisos.compat_global_activo(db)
+    return {"token": token, "usuario": datos_u}
 
 
 @app.post("/auth/logout")
@@ -264,8 +309,10 @@ def logout(request: Request, db=Depends(get_db)):
 
 
 @app.get("/auth/yo")
-def yo(usuario=Depends(panel_actual)):
-    return usuario_dict(usuario)
+def yo(usuario=Depends(panel_actual), db=Depends(get_db)):
+    datos = usuario_dict(usuario)
+    datos["compat_global"] = permisos.compat_global_activo(db)
+    return datos
 
 
 # ---------------------------------------------------------------- sucursales
@@ -280,17 +327,19 @@ class SucursalIn(BaseModel):
 
 @app.get("/sucursales")
 def listar_sucursales(db=Depends(get_db), usuario=Depends(panel_actual)):
+    q = db.query(Sucursal).order_by(Sucursal.codigo)
+    q = permisos.filtrar_query_sucursal(q, Sucursal.id, db, usuario)
     filas = []
-    for s in db.query(Sucursal).order_by(Sucursal.codigo).all():
+    for s in q.all():
         datos = sucursal_dict(s)
-        if usuario.rol == "admin":
+        if permisos.es_admin_panel(usuario):
             datos["consolidado_cajas"] = servicios.consolidado_cajas(db, s.id)
         filas.append(datos)
     return filas
 
 
 @app.post("/sucursales", status_code=201)
-def crear_sucursal(datos: SucursalIn, db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+def crear_sucursal(datos: SucursalIn, db=Depends(get_db), usuario=Depends(requiere_gestion_sucursales)):
     if db.query(Sucursal).filter_by(codigo=datos.codigo.strip()).first():
         raise ErrorServicio(409, f"Ya existe una sucursal con el código {datos.codigo}")
     s = Sucursal(
@@ -299,6 +348,7 @@ def crear_sucursal(datos: SucursalIn, db=Depends(get_db), usuario=Depends(requie
     )
     db.add(s)
     db.flush()
+    db.add(PermisoSucursal(sucursal_id=s.id))
     servicios.auditar(db, "sucursal", s.id, "creacion", usuario_id=usuario.id,
                       detalle={"codigo": s.codigo, "nombre": s.nombre})
     db.commit()
@@ -308,7 +358,7 @@ def crear_sucursal(datos: SucursalIn, db=Depends(get_db), usuario=Depends(requie
 
 @app.put("/sucursales/{sucursal_id}")
 def editar_sucursal(sucursal_id: int, datos: SucursalIn, db=Depends(get_db),
-                    usuario=Depends(requiere_rol("admin"))):
+                    usuario=Depends(requiere_gestion_sucursales)):
     s = db.get(Sucursal, sucursal_id)
     if s is None:
         raise ErrorServicio(404, "La sucursal no existe")
@@ -338,6 +388,7 @@ def recargar(sucursal_id: int, datos: RecargaIn, db=Depends(get_db),
 
 @app.get("/sucursales/{sucursal_id}/movimientos")
 def movimientos(sucursal_id: int, limite: int = 100, db=Depends(get_db), usuario=Depends(panel_actual)):
+    permisos.assert_sucursal_permitida(db, usuario, sucursal_id)
     filas = (
         db.query(MovimientoSaldo)
         .filter_by(sucursal_id=sucursal_id)
@@ -359,11 +410,14 @@ class TerminalIn(BaseModel):
 
 @app.get("/terminales")
 def listar_terminales(db=Depends(get_db), usuario=Depends(panel_actual)):
-    return [terminal_dict(t) for t in db.query(Terminal).order_by(Terminal.sucursal_id, Terminal.numero_terminal).all()]
+    q = db.query(Terminal).order_by(Terminal.sucursal_id, Terminal.numero_terminal)
+    q = permisos.filtrar_query_sucursal(q, Terminal.sucursal_id, db, usuario)
+    return [terminal_dict(t) for t in q.all()]
 
 
 @app.post("/terminales", status_code=201)
 def crear_terminal(datos: TerminalIn, db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+    permisos.assert_sucursal_permitida(db, usuario, datos.sucursal_id)
     if db.get(Sucursal, datos.sucursal_id) is None:
         raise ErrorServicio(404, "La sucursal no existe")
     if db.query(Terminal).filter_by(serial_sunmi=datos.serial_sunmi.strip()).first():
@@ -390,6 +444,8 @@ def editar_terminal(terminal_id: int, datos: TerminalIn, db=Depends(get_db),
     t = db.get(Terminal, terminal_id)
     if t is None:
         raise ErrorServicio(404, "La terminal no existe")
+    permisos.assert_sucursal_permitida(db, usuario, t.sucursal_id)
+    permisos.assert_sucursal_permitida(db, usuario, datos.sucursal_id)
     t.numero_terminal = datos.numero_terminal
     t.serial_sunmi = datos.serial_sunmi.strip()
     t.version_app = datos.version_app
@@ -405,6 +461,7 @@ def revocar_terminal(terminal_id: int, db=Depends(get_db), usuario=Depends(requi
     t = db.get(Terminal, terminal_id)
     if t is None:
         raise ErrorServicio(404, "La terminal no existe")
+    permisos.assert_sucursal_permitida(db, usuario, t.sucursal_id)
     t.token_hash = None
     t.activa = False
     servicios.auditar(db, "terminal", t.id, "revocacion", usuario_id=usuario.id,
@@ -419,6 +476,7 @@ def reactivar_terminal(terminal_id: int, db=Depends(get_db), usuario=Depends(req
     t = db.get(Terminal, terminal_id)
     if t is None:
         raise ErrorServicio(404, "La terminal no existe")
+    permisos.assert_sucursal_permitida(db, usuario, t.sucursal_id)
     t.token_hash = None
     t.activa = True
     servicios.auditar(db, "terminal", t.id, "reactivacion", usuario_id=usuario.id, detalle={})
@@ -441,6 +499,10 @@ class UsuarioIn(BaseModel):
 def listar_usuarios(estado: str | None = None, db=Depends(get_db),
                     usuario=Depends(requiere_rol("admin", "supervisor"))):
     q = db.query(Usuario).order_by(Usuario.nombre)
+    q = permisos.filtrar_query_sucursal(q, Usuario.sucursal_id, db, usuario)
+    # Supervisor/admin de sucursal nunca listan Super Admin.
+    if not permisos.es_super_admin(usuario):
+        q = q.filter(Usuario.rol != "super_admin")
     clave = (estado or "").strip().lower()
     if clave in ("activos", "activo"):
         q = q.filter(Usuario.activo.is_(True), Usuario.eliminado.is_(False))
@@ -448,35 +510,85 @@ def listar_usuarios(estado: str | None = None, db=Depends(get_db),
         q = q.filter(Usuario.activo.is_(False), Usuario.eliminado.is_(False))
     elif clave in ("eliminados", "eliminado"):
         q = q.filter(Usuario.eliminado.is_(True))
+    elif clave in ("pendientes", "pendiente"):
+        q = q.filter(
+            Usuario.eliminado.is_(False),
+            Usuario.estado_aprobacion == permisos.ESTADO_PENDIENTE,
+        )
     elif clave in ("todos", "all"):
         pass
     else:
         # Default / operativos: sin eliminados.
         q = q.filter(Usuario.eliminado.is_(False))
-    return [usuario_dict(u, con_cajas=usuario.rol == "admin") for u in q.all()]
+    return [
+        usuario_dict(u, con_cajas=permisos.es_admin_panel(usuario))
+        for u in q.all()
+    ]
 
 
 @app.post("/usuarios", status_code=201)
 def crear_usuario(datos: UsuarioIn, db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
-    if datos.rol not in ("admin", "supervisor", "operador"):
-        raise ErrorServicio(400, "Rol no válido: admin, supervisor u operador")
+    if datos.rol == "super_admin" and not permisos.es_super_admin(usuario):
+        raise ErrorServicio(403, "Solo el Super Admin puede crear otro Super Admin")
+    if datos.rol in ("admin", "super_admin") and not (
+        permisos.es_super_admin(usuario) or permisos.compat_global_activo(db)
+    ):
+        raise ErrorServicio(403, "Solo el Super Admin puede crear administradores")
+    roles_ok = ("admin", "supervisor", "operador")
+    if permisos.es_super_admin(usuario):
+        roles_ok = ("super_admin", "admin", "supervisor", "operador")
+    if datos.rol not in roles_ok:
+        raise ErrorServicio(400, f"Rol no válido: {', '.join(roles_ok)}")
     if db.query(Usuario).filter_by(usuario=datos.usuario.strip()).first():
         raise ErrorServicio(409, f"Ya existe el usuario {datos.usuario}")
-    if datos.rol in ("admin", "supervisor") and not datos.clave:
+    if datos.rol in ("super_admin", "admin", "supervisor") and not datos.clave:
         raise ErrorServicio(400, "Un admin/supervisor necesita una clave para el panel")
     if datos.rol == "operador" and not datos.clave:
         raise ErrorServicio(400, "Un operador necesita una contraseña para entrar en la terminal")
+
+    sucursal_id = datos.sucursal_id
+    if usuario.rol == "admin" and not permisos.compat_global_activo(db):
+        if usuario.sucursal_id is None:
+            raise ErrorServicio(403, "Su cuenta no tiene sucursal asignada")
+        sucursal_id = usuario.sucursal_id
+        if datos.rol != "operador":
+            raise ErrorServicio(403, "Un administrador de sucursal solo puede crear cajeros")
+    if datos.rol in ("admin", "supervisor", "operador") and sucursal_id is None and datos.rol != "super_admin":
+        if datos.rol == "operador":
+            raise ErrorServicio(400, "El cajero necesita una sucursal asignada")
+    if sucursal_id is not None:
+        permisos.assert_sucursal_permitida(db, usuario, sucursal_id)
+    if datos.rol == "operador" and sucursal_id is not None and not permisos.es_super_admin(usuario):
+        permisos.assert_permiso_sucursal(db, usuario, sucursal_id, "puede_crear_cajeros")
+
     u = Usuario(
         nombre=datos.nombre.strip(), usuario=datos.usuario.strip(), rol=datos.rol,
-        sucursal_id=datos.sucursal_id, activo=datos.activo,
+        sucursal_id=sucursal_id, activo=datos.activo,
         clave_hash=hash_clave(datos.clave) if datos.clave else None,
+        estado_aprobacion=permisos.ESTADO_APROBADO,
     )
+    # Con Super Admin activo: cajeros creados por admin de sucursal quedan PENDIENTES.
+    # Compat global (sin Super Admin): nacen aprobados (comportamiento histórico / tests).
+    if (
+        datos.rol == "operador"
+        and not permisos.es_super_admin(usuario)
+        and permisos.hay_super_admin(db)
+    ):
+        permisos.marcar_operador_pendiente(u, usuario.id)
+        u.activo = True  # ficha activa; login bloqueado por pendiente
     db.add(u)
     db.flush()
-    servicios.auditar(db, "usuario", u.id, "creacion", usuario_id=usuario.id, detalle={"rol": u.rol})
+    servicios.auditar(
+        db, "usuario", u.id, "creacion", usuario_id=usuario.id,
+        detalle={
+            "rol": u.rol,
+            "estado_aprobacion": u.estado_aprobacion,
+            "sucursal_id": u.sucursal_id,
+        },
+    )
     db.commit()
     db.refresh(u)
-    return usuario_dict(u)
+    return usuario_dict(u, con_cajas=True)
 
 
 @app.put("/usuarios/{usuario_id}")
@@ -487,15 +599,32 @@ def editar_usuario(usuario_id: int, datos: UsuarioIn, db=Depends(get_db),
         raise ErrorServicio(404, "El usuario no existe")
     if getattr(u, "eliminado", False):
         raise ErrorServicio(409, "Un usuario eliminado no se puede editar")
+    permisos.assert_usuario_en_alcance(db, usuario, u)
+    if datos.rol == "super_admin" and not permisos.es_super_admin(usuario):
+        raise ErrorServicio(403, "No puede asignar el rol Super Admin")
+    if u.rol == "super_admin" and not permisos.es_super_admin(usuario):
+        raise ErrorServicio(403, "No puede editar una cuenta Super Admin")
     # El estado ACTIVO/BLOQUEADO se cambia solo con /bloquear y /desbloquear
     # para exigir confirmación, auditoría e invalidación de sesiones.
-    u.nombre, u.rol, u.sucursal_id = datos.nombre.strip(), datos.rol, datos.sucursal_id
+    nuevo_sucursal = datos.sucursal_id
+    if usuario.rol == "admin" and not permisos.compat_global_activo(db):
+        nuevo_sucursal = usuario.sucursal_id
+        if datos.rol != u.rol and datos.rol != "operador":
+            raise ErrorServicio(403, "Un administrador de sucursal no puede cambiar roles de panel")
+    if nuevo_sucursal is not None:
+        permisos.assert_sucursal_permitida(db, usuario, nuevo_sucursal)
+    u.nombre = datos.nombre.strip()
+    if permisos.es_super_admin(usuario) or permisos.compat_global_activo(db):
+        u.rol = datos.rol
+        u.sucursal_id = nuevo_sucursal
+    else:
+        u.sucursal_id = nuevo_sucursal
     if datos.clave:
         u.clave_hash = hash_clave(datos.clave)
     servicios.auditar(db, "usuario", u.id, "edicion", usuario_id=usuario.id, detalle={})
     db.commit()
     db.refresh(u)
-    return usuario_dict(u)
+    return usuario_dict(u, con_cajas=True)
 
 
 @app.post("/usuarios/{usuario_id}/bloquear")
@@ -536,6 +665,155 @@ def eliminar_usuario(usuario_id: int, datos: EliminarUsuarioIn, db=Depends(get_d
         "modo": "logica",
         "usuario": usuario_dict(resultado["usuario"], con_cajas=True),
     }
+
+
+class RechazoCajeroIn(BaseModel):
+    motivo: str | None = None
+
+
+@app.get("/super/cajeros-pendientes")
+def listar_cajeros_pendientes(db=Depends(get_db), usuario=Depends(requiere_super_admin)):
+    filas = (
+        db.query(Usuario)
+        .filter(
+            Usuario.rol == "operador",
+            Usuario.eliminado.is_(False),
+            Usuario.estado_aprobacion == permisos.ESTADO_PENDIENTE,
+        )
+        .order_by(Usuario.id.desc())
+        .all()
+    )
+    return [usuario_dict(u, con_cajas=True) for u in filas]
+
+
+@app.get("/super/resumen")
+def super_resumen(db=Depends(get_db), usuario=Depends(requiere_super_admin)):
+    """Vista consorcio: sucursales, admins, cajeros y cola de aprobación."""
+    pendientes = (
+        db.query(Usuario)
+        .filter(
+            Usuario.rol == "operador",
+            Usuario.eliminado.is_(False),
+            Usuario.estado_aprobacion == permisos.ESTADO_PENDIENTE,
+        )
+        .count()
+    )
+    filas = []
+    for s in db.query(Sucursal).order_by(Sucursal.codigo).all():
+        admins = (
+            db.query(Usuario)
+            .filter(
+                Usuario.sucursal_id == s.id,
+                Usuario.rol == "admin",
+                Usuario.eliminado.is_(False),
+            )
+            .all()
+        )
+        ops = (
+            db.query(Usuario)
+            .filter(
+                Usuario.sucursal_id == s.id,
+                Usuario.rol == "operador",
+                Usuario.eliminado.is_(False),
+            )
+            .all()
+        )
+        ops_pend = sum(
+            1 for u in ops
+            if permisos.estado_aprobacion_de(u) == permisos.ESTADO_PENDIENTE
+        )
+        ops_ok = sum(
+            1 for u in ops
+            if permisos.estado_aprobacion_de(u) == permisos.ESTADO_APROBADO and u.activo
+        )
+        filas.append({
+            "id": s.id,
+            "codigo": s.codigo,
+            "nombre": s.nombre,
+            "activa": bool(s.activa),
+            "saldo_actual": float(s.saldo_actual or 0),
+            "admins": [
+                {"id": a.id, "nombre": a.nombre, "usuario": a.usuario, "activo": bool(a.activo)}
+                for a in admins
+            ],
+            "cajeros_activos": ops_ok,
+            "cajeros_pendientes": ops_pend,
+            "cajeros_total": len(ops),
+            "permisos": permiso_sucursal_dict(permisos.permisos_de_sucursal(db, s.id)),
+        })
+    return {
+        "compat_global": permisos.compat_global_activo(db),
+        "compat_global_forzado": permisos.compat_global_forzado(),
+        "cajeros_pendientes_total": pendientes,
+        "sucursales": filas,
+    }
+
+
+@app.post("/super/cajeros/{usuario_id}/aprobar")
+def aprobar_cajero(usuario_id: int, db=Depends(get_db), usuario=Depends(requiere_super_admin)):
+    objetivo = db.get(Usuario, usuario_id)
+    permisos.aprobar_operador(db, usuario, objetivo)
+    servicios.auditar(
+        db, "usuario", objetivo.id, "aprobacion_cajero", usuario_id=usuario.id,
+        detalle={"usuario": objetivo.usuario, "sucursal_id": objetivo.sucursal_id},
+    )
+    db.commit()
+    db.refresh(objetivo)
+    return usuario_dict(objetivo, con_cajas=True)
+
+
+@app.post("/super/cajeros/{usuario_id}/rechazar")
+def rechazar_cajero(usuario_id: int, datos: RechazoCajeroIn | None = None,
+                    db=Depends(get_db), usuario=Depends(requiere_super_admin)):
+    objetivo = db.get(Usuario, usuario_id)
+    motivo = datos.motivo if datos else None
+    permisos.rechazar_operador(db, usuario, objetivo, motivo)
+    servicios.invalidar_sesiones_usuario(db, objetivo.id)
+    servicios.auditar(
+        db, "usuario", objetivo.id, "rechazo_cajero", usuario_id=usuario.id,
+        detalle={"usuario": objetivo.usuario, "motivo": motivo},
+    )
+    db.commit()
+    db.refresh(objetivo)
+    return usuario_dict(objetivo, con_cajas=True)
+
+
+@app.get("/super/permisos-sucursal/{sucursal_id}")
+def ver_permisos_sucursal(sucursal_id: int, db=Depends(get_db),
+                          usuario=Depends(requiere_super_admin)):
+    if db.get(Sucursal, sucursal_id) is None:
+        raise ErrorServicio(404, "La sucursal no existe")
+    return permiso_sucursal_dict(permisos.permisos_de_sucursal(db, sucursal_id))
+
+
+class PermisosSucursalIn(BaseModel):
+    puede_crear_cajeros: bool = True
+    puede_asignar_fondos: bool = True
+    puede_registrar_entregas: bool = True
+    puede_ajustar_caja: bool = True
+    puede_configurar_limites: bool = True
+    puede_anular_tickets: bool = True
+    puede_ver_reportes: bool = True
+
+
+@app.put("/super/permisos-sucursal/{sucursal_id}")
+def editar_permisos_sucursal(sucursal_id: int, datos: PermisosSucursalIn,
+                             db=Depends(get_db), usuario=Depends(requiere_super_admin)):
+    if db.get(Sucursal, sucursal_id) is None:
+        raise ErrorServicio(404, "La sucursal no existe")
+    fila = permisos.permisos_de_sucursal(db, sucursal_id)
+    for campo, valor in datos.model_dump().items():
+        setattr(fila, campo, valor)
+    from .comun import ahora_local
+    fila.actualizado_en = ahora_local()
+    fila.actualizado_por = usuario.id
+    servicios.auditar(
+        db, "permisos_sucursal", sucursal_id, "edicion", usuario_id=usuario.id,
+        detalle=datos.model_dump(),
+    )
+    db.commit()
+    db.refresh(fila)
+    return permiso_sucursal_dict(fila)
 
 
 # ------------------------------------------------------------------ sorteos
@@ -736,7 +1014,8 @@ class LimiteCajeraIn(BaseModel):
 @app.get("/limites-cajera")
 def listar_limites_cajera(usuario_id: int | None = None, sucursal_id: int | None = None,
                           db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
-    return servicios.listar_limites_cajera(db, usuario_id, sucursal_id)
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
+    return servicios.listar_limites_cajera(db, usuario_id, sid)
 
 
 @app.post("/limites-cajera", status_code=201)
@@ -881,11 +1160,12 @@ def sincronizar_resultados(db=Depends(get_db), usuario=Depends(requiere_rol("adm
 def ganadores(fecha: str | None = None, sorteo_id: int | None = None, sucursal_id: int | None = None,
               usuario_id: int | None = None, estado: str | None = None,
               db=Depends(get_db), usuario=Depends(panel_actual)):
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
     return servicios.listar_ganadores(
         db,
         fecha=_fecha(fecha) if fecha else None,
         sorteo_id=sorteo_id,
-        sucursal_id=sucursal_id,
+        sucursal_id=sid,
         usuario_id=usuario_id,
         estado=estado,
     )
@@ -894,6 +1174,8 @@ def ganadores(fecha: str | None = None, sorteo_id: int | None = None, sucursal_i
 @app.get("/ganadores/{ticket_id}")
 def ganador_detalle(ticket_id: int, db=Depends(get_db), usuario=Depends(panel_actual)):
     """Solo lectura: jugadas ganadoras del ticket, sin pagar desde el panel."""
+    ticket = db.get(Ticket, ticket_id)
+    permisos.assert_ticket_en_alcance(db, usuario, ticket)
     return servicios.detalle_ticket_ganador(db, ticket_id)
 
 
@@ -933,12 +1215,13 @@ def panel_listar_tickets(
     db=Depends(get_db),
     usuario=Depends(requiere_rol("admin", "supervisor")),
 ):
-    """Lista filtrada de tickets del consorcio. Solo lectura."""
+    """Lista filtrada de tickets. Solo lectura; filtrada por alcance."""
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
     return servicios.listar_tickets_panel(
         db,
         desde=desde,
         hasta=hasta,
-        sucursal_id=sucursal_id,
+        sucursal_id=sid,
         usuario_id=usuario_id,
         estado=estado,
         ticket_id=ticket_id,
@@ -951,8 +1234,7 @@ def panel_listar_tickets(
 def panel_detalle_ticket(ticket_id: int, db=Depends(get_db),
                          usuario=Depends(requiere_rol("admin", "supervisor"))):
     ticket = db.get(Ticket, ticket_id)
-    if ticket is None:
-        raise HTTPException(404, "Ticket no encontrado")
+    permisos.assert_ticket_en_alcance(db, usuario, ticket)
     return servicios.ticket_a_dict(db, ticket)
 
 
@@ -961,19 +1243,23 @@ def panel_info_anulacion(ticket_id: int, db=Depends(get_db),
                          usuario=Depends(requiere_rol("admin"))):
     """Vista previa de anulación administrativa (no modifica datos)."""
     ticket = db.get(Ticket, ticket_id)
-    if ticket is None:
-        raise HTTPException(404, "Ticket no encontrado")
+    permisos.assert_ticket_en_alcance(db, usuario, ticket)
     return servicios.info_anulacion_admin(db, ticket)
 
 
 @app.post("/panel/tickets/consultar")
 def panel_consultar(datos: LlaveIn, db=Depends(get_db), usuario=Depends(panel_actual)):
+    ticket = db.get(Ticket, datos.id)
+    permisos.assert_ticket_en_alcance(db, usuario, ticket)
     return servicios.consultar_ticket(db, datos.id, datos.serial)
 
 
 @app.post("/panel/tickets/pagar")
 def panel_pagar(datos: PanelPagoIn, db=Depends(get_db),
                 usuario=Depends(requiere_rol("admin", "supervisor"))):
+    permisos.assert_sucursal_permitida(db, usuario, datos.sucursal_id)
+    ticket = db.get(Ticket, datos.id)
+    permisos.assert_ticket_en_alcance(db, usuario, ticket)
     return servicios.pagar_ticket(db, datos.id, datos.serial, datos.sucursal_id, None, usuario.id)
 
 
@@ -981,6 +1267,8 @@ def panel_pagar(datos: PanelPagoIn, db=Depends(get_db),
 def panel_anular(datos: AnularIn, db=Depends(get_db),
                  usuario=Depends(requiere_rol("admin"))):
     """Solo el administrador del Panel. No aplica el límite de 5 minutos."""
+    ticket = db.get(Ticket, datos.id)
+    permisos.assert_ticket_en_alcance(db, usuario, ticket)
     return servicios.anular_ticket(
         db, datos.id, datos.serial, usuario.id, terminal_id=None,
         motivo=datos.motivo, ventana_cajera=False,
@@ -997,6 +1285,8 @@ class CajaIn(BaseModel):
 
 @app.post("/panel/caja/recibir", status_code=201)
 def panel_recibir(datos: CajaIn, db=Depends(get_db), usuario=Depends(requiere_rol("admin", "supervisor"))):
+    permisos.assert_sucursal_permitida(db, usuario, datos.sucursal_id)
+    permisos.assert_permiso_sucursal(db, usuario, datos.sucursal_id, "puede_ajustar_caja")
     tx = servicios.registrar_caja(db, "recibir_efectivo", datos.monto, datos.concepto,
                                   datos.sucursal_id, datos.terminal_id, usuario.id)
     return caja_dict(tx)
@@ -1004,6 +1294,8 @@ def panel_recibir(datos: CajaIn, db=Depends(get_db), usuario=Depends(requiere_ro
 
 @app.post("/panel/caja/gasto", status_code=201)
 def panel_gasto(datos: CajaIn, db=Depends(get_db), usuario=Depends(requiere_rol("admin", "supervisor"))):
+    permisos.assert_sucursal_permitida(db, usuario, datos.sucursal_id)
+    permisos.assert_permiso_sucursal(db, usuario, datos.sucursal_id, "puede_ajustar_caja")
     tx = servicios.registrar_caja(db, "gasto", datos.monto, datos.concepto,
                                   datos.sucursal_id, datos.terminal_id, usuario.id)
     return caja_dict(tx)
@@ -1013,9 +1305,10 @@ def panel_gasto(datos: CajaIn, db=Depends(get_db), usuario=Depends(requiere_rol(
 def listar_caja(sucursal_id: int | None = None, terminal_id: int | None = None,
                 fecha: str | None = None, limite: int = 200,
                 db=Depends(get_db), usuario=Depends(panel_actual)):
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
     q = db.query(TransaccionCaja)
-    if sucursal_id:
-        q = q.filter(TransaccionCaja.sucursal_id == sucursal_id)
+    if sid is not None:
+        q = q.filter(TransaccionCaja.sucursal_id == sid)
     if terminal_id:
         q = q.filter(TransaccionCaja.terminal_id == terminal_id)
     if fecha:
@@ -1033,6 +1326,7 @@ class CuadreIn(BaseModel):
 
 @app.post("/panel/caja/cuadre", status_code=201)
 def panel_cuadre(datos: CuadreIn, db=Depends(get_db), usuario=Depends(requiere_rol("admin", "supervisor"))):
+    permisos.assert_sucursal_permitida(db, usuario, datos.sucursal_id)
     c = servicios.entregar_cuadre(
         db, datos.sucursal_id, datos.terminal_id, usuario.id,
         fecha=_fecha(datos.fecha) if datos.fecha else None,
@@ -1044,9 +1338,10 @@ def panel_cuadre(datos: CuadreIn, db=Depends(get_db), usuario=Depends(requiere_r
 @app.get("/cuadres")
 def listar_cuadres(sucursal_id: int | None = None, fecha: str | None = None,
                    db=Depends(get_db), usuario=Depends(panel_actual)):
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
     q = db.query(Cuadre)
-    if sucursal_id:
-        q = q.filter(Cuadre.sucursal_id == sucursal_id)
+    if sid is not None:
+        q = q.filter(Cuadre.sucursal_id == sid)
     if fecha:
         q = q.filter(Cuadre.fecha == _fecha(fecha))
     return [servicios.cuadre_a_dict(c) for c in q.order_by(Cuadre.id.desc()).limit(100).all()]
@@ -1057,23 +1352,25 @@ def listar_cuadres(sucursal_id: int | None = None, fecha: str | None = None,
 def reporte_inicio(desde: str | None = None, hasta: str | None = None,
                    db=Depends(get_db), usuario=Depends(panel_actual)):
     hoy = servicios.ahora_local().date()
+    sid = permisos.resolver_filtro_sucursal(db, usuario, None)
     return servicios.resumen_inicio(
-        db, _fecha(desde) if desde else hoy, _fecha(hasta) if hasta else hoy,
+        db, _fecha(desde) if desde else hoy, _fecha(hasta) if hasta else hoy, sid,
     )
 
 
 @app.get("/reportes/resumen")
 def reporte_resumen(desde: str, hasta: str, vista: str = "final", sucursal_id: int | None = None,
                     db=Depends(get_db), usuario=Depends(panel_actual)):
-    return servicios.reporte_resumen(db, _fecha(desde), _fecha(hasta), vista, sucursal_id)
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
+    return servicios.reporte_resumen(db, _fecha(desde), _fecha(hasta), vista, sid)
 
 
 @app.get("/reportes/ventas")
 def reporte_ventas(desde: str, hasta: str, usuario_id: int | None = None,
                    sucursal_id: int | None = None, limite: int = 500,
                    db=Depends(get_db), usuario=Depends(panel_actual)):
-    return servicios.reporte_ventas(db, _fecha(desde), _fecha(hasta), usuario_id, sucursal_id, limite)
-
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
+    return servicios.reporte_ventas(db, _fecha(desde), _fecha(hasta), usuario_id, sid, limite)
 
 @app.get("/reportes/ventas-cajeros")
 def reporte_ventas_cajeros(desde: str | None = None, hasta: str | None = None,
@@ -1102,6 +1399,7 @@ def detalle_ventas_cajero(usuario_id: int, desde: str | None = None, hasta: str 
 @app.get("/reportes/pendientes")
 def reporte_pendientes(desde: str, hasta: str, sucursal_id: int, formato: str = "json",
                        db=Depends(get_db), usuario=Depends(panel_actual)):
+    permisos.assert_sucursal_permitida(db, usuario, sucursal_id)
     if formato == "texto":
         texto = servicios.pendientes_texto(db, _fecha(desde), _fecha(hasta), sucursal_id)
         return PlainTextResponse(texto)
@@ -1117,6 +1415,15 @@ def listar_auditoria(entidad: str | None = None, accion: str | None = None, limi
         q = q.filter(Auditoria.entidad == entidad)
     if accion:
         q = q.filter(Auditoria.accion == accion)
+    # Aislamiento: admin de sucursal solo ve eventos de actores de su banca.
+    if not permisos.es_super_admin(usuario) and not permisos.compat_global_activo(db):
+        if usuario.sucursal_id is None:
+            raise ErrorServicio(403, "Su cuenta no tiene sucursal asignada")
+        ids = [
+            u.id for u in db.query(Usuario.id).filter(Usuario.sucursal_id == usuario.sucursal_id).all()
+        ]
+        ids.append(usuario.id)
+        q = q.filter(Auditoria.usuario_id.in_(list(set(ids))))
     filas = q.order_by(Auditoria.id.desc()).limit(min(limite, 500)).all()
     return [
         {
@@ -1150,9 +1457,8 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
         or not verificar_clave(datos.clave, usuario.clave_hash)
     ):
         raise ErrorServicio(401, "Usuario o contraseña incorrectos")
-    if getattr(usuario, "eliminado", False) or not usuario.activo:
-        raise ErrorServicio(401, MSG_USUARIO_BLOQUEADO)
-    if usuario.rol == "admin":
+    permisos.usuario_puede_iniciar_sesion(usuario)
+    if usuario.rol in ("admin", "super_admin"):
         token = servicios.crear_sesion(db, usuario, tipo="panel")
         servicios.auditar(
             db, "usuario", usuario.id, "login_admin_movil", usuario_id=usuario.id,
@@ -1161,7 +1467,7 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
         db.commit()
         return {
             "token": token,
-            "rol": "admin",
+            "rol": usuario.rol,
             "operador": usuario_dict(usuario),
             "sucursal": None,
             "mi_caja": "0.00",
@@ -1326,7 +1632,8 @@ class FondoIn(BaseModel):
 @app.get("/fondos")
 def panel_fondos(sucursal_id: int | None = None, usuario_id: int | None = None,
                  db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
-    return servicios.listar_fondos(db, sucursal_id, usuario_id)
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
+    return servicios.listar_fondos(db, sid, usuario_id)
 
 
 @app.post("/fondos", status_code=201)
@@ -1353,7 +1660,8 @@ class LiquidacionIn(BaseModel):
 @app.get("/comisiones")
 def panel_comisiones(sucursal_id: int | None = None, usuario_id: int | None = None,
                      db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
-    return servicios.listar_comisiones(db, sucursal_id, usuario_id)
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
+    return servicios.listar_comisiones(db, sid, usuario_id)
 
 
 @app.post("/comisiones", status_code=201)
@@ -1366,13 +1674,15 @@ def panel_guardar_comision(datos: ComisionIn, db=Depends(get_db),
 def panel_resumen_comisiones(desde: str, hasta: str, sucursal_id: int | None = None,
                              usuario_id: int | None = None, db=Depends(get_db),
                              usuario=Depends(requiere_rol("admin"))):
-    return servicios.resumen_comisiones(db, _fecha(desde), _fecha(hasta), sucursal_id, usuario_id)
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
+    return servicios.resumen_comisiones(db, _fecha(desde), _fecha(hasta), sid, usuario_id)
 
 
 @app.get("/comisiones/liquidaciones")
 def panel_liquidaciones(sucursal_id: int | None = None, usuario_id: int | None = None,
                         db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
-    return servicios.listar_liquidaciones(db, sucursal_id, usuario_id)
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
+    return servicios.listar_liquidaciones(db, sid, usuario_id)
 
 
 @app.post("/comisiones/liquidaciones", status_code=201)

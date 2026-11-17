@@ -132,22 +132,25 @@ def invalidar_sesiones_terminal(db, terminal_id):
 
 def bloquear_usuario(db, admin, usuario_id):
     """Desactiva el acceso (activo=False). No toca caja, tickets ni historial."""
-    if admin.rol != "admin":
+    from . import permisos as perm
+
+    if not perm.es_admin_panel(admin):
         raise ErrorServicio(403, "Solo un administrador puede bloquear usuarios")
     objetivo = db.get(Usuario, usuario_id)
     if objetivo is None:
         raise ErrorServicio(404, "El usuario no existe")
+    perm.assert_usuario_en_alcance(db, admin, objetivo)
     if getattr(objetivo, "eliminado", False):
         raise ErrorServicio(409, "Un usuario eliminado no se puede bloquear ni reactivar")
     if objetivo.id == admin.id:
         raise ErrorServicio(400, "No puede bloquearse a sí mismo")
     if not objetivo.activo:
         raise ErrorServicio(409, "El usuario ya está bloqueado")
-    if objetivo.rol == "admin":
+    if objetivo.rol in ("admin", "super_admin"):
         activos = (
             db.query(Usuario)
             .filter(
-                Usuario.rol == "admin", Usuario.activo.is_(True),
+                Usuario.rol.in_(("admin", "super_admin")), Usuario.activo.is_(True),
                 Usuario.eliminado.is_(False), Usuario.id != objetivo.id,
             )
             .count()
@@ -173,16 +176,22 @@ def bloquear_usuario(db, admin, usuario_id):
 
 def desbloquear_usuario(db, admin, usuario_id):
     """Restaura el acceso. No altera caja, movimientos ni historial."""
-    if admin.rol != "admin":
+    from . import permisos as perm
+
+    if not perm.es_admin_panel(admin):
         raise ErrorServicio(403, "Solo un administrador puede desbloquear usuarios")
     objetivo = db.get(Usuario, usuario_id)
     if objetivo is None:
         raise ErrorServicio(404, "El usuario no existe")
+    perm.assert_usuario_en_alcance(db, admin, objetivo)
     if getattr(objetivo, "eliminado", False):
         raise ErrorServicio(409, "Un usuario eliminado no se puede desbloquear")
     if objetivo.activo:
         raise ErrorServicio(409, "El usuario ya está activo")
+    if perm.estado_aprobacion_de(objetivo) != perm.ESTADO_APROBADO:
+        raise ErrorServicio(409, "Un cajero pendiente o rechazado no se puede desbloquear: debe aprobarse antes")
     objetivo.activo = True
+    objetivo.suspendido = False
     auditar(
         db, "usuario", objetivo.id, "desbloqueo", usuario_id=admin.id,
         detalle={
@@ -263,20 +272,23 @@ def _eliminacion_logica(db, admin, objetivo, motivo_limpio, cuando):
 
 def eliminar_usuario(db, admin, usuario_id, motivo=None):
     """Elimina un usuario: físico sin historial, lógico si hay movimientos o FKs."""
-    if admin.rol != "admin":
+    from . import permisos as perm
+
+    if not perm.es_admin_panel(admin):
         raise ErrorServicio(403, "Solo un administrador puede eliminar usuarios")
     objetivo = db.get(Usuario, usuario_id)
     if objetivo is None:
         raise ErrorServicio(404, "El usuario no existe")
+    perm.assert_usuario_en_alcance(db, admin, objetivo)
     if getattr(objetivo, "eliminado", False):
         raise ErrorServicio(409, "El usuario ya está eliminado")
     if objetivo.id == admin.id:
         raise ErrorServicio(400, "No puede eliminarse a sí mismo")
-    if objetivo.rol == "admin":
+    if objetivo.rol in ("admin", "super_admin"):
         activos = (
             db.query(Usuario)
             .filter(
-                Usuario.rol == "admin", Usuario.activo.is_(True),
+                Usuario.rol.in_(("admin", "super_admin")), Usuario.activo.is_(True),
                 Usuario.eliminado.is_(False), Usuario.id != objetivo.id,
             )
             .count()
@@ -1889,13 +1901,16 @@ def _clave_limite(tipo, numeros):
 def guardar_limite_cajera(
     db, admin, usuario_id, sorteo_id, tipo_codigo, numeros, monto, limite_id=None, sorteo2_id=None,
 ):
-    if admin is None or admin.rol != "admin":
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
         raise ErrorServicio(403, "Solo un administrador puede guardar límites de cajera")
     if D(monto) <= 0:
         raise ErrorServicio(400, "El monto máximo debe ser mayor que cero")
     cajera = db.get(Usuario, usuario_id)
     if cajera is None or cajera.rol != "operador" or not cajera.activo or not cajera.sucursal_id:
         raise ErrorServicio(400, "Seleccione una cajera activa")
+    perm.assert_usuario_en_alcance(db, admin, cajera)
     tipo = db.query(TipoJugada).filter_by(codigo=str(tipo_codigo).upper()).first()
     if tipo is None or tipo.codigo not in ("QN", "PL", "SP", "TR"):
         raise ErrorServicio(400, "El tipo de límite no es válido")
@@ -2410,8 +2425,12 @@ def asignar_fondo(db, admin, usuario_id, sucursal_id, monto, tipo, operacion_id,
     El aporte de prueba no toca la caja general. La transferencia sale de
     esa caja y no se suma otra vez encima del consolidado.
     """
-    if admin is None or admin.rol != "admin":
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
         raise ErrorServicio(403, "Solo un administrador puede asignar fondos")
+    perm.assert_sucursal_permitida(db, admin, sucursal_id)
+    perm.assert_permiso_sucursal(db, admin, sucursal_id, "puede_asignar_fondos")
     if not operacion_id or not str(operacion_id).strip():
         raise ErrorServicio(400, "La asignación necesita un identificador de operación")
     op = str(operacion_id).strip()[:40]
@@ -2801,15 +2820,14 @@ def entrega_para_reimprimir(db, operador_id, entrega_id):
 
 
 def listar_entregas(db, usuario, sucursal_id=None):
-    if usuario.rol not in ("admin", "supervisor"):
+    from . import permisos as perm
+
+    if not perm.es_admin_panel(usuario) and usuario.rol != "supervisor":
         raise ErrorServicio(403, "Su rol no puede consultar las entregas")
+    sid = perm.resolver_filtro_sucursal(db, usuario, sucursal_id)
     q = db.query(Entrega)
-    if usuario.rol == "supervisor":
-        if sucursal_id and int(sucursal_id) != usuario.sucursal_id:
-            raise ErrorServicio(403, "Solo puede consultar las entregas de su sucursal")
-        q = q.filter(Entrega.sucursal_id == usuario.sucursal_id)
-    elif sucursal_id:
-        q = q.filter(Entrega.sucursal_id == int(sucursal_id))
+    if sid is not None:
+        q = q.filter(Entrega.sucursal_id == sid)
     filas = [entrega_a_dict(db, e) for e in q.order_by(Entrega.id.desc()).limit(200).all()]
     return {
         "reales": [f for f in filas if not f["es_prueba"]],
@@ -2819,13 +2837,14 @@ def listar_entregas(db, usuario, sucursal_id=None):
 
 def recibir_entrega(db, entrega_id, usuario):
     """Marca la recepción física. No vuelve a descontar el dinero."""
-    if usuario.rol not in ("admin", "supervisor"):
+    from . import permisos as perm
+
+    if not perm.es_admin_panel(usuario) and usuario.rol != "supervisor":
         raise ErrorServicio(403, "Su rol no puede recibir una entrega")
     entrega = db.get(Entrega, int(entrega_id))
     if entrega is None:
         raise ErrorServicio(404, "La entrega no existe")
-    if usuario.rol == "supervisor" and usuario.sucursal_id != entrega.sucursal_id:
-        raise ErrorServicio(403, "Solo puede recibir las entregas de su sucursal")
+    perm.assert_sucursal_permitida(db, usuario, entrega.sucursal_id)
     cajero = db.get(Usuario, entrega.usuario_id)
     sucursal = db.get(Sucursal, entrega.sucursal_id)
     caja_cajero = D(cajero.saldo_caja or 0) if cajero is not None else D(0)
@@ -3135,9 +3154,12 @@ def listar_ganadores(db, fecha=None, sorteo_id=None, sucursal_id=None, usuario_i
 
 # -------------------------------------------------------------------- saldos
 def recargar_saldo(db, sucursal_id, monto, referencia, usuario):
+    from . import permisos as perm
+
     monto = D(monto)
     if monto <= 0:
         raise ErrorServicio(400, "El monto de la recarga debe ser mayor que cero")
+    perm.assert_sucursal_permitida(db, usuario, sucursal_id)
     sucursal = db.get(Sucursal, sucursal_id)
     if sucursal is None:
         raise ErrorServicio(404, "La sucursal no existe")
@@ -3597,7 +3619,9 @@ def comision_a_dict(db, fila):
 
 
 def guardar_comision(db, admin, usuario_id, porcentaje):
-    if admin is None or admin.rol != "admin":
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
         raise ErrorServicio(403, "Solo un administrador puede modificar comisiones")
     pct = D(porcentaje)
     if pct < 0 or pct > 100:
@@ -3605,6 +3629,7 @@ def guardar_comision(db, admin, usuario_id, porcentaje):
     cajera = db.get(Usuario, usuario_id)
     if cajera is None or cajera.rol != "operador" or not cajera.activo or not cajera.sucursal_id:
         raise ErrorServicio(400, "Seleccione una cajera activa")
+    perm.assert_usuario_en_alcance(db, admin, cajera)
     ahora = ahora_local()
     ultima = (
         db.query(ComisionCajera)
@@ -3731,7 +3756,9 @@ def liquidacion_a_dict(db, fila):
 
 
 def registrar_liquidacion(db, admin, usuario_id, desde, hasta, operacion_id):
-    if admin is None or admin.rol != "admin":
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
         raise ErrorServicio(403, "Solo un administrador puede liquidar comisiones")
     if hasta < desde:
         raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
@@ -3741,6 +3768,7 @@ def registrar_liquidacion(db, admin, usuario_id, desde, hasta, operacion_id):
     cajera = db.get(Usuario, usuario_id)
     if cajera is None or cajera.rol != "operador" or not cajera.sucursal_id:
         raise ErrorServicio(400, "Seleccione una cajera")
+    perm.assert_usuario_en_alcance(db, admin, cajera)
     previa_op = db.query(LiquidacionComision).filter_by(operacion_id=op).first()
     if previa_op is not None:
         if previa_op.usuario_id == cajera.id and previa_op.desde == desde and previa_op.hasta == hasta:
@@ -3785,11 +3813,14 @@ def registrar_liquidacion(db, admin, usuario_id, desde, hasta, operacion_id):
 
 
 def pagar_liquidacion(db, admin, liquidacion_id):
-    if admin is None or admin.rol != "admin":
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
         raise ErrorServicio(403, "Solo un administrador puede marcar una comisión como pagada")
     fila = db.get(LiquidacionComision, liquidacion_id)
     if fila is None:
         raise ErrorServicio(404, "La liquidación no existe")
+    perm.assert_sucursal_permitida(db, admin, fila.sucursal_id)
     if fila.estado == "pagada":
         raise ErrorServicio(409, "Esa comisión ya está pagada. No se descontó dinero.")
     cajera = db.get(Usuario, fila.usuario_id)
@@ -4258,7 +4289,7 @@ def _bloque_periodo(db, desde, hasta, prueba, sucursal_id=None, usuario_id=None)
     }
 
 
-def resumen_inicio(db, desde, hasta):
+def resumen_inicio(db, desde, hasta, sucursal_id=None):
     """Resumen del panel. Reales y prueba viajan separados y esta lectura no escribe."""
     if hasta < desde:
         raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
@@ -4267,8 +4298,9 @@ def resumen_inicio(db, desde, hasta):
         "hoy": ahora_local().date().isoformat(),
         "desde": desde.isoformat(),
         "hasta": hasta.isoformat(),
-        "reales": _bloque_periodo(db, desde, hasta, False),
-        "prueba": _bloque_periodo(db, desde, hasta, True),
+        "sucursal_id": sucursal_id,
+        "reales": _bloque_periodo(db, desde, hasta, False, sucursal_id),
+        "prueba": _bloque_periodo(db, desde, hasta, True, sucursal_id),
     }
 
 
@@ -4400,16 +4432,12 @@ def pendientes_texto(db, desde, hasta, sucursal_id, terminal=None, usuario_id=No
     return "\n".join(lineas)
 
 
-def _alcance_admin(usuario, sucursal_id):
-    if usuario is None or usuario.rol not in ("admin", "supervisor"):
+def _alcance_admin(db, usuario, sucursal_id):
+    from . import permisos as perm
+
+    if usuario is None or not (perm.es_admin_panel(usuario) or usuario.rol == "supervisor"):
         raise ErrorServicio(403, "Su rol no puede consultar la administración")
-    if usuario.rol == "supervisor":
-        if not usuario.sucursal_id:
-            raise ErrorServicio(403, "El supervisor no tiene sucursal asignada")
-        if sucursal_id is not None and int(sucursal_id) != usuario.sucursal_id:
-            raise ErrorServicio(403, "Solo puede consultar su sucursal")
-        return usuario.sucursal_id
-    return sucursal_id
+    return perm.resolver_filtro_sucursal(db, usuario, sucursal_id)
 
 
 def _ultima_actividad(db, usuario_id):
@@ -4436,7 +4464,7 @@ def panel_movil(db, usuario, seccion, desde, hasta, sucursal_id=None, usuario_id
     """Lectura del administrador en el teléfono. No vende, no paga y no mezcla las cajas."""
     if hasta < desde:
         raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
-    sucursal_id = _alcance_admin(usuario, sucursal_id)
+    sucursal_id = _alcance_admin(db, usuario, sucursal_id)
     seccion = (seccion or "inicio").strip().lower()
     if seccion not in ("inicio", "ventas", "cajeras", "tickets", "premios", "caja", "reportes", "resultados"):
         raise ErrorServicio(400, "Sección desconocida")
@@ -4740,10 +4768,13 @@ def _ultima_operacion_cajero(db, usuario_id):
 
 def resumen_ventas_cajeros(db, admin, desde, hasta, sucursal_id=None, usuario_id=None):
     """Listado admin: un bloque por cajero, premios atribuidos a quien pagó."""
-    if admin is None or admin.rol != "admin":
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
         raise ErrorServicio(403, "Solo un administrador puede consultar las ventas por cajero")
     if hasta < desde:
         raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+    sucursal_id = perm.resolver_filtro_sucursal(db, admin, sucursal_id)
     q = db.query(Usuario).filter(Usuario.rol == "operador").order_by(Usuario.nombre)
     if sucursal_id is not None:
         q = q.filter(Usuario.sucursal_id == sucursal_id)
@@ -4791,13 +4822,16 @@ def resumen_ventas_cajeros(db, admin, desde, hasta, sucursal_id=None, usuario_id
 
 
 def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
-    if admin is None or admin.rol != "admin":
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
         raise ErrorServicio(403, "Solo un administrador puede consultar el detalle de un cajero")
     if hasta < desde:
         raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
     cajero = db.get(Usuario, usuario_id)
     if cajero is None or cajero.rol != "operador":
         raise ErrorServicio(404, "Cajero no encontrado")
+    perm.assert_usuario_en_alcance(db, admin, cajero)
     prueba = modo_desarrollo()
     resumen = resumen_ventas_cajeros(db, admin, desde, hasta, None, usuario_id)
     fila = next((f for f in resumen["cajeros"] if f["usuario_id"] == usuario_id), None)

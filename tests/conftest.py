@@ -56,11 +56,15 @@ class Entorno:
         raise AssertionError(f"Sorteo no encontrado: {nombre}")
 
     # ------------------------------------------------------------- sucursal
+    def _headers_gestion(self):
+        """Tras existir Super Admin, crear sucursales exige su token (o compat)."""
+        return getattr(self, "super_admin", None) or self.admin
+
     def sucursal(self, codigo="1301", nombre="BANCA CASTILLO", comision=10):
         r = self.c.post(
             "/sucursales",
             json={"codigo": codigo, "nombre": nombre, "comision_porcentaje": comision},
-            headers=self.admin,
+            headers=self._headers_gestion(),
         )
         assert r.status_code == 201, r.text
         return r.json()
@@ -69,13 +73,13 @@ class Entorno:
         r = self.c.post(
             f"/sucursales/{sucursal_id}/recargar",
             json={"monto": monto, "referencia": "Efectivo de prueba"},
-            headers=self.admin,
+            headers=self._headers_gestion(),
         )
         assert r.status_code == 200, r.text
         return r.json()
 
     def saldo(self, sucursal_id):
-        for s in self.c.get("/sucursales", headers=self.admin).json():
+        for s in self.c.get("/sucursales", headers=self._headers_gestion()).json():
             if s["id"] == sucursal_id:
                 return float(s["saldo_actual"])
         raise AssertionError("sucursal no encontrada")
@@ -87,7 +91,7 @@ class Entorno:
         r = self.c.post(
             "/terminales",
             json={"sucursal_id": sucursal_id, "numero_terminal": numero, "serial_sunmi": serial},
-            headers=self.admin,
+            headers=self._headers_gestion(),
         )
         assert r.status_code == 201, r.text
         datos = r.json()
@@ -98,7 +102,7 @@ class Entorno:
             "/usuarios",
             json={"nombre": f"Operador {usuario}", "usuario": usuario, "rol": "operador",
                   "sucursal_id": sucursal_id, "clave": clave},
-            headers=self.admin,
+            headers=self._headers_gestion(),
         )
         assert r.status_code == 201, r.text
         return r.json()

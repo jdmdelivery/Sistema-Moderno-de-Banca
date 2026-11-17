@@ -34,6 +34,7 @@
 <div id="nav-fondo" class="nav-fondo" hidden></div>
 <nav id="nav">
   <button class="navbtn activo" data-sec="inicio">Inicio</button>
+  <button class="navbtn" data-sec="super" id="nav-super" hidden>Super Admin</button>
   <button class="navbtn" data-sec="sucursales">Sucursales</button>
   <button class="navbtn" data-sec="terminales">Terminales</button>
   <button class="navbtn" data-sec="usuarios">Usuarios</button>
@@ -54,6 +55,28 @@
 </nav>
 
 <main>
+<section id="sec-super" class="seccion">
+  <h2>Panel Super Admin — JDMCASHNOW</h2>
+  <p class="nota">Cola de aprobación de cajeros, vista de todas las sucursales y permisos de cada administrador de banca. Los tickets, ventas y saldos no se modifican desde aquí.</p>
+  <div id="super-estado" class="estado-box">Cargando…</div>
+  <h3>Cajeros pendientes de aprobación</h3>
+  <div class="form">
+    <button type="button" id="btn-super-refrescar" class="btn primario">ACTUALIZAR</button>
+    <p id="super-msg" class="msg"></p>
+  </div>
+  <div id="super-pendientes"></div>
+  <h3>Sucursales del consorcio</h3>
+  <div id="super-sucursales"></div>
+  <h3>Permisos del administrador de sucursal</h3>
+  <div class="form">
+    <label>Sucursal<select id="super-perm-sucursal"></select></label>
+    <button type="button" id="btn-super-perm-cargar" class="btn">CARGAR PERMISOS</button>
+    <button type="button" id="btn-super-perm-guardar" class="btn primario">GUARDAR PERMISOS</button>
+    <p id="super-perm-msg" class="msg"></p>
+  </div>
+  <div id="super-permisos" class="form" style="margin-top:8px"></div>
+</section>
+
 <section id="sec-inicio" class="seccion activo">
   <h2>Resumen</h2>
   <div class="form inicio-filtro">
@@ -79,7 +102,9 @@
 
 <section id="sec-sucursales" class="seccion">
   <h2>Sucursales (bancas)</h2>
+  <p id="suc-alcance-nota" class="nota" hidden></p>
   <div id="suc-tabla"></div>
+  <div id="suc-form-edicion">
   <h3>Crear / editar sucursal</h3>
   <div class="form">
     <input type="hidden" id="suc-id">
@@ -93,6 +118,8 @@
     <button id="btn-suc-limpiar" class="btn">Limpiar</button>
     <p id="suc-msg" class="msg"></p>
   </div>
+  </div>
+  <div id="suc-form-recarga">
   <h3>Entregar efectivo a la sucursal</h3>
   <div class="form">
     <label>Sucursal<select id="rec-sucursal"></select></label>
@@ -100,6 +127,7 @@
     <label>Referencia<input id="rec-referencia" placeholder="Efectivo / transferencia"></label>
     <button id="btn-recargar" class="btn primario">ENTREGAR EFECTIVO</button>
     <p id="rec-msg" class="msg"></p>
+  </div>
   </div>
   <h3>Movimientos de caja</h3>
   <div class="form">
@@ -123,6 +151,7 @@
       <option value="">Operativos</option>
       <option value="activos">ACTIVOS</option>
       <option value="bloqueados">BLOQUEADOS</option>
+      <option value="pendientes">PENDIENTES DE APROBACIÓN</option>
       <option value="eliminados">ELIMINADOS</option>
       <option value="todos">Todos</option>
     </select></label>
@@ -138,8 +167,10 @@
       <option value="operador">Operador (terminal)</option>
       <option value="supervisor">Supervisor (panel)</option>
       <option value="admin">Administrador (panel)</option>
+      <option value="super_admin" id="usu-rol-super" hidden>Super Admin</option>
     </select></label>
-    <label>Sucursal<select id="usu-sucursal"></select></label>
+    <label id="usu-sucursal-label">Sucursal<select id="usu-sucursal"></select></label>
+    <p id="usu-alcance-nota" class="nota" hidden></p>
     <label>Contraseña<input id="usu-clave" type="password" placeholder="(sin cambio si se deja vacío)"></label>
     <label class="check"><input id="usu-activo" type="checkbox" checked> Activo al crear</label>
     <button id="btn-usu-guardar" class="btn primario">GUARDAR</button>

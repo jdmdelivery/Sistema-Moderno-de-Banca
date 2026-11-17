@@ -74,16 +74,84 @@ function pantallaPanel() {
   }
 }
 
+function esSuperAdmin() { return !!(YO && YO.rol === "super_admin"); }
+function esAdminPanel() { return !!(YO && (YO.rol === "admin" || YO.rol === "super_admin")); }
+function adminSucursalRestringido() {
+  return !!(YO && YO.rol === "admin" && YO.compat_global === false);
+}
+function etiquetaRol(rol) {
+  return ({ super_admin: "Super Admin", admin: "Administrador", supervisor: "Supervisor", operador: "Operador" })[rol] || rol;
+}
+function aplicarVisibilidadRol() {
+  const superBtn = $("#nav-super");
+  if (superBtn) superBtn.hidden = !esSuperAdmin();
+  mostrarFondo(esAdminPanel());
+  const formEdicion = $("#suc-form-edicion");
+  const formRecarga = $("#suc-form-recarga");
+  const puedeGestionSuc = esSuperAdmin() || !!(YO && YO.rol === "admin" && YO.compat_global !== false);
+  if (formEdicion) formEdicion.hidden = !puedeGestionSuc;
+  if (formRecarga) formRecarga.hidden = !esAdminPanel();
+  const notaSuc = $("#suc-alcance-nota");
+  if (notaSuc) {
+    if (adminSucursalRestringido()) {
+      notaSuc.hidden = false;
+      notaSuc.textContent = "Panel de su sucursal: solo ve empleados y operaciones de su banca. Crear bancas nuevas es exclusivo de JDMCASHNOW.";
+    } else if (esSuperAdmin()) {
+      notaSuc.hidden = false;
+      notaSuc.textContent = "Super Admin: control total de sucursales, administradores y aprobación de cajeros.";
+    } else {
+      notaSuc.hidden = true;
+    }
+  }
+  const rolSuper = $("#usu-rol-super");
+  if (rolSuper) rolSuper.hidden = !esSuperAdmin();
+  const selRol = $("#usu-rol");
+  if (selRol && adminSucursalRestringido()) {
+    [...selRol.options].forEach((opt) => {
+      opt.hidden = !["operador", "supervisor"].includes(opt.value);
+    });
+    if (!["operador", "supervisor"].includes(selRol.value)) selRol.value = "operador";
+  } else if (selRol && !esSuperAdmin()) {
+    [...selRol.options].forEach((opt) => {
+      opt.hidden = opt.value === "super_admin";
+    });
+  }
+  const notaUsu = $("#usu-alcance-nota");
+  if (notaUsu) {
+    if (adminSucursalRestringido()) {
+      notaUsu.hidden = false;
+      notaUsu.textContent = "Los cajeros nuevos quedan PENDIENTES hasta que JDMCASHNOW los apruebe. No puede crear administradores de otras bancas.";
+      if (YO.sucursal_id) {
+        $("#usu-sucursal").value = String(YO.sucursal_id);
+        $("#usu-sucursal").disabled = true;
+      }
+    } else {
+      notaUsu.hidden = true;
+      if ($("#usu-sucursal")) $("#usu-sucursal").disabled = false;
+    }
+  }
+  const subLogin = document.querySelector("#login .sub");
+  const subMarca = document.querySelector(".marca .sub");
+  if (esSuperAdmin()) {
+    if (subMarca) subMarca.textContent = "Super Admin · Consorcio";
+  } else if (adminSucursalRestringido()) {
+    if (subMarca) subMarca.textContent = "Admin de sucursal";
+  } else if (subMarca) {
+    subMarca.textContent = "Panel del Consorcio";
+  }
+  if (subLogin && !TOKEN) subLogin.textContent = "Panel del Consorcio";
+}
+
 async function entrar() {
   try {
     const r = await post("/auth/login", { usuario: $("#login-usuario").value.trim(), clave: $("#login-clave").value });
     TOKEN = r.token; YO = r.usuario;
     localStorage.setItem("lot_token", TOKEN);
-    $("#yo-nombre").textContent = `${YO.nombre} (${YO.rol})`;
-    mostrarFondo(YO.rol === "admin");
+    $("#yo-nombre").textContent = `${YO.nombre} (${etiquetaRol(YO.rol)})`;
+    aplicarVisibilidadRol();
     pantallaPanel();
     await cargarCatalogos();
-    ir("inicio");
+    ir(esSuperAdmin() ? "super" : "inicio");
   } catch (e) { msg("#login-msg", e.message, false); }
 }
 async function salir() {
@@ -100,11 +168,11 @@ async function restaurarSesion() {
   }
   try {
     YO = await api("/auth/yo");
-    $("#yo-nombre").textContent = `${YO.nombre} (${YO.rol})`;
-    mostrarFondo(YO.rol === "admin");
+    $("#yo-nombre").textContent = `${YO.nombre} (${etiquetaRol(YO.rol)})`;
+    aplicarVisibilidadRol();
     pantallaPanel();
     await cargarCatalogos();
-    ir("inicio");
+    ir(esSuperAdmin() ? "super" : "inicio");
   } catch {
     TOKEN = "";
     localStorage.removeItem("lot_token");
@@ -161,7 +229,7 @@ function ir(sec) {
   $$(".navbtn").forEach((b) => b.classList.toggle("activo", b.dataset.sec === sec));
   $$(".seccion").forEach((s) => s.classList.toggle("activo", s.id === "sec-" + sec));
   const cargar = {
-    inicio: cargarInicio, sucursales: cargarSucursales, terminales: cargarTerminales,
+    inicio: cargarInicio, super: cargarSuperAdmin, sucursales: cargarSucursales, terminales: cargarTerminales,
     usuarios: cargarUsuarios, "ventas-cajeros": cargarVentasCajeros,
     sorteos: cargarSorteos, tabla: cargarTabla,
     limites: cargarLimites, resultados: cargarResultados, tickets: cargarTicketsLista,
@@ -170,6 +238,103 @@ function ir(sec) {
     reportes: cargarReportes, auditoria: async () => {},
   }[sec];
   if (cargar) cargar().catch((e) => console.error(e));
+}
+
+/* ----------------------------------------------------------- Super Admin UI */
+const SUPER_PERM_CAMPOS = [
+  ["puede_crear_cajeros", "Crear cajeros"],
+  ["puede_asignar_fondos", "Asignar fondos"],
+  ["puede_registrar_entregas", "Registrar entregas"],
+  ["puede_ajustar_caja", "Ajustar caja"],
+  ["puede_configurar_limites", "Configurar límites"],
+  ["puede_anular_tickets", "Anular tickets"],
+  ["puede_ver_reportes", "Ver reportes"],
+];
+
+async function cargarSuperAdmin() {
+  if (!esSuperAdmin()) {
+    $("#super-estado").textContent = "Solo JDMCASHNOW (Super Admin) puede ver este panel.";
+    return;
+  }
+  const resumen = await api("/super/resumen");
+  const pendientes = await api("/super/cajeros-pendientes");
+  const modo = resumen.compat_global
+    ? (resumen.compat_global_forzado
+      ? "Compat global FORZADO (aislamiento aún no activo)."
+      : "Compat global activo (aún no hay aislamiento).")
+    : "Aislamiento activo: cada admin solo ve su sucursal.";
+  $("#super-estado").textContent =
+    `${modo} Cajeros pendientes: ${resumen.cajeros_pendientes_total}. Sucursales: ${resumen.sucursales.length}.`;
+  tabla("#super-pendientes",
+    ["Nombre", "Usuario", "Sucursal", "Caja", "Acciones"],
+    pendientes.map((u) => {
+      const suc = SUCURSALES.find((s) => s.id === u.sucursal_id);
+      return `<tr><td>${esc(u.nombre)}</td><td>${esc(u.usuario)}</td>
+        <td>${esc(suc ? suc.nombre : "—")}</td><td>${fmt(u.saldo_caja)}</td>
+        <td><div class="acciones-fila">
+          <button class="btn fila primario" data-aprobar="${u.id}">APROBAR</button>
+          <button class="btn fila peligro" data-rechazar="${u.id}">RECHAZAR</button>
+        </div></td></tr>`;
+    }));
+  document.querySelectorAll("[data-aprobar]").forEach((b) => {
+    b.addEventListener("click", () => aprobarCajeroSuper(b.dataset.aprobar));
+  });
+  document.querySelectorAll("[data-rechazar]").forEach((b) => {
+    b.addEventListener("click", () => rechazarCajeroSuper(b.dataset.rechazar));
+  });
+  tabla("#super-sucursales",
+    ["Código", "Nombre", "Saldo", "Admins", "Cajeros OK", "Pendientes", "Estado"],
+    (resumen.sucursales || []).map((s) => {
+      const admins = (s.admins || []).map((a) => a.usuario).join(", ") || "—";
+      return `<tr><td>${esc(s.codigo)}</td><td>${esc(s.nombre)}</td><td>${fmt(s.saldo_actual)}</td>
+        <td>${esc(admins)}</td><td>${s.cajeros_activos}</td><td>${s.cajeros_pendientes}</td>
+        <td>${s.activa ? "Activa" : "Inactiva"}</td></tr>`;
+    }));
+  const sel = $("#super-perm-sucursal");
+  if (sel) {
+    const prev = sel.value;
+    sel.innerHTML = opciones(resumen.sucursales || [], (s) => s.id, (s) => `${s.codigo} — ${s.nombre}`);
+    if (prev) sel.value = prev;
+  }
+}
+
+async function aprobarCajeroSuper(id) {
+  try {
+    await post(`/super/cajeros/${id}/aprobar`);
+    msg("#super-msg", "Cajero aprobado. Ya puede entrar en SUNMI.");
+    await cargarSuperAdmin();
+  } catch (e) { msg("#super-msg", e.message, false); }
+}
+async function rechazarCajeroSuper(id) {
+  const motivo = prompt("Motivo del rechazo (opcional):") || "";
+  if (motivo === null) return;
+  try {
+    await post(`/super/cajeros/${id}/rechazar`, { motivo: motivo || null });
+    msg("#super-msg", "Cajero rechazado.");
+    await cargarSuperAdmin();
+  } catch (e) { msg("#super-msg", e.message, false); }
+}
+async function cargarPermisosSuper() {
+  const id = $("#super-perm-sucursal").value;
+  if (!id) return;
+  const p = await api(`/super/permisos-sucursal/${id}`);
+  $("#super-permisos").innerHTML = SUPER_PERM_CAMPOS.map(([k, lbl]) =>
+    `<label class="check"><input type="checkbox" data-perm="${k}" ${p[k] ? "checked" : ""}> ${esc(lbl)}</label>`
+  ).join("");
+}
+async function guardarPermisosSuper() {
+  const id = $("#super-perm-sucursal").value;
+  if (!id) return;
+  const body = {};
+  SUPER_PERM_CAMPOS.forEach(([k]) => {
+    const el = document.querySelector(`[data-perm="${k}"]`);
+    body[k] = !!(el && el.checked);
+  });
+  try {
+    await put(`/super/permisos-sucursal/${id}`, body);
+    msg("#super-perm-msg", "Permisos guardados ✔");
+    await cargarSuperAdmin();
+  } catch (e) { msg("#super-perm-msg", e.message, false); }
 }
 
 async function cargarCatalogos() {
@@ -344,14 +509,17 @@ async function reactivarTerminal(id) {
 /* ----------------------------------------------------------------- usuarios */
 function pillEstadoUsuario(u) {
   const e = u.estado || (u.eliminado ? "ELIMINADO" : (u.activo ? "ACTIVO" : "BLOQUEADO"));
-  const cls = e === "ACTIVO" ? "activo" : (e === "ELIMINADO" ? "eliminado" : "bloqueado");
+  const cls = e === "ACTIVO" ? "activo"
+    : (e === "ELIMINADO" ? "eliminado"
+      : (e === "PENDIENTE" ? "pendiente" : "bloqueado"));
   return `<span class="pill ${cls}">${esc(e)}</span>`;
 }
 async function cargarUsuarios() {
+  aplicarVisibilidadRol();
   const filtro = ($("#usu-filtro") && $("#usu-filtro").value) || "";
   const ruta = filtro ? `/usuarios?estado=${encodeURIComponent(filtro)}` : "/usuarios";
   const usuarios = await api(ruta);
-  const soyAdmin = YO && YO.rol === "admin";
+  const soyAdmin = esAdminPanel();
   tabla("#usu-tabla", ["Nombre", "Usuario", "Rol", "Sucursal", "Caja", "Caja de prueba", "Estado", "Acciones"],
     usuarios.map((u) => {
       const suc = SUCURSALES.find((s) => s.id === u.sucursal_id);
@@ -361,7 +529,7 @@ async function cargarUsuarios() {
       if (!u.eliminado) {
         acciones += `<button class="btn fila" onclick="editarUsuario(${u.id})">EDITAR</button>`;
       }
-      if (soyAdmin && !u.eliminado) {
+      if (soyAdmin && !u.eliminado && u.rol !== "super_admin") {
         if (u.activo) {
           acciones += ` <button class="btn fila peligro" onclick="bloquearUsuario(${u.id})">BLOQUEAR</button>`;
         } else {
@@ -369,7 +537,7 @@ async function cargarUsuarios() {
         }
         acciones += ` <button class="btn fila peligro" onclick="eliminarUsuario(${u.id})">ELIMINAR</button>`;
       }
-      return `<tr><td>${esc(u.nombre)}</td><td>${esc(u.usuario)}</td><td>${esc(u.rol)}</td>
+      return `<tr><td>${esc(u.nombre)}</td><td>${esc(u.usuario)}</td><td>${esc(etiquetaRol(u.rol))}</td>
         <td>${esc(suc ? suc.nombre : "—")}</td><td>${caja}</td><td>${prueba}</td>
         <td>${pillEstadoUsuario(u)}</td>
         <td><div class="acciones-fila">${acciones || "—"}</div></td></tr>`;
@@ -389,9 +557,15 @@ function limpiarUsuario() {
 }
 async function guardarUsuario() {
   const id = $("#usu-id").value;
+  let sucursalId = $("#usu-sucursal").value ? parseInt($("#usu-sucursal").value) : null;
+  let rol = $("#usu-rol").value;
+  if (adminSucursalRestringido()) {
+    sucursalId = YO.sucursal_id || sucursalId;
+    if (!["operador", "supervisor"].includes(rol)) rol = "operador";
+  }
   const body = {
     nombre: $("#usu-nombre").value.trim(), usuario: $("#usu-usuario").value.trim(),
-    rol: $("#usu-rol").value, sucursal_id: $("#usu-sucursal").value ? parseInt($("#usu-sucursal").value) : null,
+    rol, sucursal_id: sucursalId,
     clave: $("#usu-clave").value || null, activo: $("#usu-activo").checked,
   };
   try {
@@ -1167,6 +1341,8 @@ function mostrarFondo(visible) {
     const boton = document.querySelector(`.navbtn[data-sec="${sec}"]`);
     if (boton) boton.hidden = !visible;
   }
+  const superBtn = $("#nav-super");
+  if (superBtn && !visible && !esSuperAdmin()) superBtn.hidden = true;
 }
 function nuevaOperacionFondo() {
   FONDO_OPERACION = ("fondo-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)).slice(0, 40);
@@ -1449,6 +1625,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-menu").addEventListener("click", alternarMenuMovil);
   $("#nav-fondo").addEventListener("click", cerrarMenuMovil);
   $$(".navbtn").forEach((b) => b.addEventListener("click", () => ir(b.dataset.sec)));
+  if ($("#btn-super-refrescar")) $("#btn-super-refrescar").addEventListener("click", () => cargarSuperAdmin().catch((e) => msg("#super-msg", e.message, false)));
+  if ($("#btn-super-perm-cargar")) $("#btn-super-perm-cargar").addEventListener("click", () => cargarPermisosSuper().catch((e) => msg("#super-perm-msg", e.message, false)));
+  if ($("#btn-super-perm-guardar")) $("#btn-super-perm-guardar").addEventListener("click", () => guardarPermisosSuper().catch((e) => msg("#super-perm-msg", e.message, false)));
   $("#btn-suc-guardar").addEventListener("click", guardarSucursal);
   $("#btn-suc-limpiar").addEventListener("click", limpiarSucursal);
   $("#btn-recargar").addEventListener("click", recargarSaldo);

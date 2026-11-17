@@ -13,6 +13,9 @@ MSG_ANULACION_VENCIDA = (
     "Solo el administrador puede anularlo desde el Panel del Consorcio."
 )
 MSG_USUARIO_BLOQUEADO = "USUARIO BLOQUEADO. CONTACTE AL ADMINISTRADOR."
+MSG_PENDIENTE_APROBACION = (
+    "Usuario pendiente de aprobación del Super Admin. No puede iniciar sesión todavía."
+)
 
 
 def D(valor) -> Decimal:

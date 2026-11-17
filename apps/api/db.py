@@ -146,6 +146,42 @@ def _columnas_faltantes():
                 conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} eliminado_por INTEGER"))
             if "motivo_eliminacion" not in cols:
                 conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} motivo_eliminacion VARCHAR(200)"))
+            if "suspendido" not in cols:
+                conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} suspendido {bandera}"))
+            if "estado_aprobacion" not in cols:
+                conn.execute(text(
+                    f"ALTER TABLE usuarios {_agregar_columna(eng)} estado_aprobacion "
+                    f"VARCHAR(20) NOT NULL DEFAULT 'aprobado'"
+                ))
+            for columna in ("solicitado_por", "aprobado_por", "rechazado_por"):
+                if columna not in cols:
+                    conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} {columna} INTEGER"))
+            for columna in ("solicitado_en", "aprobado_en", "rechazado_en"):
+                if columna not in cols:
+                    conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} {columna} TIMESTAMP"))
+            if "motivo_rechazo" not in cols:
+                conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} motivo_rechazo VARCHAR(200)"))
+            # Sanea filas previas: nadie queda pendiente por añadir la columna.
+            if eng.dialect.name == "postgresql":
+                conn.execute(text(
+                    "UPDATE usuarios SET estado_aprobacion='aprobado' "
+                    "WHERE estado_aprobacion IS NULL OR estado_aprobacion NOT IN "
+                    "('aprobado','pendiente','rechazado')"
+                ))
+            else:
+                conn.execute(text(
+                    "UPDATE usuarios SET estado_aprobacion='aprobado' "
+                    "WHERE estado_aprobacion IS NULL OR estado_aprobacion NOT IN "
+                    "('aprobado','pendiente','rechazado')"
+                ))
+    # permisos_sucursal se crea con create_all; sembrar defaults si faltan filas
+    if "permisos_sucursal" in insp.get_table_names() and "sucursales" in insp.get_table_names():
+        with eng.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO permisos_sucursal (sucursal_id) "
+                "SELECT id FROM sucursales s WHERE NOT EXISTS ("
+                "SELECT 1 FROM permisos_sucursal p WHERE p.sucursal_id = s.id)"
+            ))
     if "terminales" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("terminales")}
         with eng.begin() as conn:

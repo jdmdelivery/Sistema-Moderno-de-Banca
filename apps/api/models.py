@@ -46,13 +46,24 @@ class Usuario(Base):
     usuario = Column(String(60), nullable=False, unique=True)
     clave_hash = Column(String(255))  # acceso al panel (admin / supervisor)
     pin_hash = Column(String(255))  # acceso a la app de terminal (operador)
-    rol = Column(String(20), nullable=False, default="operador")  # admin|supervisor|operador
+    # super_admin|admin|supervisor|operador
+    rol = Column(String(20), nullable=False, default="operador")
     sucursal_id = Column(Integer, ForeignKey("sucursales.id"))
     activo = Column(Boolean, nullable=False, default=True)
+    suspendido = Column(Boolean, nullable=False, default=False)
     eliminado = Column(Boolean, nullable=False, default=False)
     eliminado_en = Column(DateTime)
     eliminado_por = Column(Integer, ForeignKey("usuarios.id"))
     motivo_eliminacion = Column(String(200))
+    # aprobado|pendiente|rechazado — existentes y semilla: aprobado
+    estado_aprobacion = Column(String(20), nullable=False, default="aprobado")
+    solicitado_por = Column(Integer, ForeignKey("usuarios.id"))
+    solicitado_en = Column(DateTime)
+    aprobado_por = Column(Integer, ForeignKey("usuarios.id"))
+    aprobado_en = Column(DateTime)
+    rechazado_por = Column(Integer, ForeignKey("usuarios.id"))
+    rechazado_en = Column(DateTime)
+    motivo_rechazo = Column(String(200))
     saldo_caja = Column(DINERO, nullable=False, default=0)
     saldo_caja_prueba = Column(DINERO, nullable=False, default=0)
     ciclo_caja_movimiento_id = Column(Integer)
@@ -60,6 +71,22 @@ class Usuario(Base):
     creado_en = Column(DateTime, nullable=False, default=ahora_local)
 
     sucursal = relationship("Sucursal", foreign_keys=[sucursal_id])
+
+
+class PermisoSucursal(Base):
+    """Flags configurables por el Super Admin. Defaults = comportamiento actual."""
+
+    __tablename__ = "permisos_sucursal"
+    sucursal_id = Column(Integer, ForeignKey("sucursales.id"), primary_key=True)
+    puede_crear_cajeros = Column(Boolean, nullable=False, default=True)
+    puede_asignar_fondos = Column(Boolean, nullable=False, default=True)
+    puede_registrar_entregas = Column(Boolean, nullable=False, default=True)
+    puede_ajustar_caja = Column(Boolean, nullable=False, default=True)
+    puede_configurar_limites = Column(Boolean, nullable=False, default=True)
+    puede_anular_tickets = Column(Boolean, nullable=False, default=True)
+    puede_ver_reportes = Column(Boolean, nullable=False, default=True)
+    actualizado_en = Column(DateTime)
+    actualizado_por = Column(Integer, ForeignKey("usuarios.id"))
 
 
 class Sesion(Base):

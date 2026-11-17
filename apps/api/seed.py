@@ -99,6 +99,7 @@ def sembrar_si_vacio(db):
             clave_hash=hash_clave("admin123"),
             rol="admin",
             activo=True,
+            estado_aprobacion="aprobado",
         )
     )
     for i, (nombre, hora_sorteo, hora_cierre) in enumerate(SORTEOS_SEMILLA, start=1):
