@@ -78,13 +78,13 @@ class PermisoSucursal(Base):
 
     __tablename__ = "permisos_sucursal"
     sucursal_id = Column(Integer, ForeignKey("sucursales.id"), primary_key=True)
-    puede_crear_cajeros = Column(Boolean, nullable=False, default=True)
-    puede_asignar_fondos = Column(Boolean, nullable=False, default=True)
-    puede_registrar_entregas = Column(Boolean, nullable=False, default=True)
-    puede_ajustar_caja = Column(Boolean, nullable=False, default=True)
-    puede_configurar_limites = Column(Boolean, nullable=False, default=True)
-    puede_anular_tickets = Column(Boolean, nullable=False, default=True)
-    puede_ver_reportes = Column(Boolean, nullable=False, default=True)
+    puede_crear_cajeros = Column(Boolean, nullable=False, default=True, server_default="true")
+    puede_asignar_fondos = Column(Boolean, nullable=False, default=True, server_default="true")
+    puede_registrar_entregas = Column(Boolean, nullable=False, default=True, server_default="true")
+    puede_ajustar_caja = Column(Boolean, nullable=False, default=True, server_default="true")
+    puede_configurar_limites = Column(Boolean, nullable=False, default=True, server_default="true")
+    puede_anular_tickets = Column(Boolean, nullable=False, default=True, server_default="true")
+    puede_ver_reportes = Column(Boolean, nullable=False, default=True, server_default="true")
     actualizado_en = Column(DateTime)
     actualizado_por = Column(Integer, ForeignKey("usuarios.id"))
 

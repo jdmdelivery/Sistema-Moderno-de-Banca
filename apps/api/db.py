@@ -177,9 +177,25 @@ def _columnas_faltantes():
     # permisos_sucursal se crea con create_all; sembrar defaults si faltan filas
     if "permisos_sucursal" in insp.get_table_names() and "sucursales" in insp.get_table_names():
         with eng.begin() as conn:
+            # Asegura DEFAULT TRUE en PG (create_all a veces omite server_default).
+            if eng.dialect.name == "postgresql":
+                for col in (
+                    "puede_crear_cajeros", "puede_asignar_fondos", "puede_registrar_entregas",
+                    "puede_ajustar_caja", "puede_configurar_limites", "puede_anular_tickets",
+                    "puede_ver_reportes",
+                ):
+                    conn.execute(text(
+                        f"ALTER TABLE permisos_sucursal ALTER COLUMN {col} SET DEFAULT TRUE"
+                    ))
+                    conn.execute(text(
+                        f"UPDATE permisos_sucursal SET {col}=TRUE WHERE {col} IS NULL"
+                    ))
             conn.execute(text(
-                "INSERT INTO permisos_sucursal (sucursal_id) "
-                "SELECT id FROM sucursales s WHERE NOT EXISTS ("
+                "INSERT INTO permisos_sucursal ("
+                "sucursal_id, puede_crear_cajeros, puede_asignar_fondos, puede_registrar_entregas, "
+                "puede_ajustar_caja, puede_configurar_limites, puede_anular_tickets, puede_ver_reportes"
+                ") SELECT id, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE FROM sucursales s "
+                "WHERE NOT EXISTS ("
                 "SELECT 1 FROM permisos_sucursal p WHERE p.sucursal_id = s.id)"
             ))
     if "terminales" in insp.get_table_names():
