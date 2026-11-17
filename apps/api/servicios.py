@@ -2142,17 +2142,12 @@ def _causa_king_pendiente(db, nombre, hoy):
         if detalle.get("fecha") and detalle.get("fecha") != hoy.isoformat():
             continue
         causa = detalle.get("causa") or "numeros_distintos"
-        if causa == "operador_aun_muestra_ayer":
-            return (
-                "RDLotto ya tiene verified de hoy, pero kinglotterysxm.com "
-                f"aún muestra {detalle.get('operador_fecha')} "
-                f"{detalle.get('operador')}. No se usa esa fecha."
-            )
-        if causa == "rdlotto_verified_sin_operador_hoy":
-            return (
-                "RDLotto verified disponible; el operador aún no publica "
-                "la fecha de hoy. Se mantiene PENDIENTE."
-            )
+        if causa == "operador_atrasado_acepta_rdlotto":
+            # Informativo: el reloj ya aceptó RDLotto verified de hoy.
+            continue
+        if causa in ("operador_aun_muestra_ayer", "rdlotto_verified_sin_operador_hoy"):
+            # Causas del código LIVE viejo; tras el fix local ya no bloquean.
+            continue
         if causa == "operador_hoy_sin_rdlotto_verified":
             return (
                 "El operador ya publicó hoy; falta RDLotto verified con "
@@ -4316,17 +4311,28 @@ def _bloque_periodo(db, desde, hasta, prueba, sucursal_id=None, usuario_id=None)
 
 
 def resumen_inicio(db, desde, hasta, sucursal_id=None):
-    """Resumen del panel. Reales y prueba viajan separados y esta lectura no escribe."""
+    """Resumen del panel. Reales y prueba viajan separados (auditoría); operativo es uno solo.
+
+    Lectura pura: no escribe ni altera es_prueba / MODO_DESARROLLO / tickets.
+    operativo = prueba si modo_desarrollo(), si no = reales. Nunca suma ambos.
+    """
     if hasta < desde:
         raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+    reales = _bloque_periodo(db, desde, hasta, False, sucursal_id)
+    prueba = _bloque_periodo(db, desde, hasta, True, sucursal_id)
+    en_desarrollo = modo_desarrollo()
+    operativo = prueba if en_desarrollo else reales
     return {
         "zona": "America/Santo_Domingo",
         "hoy": ahora_local().date().isoformat(),
         "desde": desde.isoformat(),
         "hasta": hasta.isoformat(),
         "sucursal_id": sucursal_id,
-        "reales": _bloque_periodo(db, desde, hasta, False, sucursal_id),
-        "prueba": _bloque_periodo(db, desde, hasta, True, sucursal_id),
+        "reales": reales,
+        "prueba": prueba,
+        "operativo": operativo,
+        "ledger_operativo": "prueba" if en_desarrollo else "reales",
+        "modo_desarrollo": en_desarrollo,
     }
 
 

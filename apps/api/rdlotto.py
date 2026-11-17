@@ -122,7 +122,8 @@ def _premios(numbers):
         nums = [int(x) for x in numbers[:3]]
     except (TypeError, ValueError):
         return None
-    if any(n < 0 or n > 99 for n in nums) or len(set(nums)) != 3:
+    # Se permiten repeticiones; solo se exige formato y rango 0–99.
+    if any(n < 0 or n > 99 for n in nums):
         return None
     return nums
 

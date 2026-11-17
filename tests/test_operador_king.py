@@ -121,6 +121,29 @@ def test_rdlotto_exige_verified_sesion_y_hora():
     assert leidos[(DIA, HOY)]["numeros"] == (1, 55, 2)
 
 
+def test_triple_acepta_repetidos_y_rechaza_invalidos():
+    assert operador_king._triple([27, 21, 21]) == (27, 21, 21)
+    assert operador_king._triple([53, 9, 9]) == (53, 9, 9)
+    assert operador_king._triple([21, 21, 21]) == (21, 21, 21)
+    assert operador_king._triple([0, 0, 0]) == (0, 0, 0)
+    assert operador_king._triple([87, 40, 9]) == (87, 40, 9)
+    assert operador_king._triple([1, 2, 100]) is None
+    assert operador_king._triple([1, 2]) is None
+    assert operador_king._triple(None) is None
+
+
+def test_confirma_king_con_numeros_repetidos():
+    html = _html(dia=((53, 9, 9), HOY), noche=((0, 0, 0), HOY))
+    doc = _rd(_draw("dia", HOY, (53, 9, 9)), _draw("noche", HOY, (0, 0, 0)))
+    aceptados, aviso, difs = operador_king.confirmar(HOY, html=html, documento=doc)
+    assert aviso is None
+    assert difs == []
+    assert aceptados[DIA]["numeros"] == (53, 9, 9)
+    assert aceptados[NOCHE]["numeros"] == (0, 0, 0)
+    assert aceptados[DIA]["fecha"] == HOY
+    assert aceptados[NOCHE]["fecha"] == HOY
+
+
 def test_coincide_dia_y_noche_sigue_pendiente_si_es_de_ayer():
     html = _html(dia=((1, 55, 2), HOY), noche=((31, 5, 30), AYER))
     doc = _rd(_draw("dia", HOY, (1, 55, 2)))
@@ -143,17 +166,16 @@ def test_fecha_incorrecta_no_confirma_hoy():
 
 def test_horarios_cruzados_no_mezclan_sesiones():
     # Operador publica día; RDLotto trae esos números en sesión noche.
+    # Cada sesión se evalúa sola: noche puede entrar por RDLotto; día sigue
+    # pendiente (operador sin verified de día).
     html = _html(dia=((1, 55, 2), HOY), noche=None)
     doc = _rd(_draw("noche", HOY, (1, 55, 2)))
     aceptados, _, difs = operador_king.confirmar(HOY, html=html, documento=doc)
-    assert aceptados == {}
-    # No se mezclan sesiones: quedan diagnósticos, cero confirmaciones.
-    assert all(d["sorteo"] in (DIA, NOCHE) for d in difs)
-    assert {d.get("causa") for d in difs} <= {
-        "operador_hoy_sin_rdlotto_verified",
-        "rdlotto_verified_sin_operador_hoy",
-        "operador_aun_muestra_ayer",
-    }
+    assert set(aceptados) == {NOCHE}
+    assert aceptados[NOCHE]["numeros"] == (1, 55, 2)
+    assert aceptados[NOCHE]["origen"] == "rdlotto"
+    assert DIA not in aceptados
+    assert any(d.get("causa") == "operador_hoy_sin_rdlotto_verified" for d in difs)
 
 
 def test_numeros_diferentes_registran_discrepancia():
@@ -167,18 +189,29 @@ def test_numeros_diferentes_registran_discrepancia():
     assert difs[0]["rdlotto"] == [9, 8, 7]
 
 
-def test_operador_sin_publicacion_deja_pendiente():
+def test_rdlotto_verified_sin_operador_confirma():
     html = _html(dia=None, noche=None)
     doc = _rd(_draw("dia", HOY, (1, 55, 2)))
     aceptados, _, difs = operador_king.confirmar(HOY, html=html, documento=doc)
-    assert aceptados == {}
-    assert len(difs) == 1
-    assert difs[0]["sorteo"] == DIA
-    assert difs[0]["causa"] == "rdlotto_verified_sin_operador_hoy"
-    assert difs[0]["rdlotto"] == [1, 55, 2]
+    assert set(aceptados) == {DIA}
+    assert aceptados[DIA]["numeros"] == (1, 55, 2)
+    assert aceptados[DIA]["origen"] == "rdlotto"
+    assert difs == []
 
 
-def test_operador_sin_conexion_deja_pendiente(monkeypatch):
+def test_operador_atrasado_acepta_rdlotto_hoy():
+    """Caso LIVE: sitio oficial muestra ayer; RDLotto ya verified hoy."""
+    html = _html(dia=((1, 55, 2), AYER), noche=((31, 5, 30), AYER - timedelta(days=1)))
+    doc = _rd(_draw("dia", HOY, (45, 0, 18)))
+    aceptados, _, difs = operador_king.confirmar(HOY, html=html, documento=doc)
+    assert set(aceptados) == {DIA}
+    assert aceptados[DIA]["numeros"] == (45, 0, 18)
+    assert aceptados[DIA]["origen"] == "rdlotto"
+    assert aceptados[DIA]["fecha"] == HOY
+    assert any(d.get("causa") == "operador_atrasado_acepta_rdlotto" for d in difs)
+
+
+def test_operador_sin_conexion_usa_rdlotto(monkeypatch):
     monkeypatch.setattr(
         operador_king, "descargar_operador",
         lambda: ("", "operador king sin respuesta"),
@@ -188,7 +221,8 @@ def test_operador_sin_conexion_deja_pendiente(monkeypatch):
         lambda hoy: (_rd(_draw("dia", hoy, (1, 55, 2))), None),
     )
     aceptados, aviso, difs = operador_king.confirmar_ventana(HOY)
-    assert aceptados == {}
+    assert set(aceptados) == {DIA}
+    assert aceptados[DIA]["origen"] == "rdlotto"
     assert "sin respuesta" in (aviso or "")
     assert difs == []
 

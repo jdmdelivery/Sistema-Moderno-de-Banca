@@ -489,8 +489,9 @@ async function cargarInicio(desde, hasta, chip) {
   $("#ini-desde").value = r.desde;
   $("#ini-hasta").value = r.hasta;
   $("#inicio-periodo").textContent = `${r.desde} → ${r.hasta} · ${r.zona}`;
-  $("#inicio-reales").innerHTML = tarjetasInicio(r.reales);
-  $("#inicio-prueba").innerHTML = tarjetasInicio(r.prueba);
+  // Una sola fila: ledger operativo (prueba si MODO_DESARROLLO, si no reales). No suma ambos.
+  const operativo = r.operativo || (r.modo_desarrollo ? r.prueba : r.reales) || r.reales;
+  $("#inicio-operativo").innerHTML = tarjetasInicio(operativo);
   if (chip !== undefined) marcarChipInicio(chip || null);
   else if (!desde && !hasta) marcarChipInicio("hoy");
   msg("#inicio-msg", "");

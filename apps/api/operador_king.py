@@ -1,10 +1,18 @@
-"""King Lottery: operador oficial cruzado con RDLotto.
+"""King Lottery: RDLotto verified + contraste con el operador oficial.
 
-Fuente del operador: https://www.kinglotterysxm.com/
-Solo Quiniela SXM (día 12:30 y noche 7:30). Pick 3, Pick 4, Loto Pool y
-Philipsburg no entran. RDLotto solo se consulta para
-`king-lottery-quiniela` con estado `verified`. Sin coincidencia exacta
-de fecha, sesión, hora y tres números el sorteo queda pendiente.
+Fuentes:
+- RDLotto `king-lottery-quiniela` con status `verified` (fecha, sesión, hora).
+- Operador https://www.kinglotterysxm.com/ (Quiniela SXM día/noche).
+
+Conéctate widget no publica King; no se inventan números del widget.
+
+Regla:
+- Si RDLotto trae verified de hoy con sesión/hora correctas, se acepta.
+- Si el operador ya publicó hoy y los números difieren, se rechaza.
+- Si el operador solo muestra ayer o aún no publica, no se usa esa fecha:
+  manda el verified de hoy de RDLotto (origen `rdlotto`).
+- Si solo hay operador sin RDLotto verified, queda pendiente.
+- Pick 3, Pick 4, Loto Pool y Philipsburg no entran.
 """
 import json
 import os
@@ -55,6 +63,7 @@ def es_king(nombre):
 
 
 def _triple(valor):
+    """Tres enteros 0–99. Se permiten repeticiones (p. ej. 53-09-09, 00-00-00)."""
     if not isinstance(valor, (list, tuple)) or len(valor) != 3:
         return None
     try:
@@ -62,8 +71,6 @@ def _triple(valor):
     except (TypeError, ValueError):
         return None
     if any(n < 0 or n > 99 for n in numeros):
-        return None
-    if len(set(numeros)) != 3:
         return None
     return numeros
 
@@ -162,11 +169,12 @@ def leer_rdlotto(documento, hoy):
 
 
 def cruzar(operador, rdlotto, hoy):
-    """Acepta solo fecha de hoy, sesión y tres números idénticos.
+    """Acepta verified de hoy; no usa números de ayer para tickets de hoy.
 
-    Un resultado fechado ayer no confirma el sorteo de hoy, aunque el
-    sitio todavía lo muestre en la portada. Si RDLotto ya trae verified
-    de hoy y el operador aún no, se anota la causa sin inventar números.
+    RDLotto verified de hoy con sesión/hora exactas es la base. El operador
+    confirma cuando coincide. Si el sitio oficial aún muestra ayer o no ha
+    publicado, no se bloquea el verified de hoy: se acepta con origen
+    `rdlotto`. Si el operador ya publicó hoy con otros números, se rechaza.
     """
     if not isinstance(hoy, date):
         return {}, []
@@ -179,22 +187,10 @@ def cruzar(operador, rdlotto, hoy):
         contraste = (rdlotto or {}).get(clave)
         if oficial is None and contraste is None:
             continue
-        if oficial is None and contraste is not None:
-            # Busca si el operador todavía muestra la sesión de ayer.
-            ayer = (operador or {}).get((nombre, hoy - timedelta(days=1)))
-            detalle = {
-                "sorteo": nombre,
-                "fecha": hoy.isoformat(),
-                "sesion": sesion,
-                "causa": "rdlotto_verified_sin_operador_hoy",
-                "rdlotto": list(contraste["numeros"]),
-            }
-            if ayer is not None:
-                detalle["operador_fecha"] = (hoy - timedelta(days=1)).isoformat()
-                detalle["operador"] = list(ayer["numeros"])
-                detalle["causa"] = "operador_aun_muestra_ayer"
-            discrepancias.append(detalle)
-            continue
+        if contraste is not None and contraste.get("sesion") != sesion:
+            contraste = None
+        if oficial is not None and oficial.get("sesion") != sesion:
+            oficial = None
         if contraste is None and oficial is not None:
             discrepancias.append({
                 "sorteo": nombre,
@@ -204,23 +200,45 @@ def cruzar(operador, rdlotto, hoy):
                 "operador": list(oficial["numeros"]),
             })
             continue
-        if oficial.get("sesion") != sesion or contraste.get("sesion") != sesion:
+        if contraste is None:
             continue
-        if oficial["numeros"] != contraste["numeros"]:
+        if oficial is not None:
+            if oficial["numeros"] != contraste["numeros"]:
+                discrepancias.append({
+                    "sorteo": nombre,
+                    "fecha": hoy.isoformat(),
+                    "sesion": sesion,
+                    "causa": "numeros_distintos",
+                    "operador": list(oficial["numeros"]),
+                    "rdlotto": list(contraste["numeros"]),
+                })
+                continue
+            aceptados[nombre] = {
+                "fecha": hoy,
+                "numeros": oficial["numeros"],
+                "titulo": nombre,
+                "origen": "operador",
+            }
+            continue
+        # RDLotto verified de hoy; operador ausente o solo con fecha vieja.
+        ayer = (operador or {}).get((nombre, hoy - timedelta(days=1)))
+        origen = "rdlotto"
+        if ayer is not None:
+            # Diagnóstico informativo: no bloquea el verified de hoy.
             discrepancias.append({
                 "sorteo": nombre,
                 "fecha": hoy.isoformat(),
                 "sesion": sesion,
-                "causa": "numeros_distintos",
-                "operador": list(oficial["numeros"]),
+                "causa": "operador_atrasado_acepta_rdlotto",
                 "rdlotto": list(contraste["numeros"]),
+                "operador_fecha": (hoy - timedelta(days=1)).isoformat(),
+                "operador": list(ayer["numeros"]),
             })
-            continue
         aceptados[nombre] = {
             "fecha": hoy,
-            "numeros": oficial["numeros"],
+            "numeros": contraste["numeros"],
             "titulo": nombre,
-            "origen": "operador",
+            "origen": origen,
         }
     return aceptados, discrepancias
 
@@ -263,15 +281,15 @@ def descargar_rdlotto(hoy):
 
 
 def confirmar(hoy, html=None, documento=None):
-    """Cruce operador + RDLotto. html/documento permiten probar sin red."""
+    """RDLotto verified (+ operador si coincide). html/documento = pruebas."""
     if not isinstance(hoy, date):
         return {}, "operador king no disponible", []
     aviso = None
     if html is None:
         html, err = descargar_operador()
         aviso = err
-        if err and not html:
-            return {}, aviso, []
+        # Sin HTML del operador aún se puede confirmar con RDLotto verified.
+        html = html or ""
     if documento is None:
         documento, err_rd = descargar_rdlotto(hoy)
         aviso = aviso or err_rd

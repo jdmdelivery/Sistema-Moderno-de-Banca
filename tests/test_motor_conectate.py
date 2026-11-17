@@ -58,6 +58,69 @@ def test_no_hay_tripleta():
     assert codigos == {"QN", "PL", "SP", "TR"}
 
 
+def test_numeros_acepta_repetidos_y_rechaza_formato_invalido():
+    assert conectate_widget._numeros(["27", "21", "21"]) == (27, 21, 21)
+    assert conectate_widget._numeros(["21", "21", "21"]) == (21, 21, 21)
+    assert conectate_widget._numeros(["00", "00", "00"]) == (0, 0, 0)
+    assert conectate_widget._numeros(["87", "40", "09"]) == (87, 40, 9)
+    assert conectate_widget._numeros(["51", "76", "85"]) == (51, 76, 85)
+    assert conectate_widget._numeros(["1", "2"]) is None
+    assert conectate_widget._numeros(["1", "2", "100"]) is None
+    assert conectate_widget._numeros(["a", "2", "3"]) is None
+    assert conectate_widget._numeros(None) is None
+
+
+def test_interpretar_new_york_tarde_y_noche_con_repetidos():
+    hoy = datetime(2026, 11, 16).date()
+    payload = [
+        _item("New York Tarde", (87, 40, 9), dia="16-11"),
+        _item("New York Noche", (27, 21, 21), dia="16-11"),
+    ]
+    hallados, error = conectate_widget.interpretar(payload, hoy)
+    assert error is None
+    assert hallados["New York 3:30 PM"]["numeros"] == (87, 40, 9)
+    assert hallados["New York 11:30 PM"]["numeros"] == (27, 21, 21)
+
+
+def test_ny_noche_con_repetidos_confirma_y_liquida(entorno, fijar_hora):
+    b = entorno.banca(saldo=100000)
+    s = entorno.sorteo_id("New York 11:30 PM")
+    ticket = entorno.vender_ok(
+        b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "27", "monto": 5}],
+    )
+    caja = entorno.saldo(b["sucursal"]["id"])
+    base = datetime(2026, 11, 14, 23, 35)
+    marcas = _pasar(entorno, fijar_hora, "New York 11:30 PM", (27, 21, 21), [
+        base, base.replace(minute=37), base.replace(minute=39),
+    ])
+    assert marcas == ["provisional", "provisional", "confirmado"]
+    # El salto de reloj vence el JWT; renovar como en test_venta.
+    admin = entorno.c.post("/auth/login", json={"usuario": "admin", "clave": "admin123"})
+    assert admin.status_code == 200
+    entorno.admin = {"Authorization": f"Bearer {admin.json()['token']}"}
+    consulta = entorno.consultar(ticket)
+    assert consulta["estado"] == "ganador"
+    assert consulta["premio_total"] == "300.00"
+    assert consulta["puede_pagar"] is True
+    assert entorno.saldo(b["sucursal"]["id"]) == caja
+    fijar_hora(datetime(2026, 11, 14, 23, 50))
+    bien = resultados_auto.ciclo(forzar=True, payload=[
+        _item("New York Tarde", (87, 40, 9), dia="14-11"),
+        _item("New York Noche", (27, 21, 21), dia="14-11"),
+        _item("New York Noche", (0, 0, 0), dia="13-11"),
+    ])
+    assert bien["ok"] is True
+    db = dbmod.nueva_sesion()
+    filas = {
+        (fila.sorteo.nombre, fila.fecha): (fila.premio1, fila.premio2, fila.premio3)
+        for fila in db.query(Resultado).join(Sorteo)
+    }
+    assert filas[("New York 11:30 PM", datetime(2026, 11, 14).date())] == (27, 21, 21)
+    assert filas[("New York 3:30 PM", datetime(2026, 11, 14).date())] == (87, 40, 9)
+    assert filas[("New York 11:30 PM", datetime(2026, 11, 13).date())] == (0, 0, 0)
+    db.close()
+
+
 def test_tres_lecturas_iguales_y_cuatro_minutos_dejan_el_premio_pendiente(entorno, fijar_hora):
     b = entorno.banca(saldo=100000)
     s = entorno.sorteo_id("La Primera 12:00 PM")

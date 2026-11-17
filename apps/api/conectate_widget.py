@@ -167,13 +167,14 @@ def fecha_widget(texto, hoy):
 
 
 def _numeros(score):
+    """Tres enteros 0–99. Se permiten repeticiones (p. ej. NY Win4 2121 → 21-21)."""
     if not isinstance(score, (list, tuple)) or len(score) < 3:
         return None
     try:
         numeros = tuple(int(score[i]) for i in range(3))
     except (TypeError, ValueError):
         return None
-    if any(n < 0 or n > 99 for n in numeros) or len(set(numeros)) != 3:
+    if any(n < 0 or n > 99 for n in numeros):
         return None
     return numeros
 
