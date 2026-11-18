@@ -32,7 +32,10 @@
     <span class="sub" id="marca-sub">Panel del Consorcio</span>
     <span class="suc-chip" id="yo-sucursal" hidden></span>
   </div>
-  <div class="sesion"><span id="yo-nombre"></span> <button id="btn-salir" class="btn chico">Salir</button></div>
+  <div class="sesion">
+    <span id="yo-nombre"></span>
+    <button id="btn-salir" class="btn chico">SALIR</button>
+  </div>
 </header>
 
 <div id="nav-fondo" class="nav-fondo" hidden></div>
@@ -129,13 +132,15 @@
       <button type="button" id="ini-ayer" class="btn" data-rango="ayer">AYER</button>
       <button type="button" id="ini-quince" class="btn" data-rango="quince">15 DÍAS</button>
     </div>
-    <label class="solo-escritorio">DESDE<input id="ini-desde" type="date"></label>
-    <label class="solo-escritorio">HASTA<input id="ini-hasta" type="date"></label>
-    <button type="button" id="ini-consultar" class="btn primario solo-escritorio">CONSULTAR</button>
+    <div class="inicio-rango">
+      <label>DESDE<input id="ini-desde" type="date"></label>
+      <label>HASTA<input id="ini-hasta" type="date"></label>
+      <button type="button" id="ini-consultar" class="btn primario">CONSULTAR</button>
+    </div>
     <p id="inicio-msg" class="msg"></p>
   </div>
   <p id="inicio-periodo" class="nota inicio-periodo"></p>
-  <div id="inicio-operativo" class="cards" data-bloque="operativo" aria-label="Resumen financiero"></div>
+  <div id="inicio-operativo" class="cards cards-inicio" data-bloque="operativo" aria-label="Resumen financiero"></div>
   <p class="nota solo-escritorio">PostgreSQL está en el plan gratuito de Render. Ese plan vence y no hace respaldos por sí solo. Exporte una copia de la base antes del vencimiento y antes de usar dinero real.</p>
 </section>
 
@@ -183,9 +188,14 @@
 </section>
 
 <section id="sec-usuarios" class="seccion">
-  <h2>Usuarios</h2>
-  <p class="nota">EDITAR, BLOQUEAR, DESBLOQUEAR y ELIMINAR. BLOQUEAR corta el acceso al instante. ELIMINAR pide confirmación: sin historial se borra; con historial queda ELIMINADO y se conservan tickets, pagos y saldos.</p>
-  <div class="form">
+  <div class="usu-hero" aria-label="Usuarios">
+    <span class="usu-hero-ico" aria-hidden="true">👤</span>
+    <div class="usu-hero-txt">
+      <h2>Usuarios</h2>
+      <p class="nota">EDITAR, BLOQUEAR, DESBLOQUEAR y ELIMINAR. BLOQUEAR corta el acceso al instante. ELIMINAR pide confirmación: sin historial se borra; con historial queda ELIMINADO y se conservan tickets, pagos y saldos.</p>
+    </div>
+  </div>
+  <div class="form usu-filtro">
     <label>Estado<select id="usu-filtro">
       <option value="">Operativos</option>
       <option value="activos">ACTIVOS</option>

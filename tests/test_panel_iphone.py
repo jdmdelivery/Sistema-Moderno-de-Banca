@@ -19,6 +19,11 @@ def test_css_menu_movil_bloquea_scroll_del_dashboard(entorno):
     assert "bloquearScrollFondo" in js
     assert "menu-abierto" in js
     assert "MENU_SCROLL_Y" in js
+    assert "MENU_SCROLL_BLOQUEADO" in js
+    assert "onResizeMenu" in js
+    # No re-sincronizar menú en cada resize (barra URL móvil provocaba scrollTo(0)).
+    assert "sincronizarEstadoMenuInicial();" not in js.split("window.addEventListener(\"resize\"")[1][:120]
+    assert "onResizeMenu" in js.split("window.addEventListener(\"resize\"")[1][:80]
 
 
 def test_html_tiene_viewport_fit_cover_y_pwa(entorno):
@@ -50,21 +55,48 @@ def test_login_sin_sesion_oculta_panel(entorno):
     assert "background:var(--fondo)" in css or "background: var(--fondo)" in css
 
 
-def test_dashboard_movil_oculta_calendarios_y_mantiene_chips(entorno):
+def test_dashboard_movil_calendarios_visibles_y_chips(entorno):
     html = entorno.c.get("/").text
     css = entorno.c.get("/static/style.css").text
     js = entorno.c.get("/static/app.js").text
     assert 'id="ini-hoy"' in html and 'id="ini-ayer"' in html and 'id="ini-quince"' in html
-    assert 'id="ini-desde"' in html and 'id="ini-hasta"' in html
-    assert "solo-escritorio" in html
+    assert 'id="ini-desde"' in html and 'id="ini-hasta"' in html and 'id="ini-consultar"' in html
+    # DESDE/HASTA/CONSULTAR visibles también en móvil (ya no solo-escritorio).
+    inicio = html.split('id="sec-inicio"')[1].split("</section>")[0]
+    assert 'class="inicio-rango"' in inicio or "inicio-rango" in inicio
+    assert 'id="ini-desde"' in inicio and "solo-escritorio" not in inicio.split('id="ini-desde"')[0][-80:]
     assert ".solo-escritorio{display:none" in css.replace(" ", "")
     assert "inicio-chips" in css
+    assert "inicio-rango" in css
     assert "consultarPeriodo" in js
-    # Sin encabezado ruidoso de PRUEBA en el Dashboard; los bloques siguen separados.
+    assert "HASTA no puede ser anterior a DESDE" in js
+    # Dashboard unificado: una sola sección operativa (sin Reales / Separados).
     assert '<h3>PRUEBA</h3>' not in html
-    assert 'data-bloque="prueba"' in html
-    assert 'id="inicio-prueba"' in html
-    assert "MODO DESARROLLO" not in html.split('id="sec-inicio"')[1].split("</section>")[0]
+    assert "Separados de reales" not in html
+    assert '<h3>Reales</h3>' not in inicio
+    assert 'id="inicio-operativo"' in html
+    assert 'data-bloque="operativo"' in html
+    assert "MODO DESARROLLO" not in inicio
+
+
+def test_usuarios_tarjetas_movil_y_tabla_escritorio(entorno):
+    html = entorno.c.get("/").text
+    css = entorno.c.get("/static/style.css").text
+    js = entorno.c.get("/static/app.js").text
+    assert 'id="sec-usuarios"' in html
+    assert "usu-hero" in html
+    assert "tarjetaUsuarioHtml" in js
+    assert "usu-lista-movil" in js and "usu-tabla-escritorio" in js
+    assert "htmlAccionesUsuario" in js
+    assert "editarUsuario(" in js and "bloquearUsuario(" in js
+    assert "desbloquearUsuario(" in js and "eliminarUsuario(" in js
+    # Sin IDs duplicados de formulario; acciones reutilizan handlers globales.
+    assert js.count('id="usu-id"') == 0  # ids viven en HTML, no se regeneran en JS
+    assert "usu-lista-movil" in css and "usu-card" in css
+    compact = css.replace(" ", "").replace("\r", "")
+    assert "#sec-usuarios.usu-lista-movil{display:flex" in compact
+    assert "#sec-usuarios.usu-tabla-escritorio{display:none" in compact
+    assert "@media(min-width:641px)" in compact
 
 
 def test_fuente_resultados_es_conectate(entorno):

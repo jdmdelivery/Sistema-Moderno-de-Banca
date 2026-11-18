@@ -217,29 +217,41 @@ async function restaurarSesion() {
 /* --------------------------------------------------------------------- nav */
 let GANADORES_RELOJ = null;
 let MENU_SCROLL_Y = 0;
+let MENU_SCROLL_BLOQUEADO = false;
+let MENU_ES_ESCRITORIO = null;
 
 function esEscritorioMenu() {
   return window.matchMedia("(min-width: 901px)").matches;
 }
 
-/** Bloquea el scroll del Dashboard detrás del menú móvil (Safari iPhone). */
+/** Bloquea el scroll del Dashboard detrás del menú móvil (Safari iPhone).
+ *  Solo restaura scrollTo cuando realmente se desbloqueó el fondo.
+ *  No debe ejecutarse en cada resize (barra URL iOS/Android). */
 function bloquearScrollFondo(activo) {
   if (esEscritorioMenu()) {
-    document.documentElement.classList.remove("menu-abierto");
-    document.body.classList.remove("menu-abierto");
-    document.body.style.top = "";
+    if (MENU_SCROLL_BLOQUEADO) {
+      document.documentElement.classList.remove("menu-abierto");
+      document.body.classList.remove("menu-abierto");
+      document.body.style.top = "";
+      MENU_SCROLL_BLOQUEADO = false;
+    }
     return;
   }
   if (activo) {
+    if (MENU_SCROLL_BLOQUEADO) return;
     MENU_SCROLL_Y = window.scrollY || window.pageYOffset || 0;
     document.documentElement.classList.add("menu-abierto");
     document.body.classList.add("menu-abierto");
     document.body.style.top = "-" + MENU_SCROLL_Y + "px";
+    MENU_SCROLL_BLOQUEADO = true;
   } else {
+    if (!MENU_SCROLL_BLOQUEADO) return;
     document.documentElement.classList.remove("menu-abierto");
     document.body.classList.remove("menu-abierto");
     document.body.style.top = "";
-    window.scrollTo(0, MENU_SCROLL_Y);
+    MENU_SCROLL_BLOQUEADO = false;
+    const y = MENU_SCROLL_Y;
+    window.requestAnimationFrame(() => window.scrollTo(0, y));
   }
 }
 
@@ -248,15 +260,15 @@ function setMenuAbierto(abierto) {
   const fondo = $("#nav-fondo");
   const btn = $("#btn-menu");
   if (!nav) return;
-  nav.classList.toggle("abierto", abierto);
+  nav.classList.toggle("abierto", !!abierto);
   document.body.classList.toggle("sidebar-colapsado", esEscritorioMenu() && !abierto);
   if (fondo) {
-    const showFondo = abierto && !esEscritorioMenu();
+    const showFondo = !!abierto && !esEscritorioMenu();
     fondo.classList.toggle("abierto", showFondo);
     fondo.hidden = !showFondo;
   }
   if (btn) btn.setAttribute("aria-expanded", abierto ? "true" : "false");
-  bloquearScrollFondo(abierto && !esEscritorioMenu());
+  bloquearScrollFondo(!!abierto && !esEscritorioMenu());
 }
 function cerrarMenuMovil() {
   if (esEscritorioMenu()) return;
@@ -270,10 +282,20 @@ function alternarMenuMovil() {
 function sincronizarEstadoMenuInicial() {
   if (!TOKEN) {
     setMenuAbierto(false);
+    MENU_ES_ESCRITORIO = esEscritorioMenu();
     return;
   }
   // Celular: cerrado. Escritorio: abierto.
-  setMenuAbierto(esEscritorioMenu());
+  MENU_ES_ESCRITORIO = esEscritorioMenu();
+  setMenuAbierto(MENU_ES_ESCRITORIO);
+}
+/** Solo reacciona al cruzar el breakpoint; ignora resize de barra URL al scroll. */
+function onResizeMenu() {
+  if (!TOKEN) return;
+  const ahora = esEscritorioMenu();
+  if (MENU_ES_ESCRITORIO === ahora) return;
+  MENU_ES_ESCRITORIO = ahora;
+  sincronizarEstadoMenuInicial();
 }
 function ir(sec) {
   if (!puedeVerSeccion(sec)) {
@@ -585,35 +607,87 @@ function pillEstadoUsuario(u) {
       : (e === "PENDIENTE" ? "pendiente" : "bloqueado"));
   return `<span class="pill ${cls}">${esc(e)}</span>`;
 }
+function estadoUsuarioClave(u) {
+  return u.estado || (u.eliminado ? "ELIMINADO" : (u.activo ? "ACTIVO" : "BLOQUEADO"));
+}
+function inicialesUsuario(nombre) {
+  const limpio = String(nombre || "").replace(/[()[\]{}.,;:_/-]+/g, " ").trim();
+  const partes = limpio.split(/\s+/).filter((p) => /[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]/.test(p));
+  if (!partes.length) return "?";
+  const letra = (p) => (p.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]/) || ["?"])[0];
+  if (partes.length === 1) return (letra(partes[0]) + (partes[0].match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]/g) || ["?"])[1] || "").toUpperCase();
+  return (letra(partes[0]) + letra(partes[1])).toUpperCase();
+}
+/** Misma lógica de permisos/acciones; solo cambia la clase visual del botón. */
+function htmlAccionesUsuario(u, soyAdmin, clsBtn) {
+  let acciones = "";
+  if (!u.eliminado) {
+    acciones += `<button type="button" class="${clsBtn}" onclick="editarUsuario(${u.id})">EDITAR</button>`;
+  }
+  if (soyAdmin && !u.eliminado && u.rol !== "super_admin") {
+    if (u.activo) {
+      acciones += `<button type="button" class="${clsBtn} peligro" onclick="bloquearUsuario(${u.id})">BLOQUEAR</button>`;
+    } else {
+      acciones += `<button type="button" class="${clsBtn} primario" onclick="desbloquearUsuario(${u.id})">DESBLOQUEAR</button>`;
+    }
+    acciones += `<button type="button" class="${clsBtn} peligro" onclick="eliminarUsuario(${u.id})">ELIMINAR</button>`;
+  }
+  return acciones;
+}
+function tarjetaUsuarioHtml(u, soyAdmin) {
+  const suc = SUCURSALES.find((s) => s.id === u.sucursal_id);
+  const caja = u.saldo_caja == null ? "—" : fmt(u.saldo_caja);
+  const prueba = u.saldo_caja_prueba == null ? "—" : fmt(u.saldo_caja_prueba);
+  const estado = estadoUsuarioClave(u);
+  const clsEstado = estado === "ACTIVO" ? "activo"
+    : (estado === "ELIMINADO" ? "eliminado"
+      : (estado === "PENDIENTE" ? "pendiente" : "bloqueado"));
+  const acciones = htmlAccionesUsuario(u, soyAdmin, "btn usu-accion");
+  return `<article class="usu-card" data-usuario-id="${u.id}">
+    <div class="usu-card-top">
+      <div class="usu-avatar" aria-hidden="true">${esc(inicialesUsuario(u.nombre))}</div>
+      <div class="usu-card-id">
+        <div class="usu-card-nombre">${esc(u.nombre)}</div>
+        <div class="usu-card-meta">${esc(u.usuario)} · ${esc(etiquetaRol(u.rol))}</div>
+      </div>
+      <span class="usu-estado ${clsEstado}"><span class="usu-estado-dot"></span>${esc(estado)}</span>
+    </div>
+    <div class="usu-card-grid">
+      <div><span class="k">Sucursal</span><b>${esc(suc ? suc.nombre : "—")}</b></div>
+      <div><span class="k">Caja</span><b>${caja}</b></div>
+      <div><span class="k">Caja de prueba</span><b>${prueba}</b></div>
+    </div>
+    <div class="usu-card-acciones">${acciones || '<span class="nota">—</span>'}</div>
+  </article>`;
+}
 async function cargarUsuarios() {
   aplicarVisibilidadRol();
   const filtro = ($("#usu-filtro") && $("#usu-filtro").value) || "";
   const ruta = filtro ? `/usuarios?estado=${encodeURIComponent(filtro)}` : "/usuarios";
   const usuarios = await api(ruta);
   const soyAdmin = esAdminPanel();
-  tabla("#usu-tabla", ["Nombre", "Usuario", "Rol", "Sucursal", "Caja", "Caja de prueba", "Estado", "Acciones"],
-    usuarios.map((u) => {
-      const suc = SUCURSALES.find((s) => s.id === u.sucursal_id);
-      const caja = u.saldo_caja == null ? "—" : fmt(u.saldo_caja);
-      const prueba = u.saldo_caja_prueba == null ? "—" : fmt(u.saldo_caja_prueba);
-      let acciones = "";
-      if (!u.eliminado) {
-        acciones += `<button class="btn fila" onclick="editarUsuario(${u.id})">EDITAR</button>`;
-      }
-      if (soyAdmin && !u.eliminado && u.rol !== "super_admin") {
-        if (u.activo) {
-          acciones += ` <button class="btn fila peligro" onclick="bloquearUsuario(${u.id})">BLOQUEAR</button>`;
-        } else {
-          acciones += ` <button class="btn fila primario" onclick="desbloquearUsuario(${u.id})">DESBLOQUEAR</button>`;
-        }
-        acciones += ` <button class="btn fila peligro" onclick="eliminarUsuario(${u.id})">ELIMINAR</button>`;
-      }
-      return `<tr><td>${esc(u.nombre)}</td><td>${esc(u.usuario)}</td><td>${esc(etiquetaRol(u.rol))}</td>
-        <td>${esc(suc ? suc.nombre : "—")}</td><td>${caja}</td><td>${prueba}</td>
-        <td>${pillEstadoUsuario(u)}</td>
-        <td><div class="acciones-fila">${acciones || "—"}</div></td></tr>`;
-    }));
   window._usuarios = usuarios;
+  const destino = $("#usu-tabla");
+  if (!usuarios.length) {
+    destino.innerHTML = '<p class="nota">Sin datos.</p>';
+    return;
+  }
+  const filas = usuarios.map((u) => {
+    const suc = SUCURSALES.find((s) => s.id === u.sucursal_id);
+    const caja = u.saldo_caja == null ? "—" : fmt(u.saldo_caja);
+    const prueba = u.saldo_caja_prueba == null ? "—" : fmt(u.saldo_caja_prueba);
+    const acciones = htmlAccionesUsuario(u, soyAdmin, "btn fila");
+    return `<tr><td>${esc(u.nombre)}</td><td>${esc(u.usuario)}</td><td>${esc(etiquetaRol(u.rol))}</td>
+      <td>${esc(suc ? suc.nombre : "—")}</td><td>${caja}</td><td>${prueba}</td>
+      <td>${pillEstadoUsuario(u)}</td>
+      <td><div class="acciones-fila">${acciones || "—"}</div></td></tr>`;
+  });
+  const columnas = ["Nombre", "Usuario", "Rol", "Sucursal", "Caja", "Caja de prueba", "Estado", "Acciones"];
+  destino.innerHTML =
+    `<div class="usu-lista-movil">${usuarios.map((u) => tarjetaUsuarioHtml(u, soyAdmin)).join("")}</div>` +
+    `<div class="tabla-scroll usu-tabla-escritorio"><table><thead><tr>` +
+    columnas.map((c) => `<th>${esc(c)}</th>`).join("") +
+    `</tr></thead><tbody>${filas.join("")}</tbody></table></div>`;
 }
 function editarUsuario(id) {
   const u = (window._usuarios || []).find((x) => x.id === id); if (!u) return;
@@ -1703,9 +1777,7 @@ document.addEventListener("DOMContentLoaded", () => {
     grupo.classList.toggle("abierto", abierto);
     b.setAttribute("aria-expanded", abierto ? "true" : "false");
   }));
-  window.addEventListener("resize", () => {
-    if (TOKEN) sincronizarEstadoMenuInicial();
-  });
+  window.addEventListener("resize", onResizeMenu);
   if ($("#btn-super-refrescar")) $("#btn-super-refrescar").addEventListener("click", () => cargarSuperAdmin().catch((e) => msg("#super-msg", e.message, false)));
   if ($("#btn-super-perm-cargar")) $("#btn-super-perm-cargar").addEventListener("click", () => cargarPermisosSuper().catch((e) => msg("#super-perm-msg", e.message, false)));
   if ($("#btn-super-perm-guardar")) $("#btn-super-perm-guardar").addEventListener("click", () => guardarPermisosSuper().catch((e) => msg("#super-perm-msg", e.message, false)));

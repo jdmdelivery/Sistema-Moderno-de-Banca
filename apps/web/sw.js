@@ -1,6 +1,6 @@
 /* Service worker del Panel. Solo cachea la cáscara estática.
    Nunca guarda tokens, tickets, saldos ni respuestas de la API. */
-const CACHE = "banca-admin-shell-v1";
+const CACHE = "banca-admin-shell-v2-usuarios";
 const SHELL = [
   "/",
   "/static/style.css",
