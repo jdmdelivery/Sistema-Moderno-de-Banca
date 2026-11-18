@@ -22,10 +22,20 @@ def test_resumen_de_la_cajera_no_mueve_la_caja_ni_mezcla_pruebas(entorno, monkey
     ])
     entorno.liquidar(s, 19, 3, 45)
     otra = entorno.banca(saldo=1000, codigo="2200", nombre="BANCA PEGUERO", usuario="vend2")
-    pago = entorno.c.post(
+    # Terminal ajeno no puede pagar; panel sí registra pago en otra sucursal.
+    bloqueado = entorno.c.post(
         "/terminal/tickets/pagar",
         json={"id": ganador["id"], "serial": ganador["serial"]},
         headers=otra["headers"],
+    )
+    assert bloqueado.status_code == 403
+    pago = entorno.c.post(
+        "/panel/tickets/pagar",
+        json={
+            "id": ganador["id"], "serial": ganador["serial"],
+            "sucursal_id": otra["sucursal"]["id"],
+        },
+        headers=entorno.admin,
     )
     assert pago.status_code == 200, pago.text
     antes = entorno.saldo(b1["sucursal"]["id"])
@@ -34,7 +44,7 @@ def test_resumen_de_la_cajera_no_mueve_la_caja_ni_mezcla_pruebas(entorno, monkey
     datos = propio.json()
     assert datos["alcance"] == "cajera autenticada"
     assert datos["real"]["ventas"] == "20.00"
-    # Premios por quien pagó (otra sucursal), no por quien vendió.
+    # Premios cobrados en otra sucursal (panel); la vendedora no los cuenta como pagados propios.
     assert datos["real"]["premios_pagados"] == "0.00"
     assert datos["real"]["pagado_en_otra"] == "600.00"
     assert datos["real"]["total_pagado"] == "0.00"
@@ -53,10 +63,12 @@ def test_resumen_de_la_cajera_no_mueve_la_caja_ni_mezcla_pruebas(entorno, monkey
     assert vendido["id"] != ganador["id"]
     ajeno = entorno.c.get("/terminal/reportes/dia", headers=otra["headers"]).json()
     assert ajeno["real"]["ventas"] == "0.00"
-    assert ajeno["real"]["premios_pagados"] == "600.00"
-    assert ajeno["real"]["quedo"] == "-600.00"
-    prohibido = entorno.c.get("/terminal/reportes/dia?alcance=sucursal", headers=b1["headers"])
-    assert prohibido.status_code == 403
+    # El pago panel lo registra el admin, no la cajera terminal de PEGUERO.
+    assert ajeno["real"]["premios_pagados"] == "0.00"
+    # Spoof alcance=sucursal: el operador queda limitado a su propia caja.
+    spoof = entorno.c.get("/terminal/reportes/dia?alcance=sucursal", headers=b1["headers"])
+    assert spoof.status_code == 200
+    assert spoof.json()["real"]["ventas"] == "20.00"
 
     monkeypatch.setenv("MODO_DESARROLLO", "true")
     prueba = entorno.vender_ok(b1["headers"], [

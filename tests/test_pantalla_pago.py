@@ -251,9 +251,11 @@ def test_sin_premio_anulado_y_ajeno_no_cobran(entorno, monkeypatch):
     assert "TICKET ANULADO" in anulado_vista["texto_pago"]
     assert anulado_vista["puede_pagar"] is False
     otra = entorno.banca(saldo=5000, codigo="2200", nombre="OTRA BANCA", usuario="ana", clave="prueba123")
-    ajena = _consultar(entorno, otra["headers"], perdedor)
-    assert "BANCA CASTILLO (PRUEBA)" in ajena["texto_pago"]
-    assert ajena["puede_pagar"] is False
+    ajena = entorno.c.post("/terminal/tickets/consultar", json={
+        "id": perdedor["id"], "serial": perdedor["serial"],
+    }, headers=otra["headers"])
+    assert ajena.status_code == 403
+    assert "OTRA CAJERA" in ajena.json()["detail"]
 
 
 def test_dos_cajeros_no_cobran_el_mismo_premio(entorno, monkeypatch):

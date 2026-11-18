@@ -69,9 +69,8 @@ def test_cajero_no_ve_ventas_ni_caja_de_otra_cajera(entorno):
         json={"id": ajeno["id"], "serial": ajeno["serial"], "cajero_id": 99},
         headers=b["headers"],
     )
-    assert consulta.status_code == 200
-    assert "mi_caja" not in consulta.json()
-    assert "saldo" not in consulta.json()
+    assert consulta.status_code == 403
+    assert "OTRA CAJERA" in consulta.json()["detail"]
     anulacion = entorno.c.post(
         "/terminal/tickets/anular",
         json={"id": ajeno["id"], "serial": ajeno["serial"], "motivo": "ajena"},
@@ -211,23 +210,28 @@ def test_ventas_y_reportes_no_mezclan_cajeros_ni_sucursales(entorno, monkeypatch
 
 
 def test_premio_pagado_cuenta_al_pagador_no_al_vendedor_ajeno(entorno, monkeypatch):
-    """Si B paga un ticket de A: pendiente baja en A; PREMIOS PAGADOS del día/mes van a B."""
+    """Terminal bloquea pago ajeno; la cajera vendedora sí cobra y baja su caja."""
     monkeypatch.setenv("MODO_DESARROLLO", "true")
     b = entorno.banca(saldo=0, usuario="vend_a", clave="prueba123")
     entorno.operador("pag_b", "prueba123", b["sucursal"]["id"])
-    hb = entorno.login_terminal("pag_b", "prueba123")
-    # Fondo para que B pueda pagar
     usuarios = entorno.c.get("/usuarios", headers=entorno.admin).json()
+    vend_a = next(u for u in usuarios if u["usuario"] == "vend_a")
     pag_b = next(u for u in usuarios if u["usuario"] == "pag_b")
-    fondo = entorno.c.post("/fondos", json={
+    fondo_a = entorno.c.post("/fondos", json={
+        "sucursal_id": b["sucursal"]["id"], "usuario_id": vend_a["id"], "monto": 5000,
+        "tipo": "aporte_prueba", "operacion_id": "fondo-vend-a",
+    }, headers=entorno.admin)
+    assert fondo_a.status_code == 201, fondo_a.text
+    fondo_b = entorno.c.post("/fondos", json={
         "sucursal_id": b["sucursal"]["id"], "usuario_id": pag_b["id"], "monto": 5000,
         "tipo": "aporte_prueba", "operacion_id": "fondo-pag-b",
     }, headers=entorno.admin)
-    assert fondo.status_code == 201, fondo.text
+    assert fondo_b.status_code == 201, fondo_b.text
+    ha = entorno.login_terminal("vend_a", "prueba123")
     hb = entorno.login_terminal("pag_b", "prueba123")
 
     sorteo = entorno.sorteo_id("LOTEDOM")
-    ticket = entorno.vender_ok(b["headers"], [
+    ticket = entorno.vender_ok(ha, [
         {"tipo": "QN", "sorteos": [sorteo], "numeros": "25", "monto": 10},
     ])
     sim = entorno.c.post("/resultados", json={
@@ -235,27 +239,34 @@ def test_premio_pagado_cuenta_al_pagador_no_al_vendedor_ajeno(entorno, monkeypat
         "premio1": 25, "premio2": 1, "premio3": 2, "simulado": True,
     }, headers=entorno._headers_gestion())
     assert sim.status_code == 201, sim.text
-    premio = float(entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()["premios_por_pagar"])
+    premio = float(entorno.c.get("/terminal/sorteos", headers=ha).json()["premios_por_pagar"])
     assert premio > 0
 
-    pago = entorno.c.post("/terminal/tickets/pagar", json={
+    # B no puede pagar el ticket de A (aunque sea la misma sucursal).
+    ajeno = entorno.c.post("/terminal/tickets/pagar", json={
         "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "pago-por-b",
     }, headers=hb)
+    assert ajeno.status_code == 403
+    assert "OTRA CAJERA" in ajeno.json()["detail"]
+
+    pago = entorno.c.post("/terminal/tickets/pagar", json={
+        "id": ticket["id"], "serial": ticket["serial"], "operacion_id": "pago-por-a",
+    }, headers=ha)
     assert pago.status_code == 200, pago.text
 
-    ind_a = entorno.c.get("/terminal/sorteos", headers=b["headers"]).json()
+    ind_a = entorno.c.get("/terminal/sorteos", headers=ha).json()
     ind_b = entorno.c.get("/terminal/sorteos", headers=hb).json()
     assert float(ind_a["premios_por_pagar"]) == 0.00
     assert float(ind_b["premios_por_pagar"]) == 0.00
-    # Caja de B bajó por el pago; ventas siguen en A.
     assert float(ind_a["mi_venta"]) == 10.00
-    assert float(ind_b["mi_caja"]) == 5000.00 - premio
+    assert float(ind_a["mi_caja"]) == 5000.00 + 10.00 - premio
+    assert float(ind_b["mi_caja"]) == 5000.00
 
     q = "desde=2026-11-14&hasta=2026-11-14"
-    dia_a = entorno.c.get(f"/terminal/reportes/dia?{q}", headers=b["headers"]).json()
+    dia_a = entorno.c.get(f"/terminal/reportes/dia?{q}", headers=ha).json()
     dia_b = entorno.c.get(f"/terminal/reportes/dia?{q}", headers=hb).json()
-    assert float(dia_a["prueba"]["premios_pagados"]) == 0.00
+    assert float(dia_a["prueba"]["premios_pagados"]) == premio
     assert float(dia_a["prueba"]["ventas"]) == 10.00
-    assert float(dia_b["prueba"]["premios_pagados"]) == premio
+    assert float(dia_b["prueba"]["premios_pagados"]) == 0.00
     assert float(dia_b["prueba"]["ventas"]) == 0.00
 

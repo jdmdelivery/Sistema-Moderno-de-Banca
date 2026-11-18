@@ -16,14 +16,22 @@ def _ticket_ganador(entorno, monto=10, numero="19"):
     return b, t  # premio: 10 × 60 = 600
 
 
-def test_pagar_en_otra_sucursal(entorno):
+def test_pagar_en_otra_sucursal_terminal_bloqueado(entorno):
+    """Terminal: solo la cajera vendedora puede pagar. Otra sucursal recibe 403."""
     b1, t = _ticket_ganador(entorno)
-    # La sucursal pagadora necesita el efectivo en su caja (premio $600)
     b2 = entorno.banca(saldo=1000, codigo="2200", nombre="BANCA PEGUERO", usuario="vend2")
     r = entorno.c.post("/terminal/tickets/pagar",
                        json={"id": t["id"], "serial": t["serial"]}, headers=b2["headers"])
-    assert r.status_code == 200, r.text
-    datos = r.json()
+    assert r.status_code == 403, r.text
+    assert "OTRA CAJERA" in r.json()["detail"]
+    # El panel admin sí puede pagar en otra sucursal (alcance de consorcio).
+    r_panel = entorno.c.post(
+        "/panel/tickets/pagar",
+        json={"id": t["id"], "serial": t["serial"], "sucursal_id": b2["sucursal"]["id"]},
+        headers=entorno.admin,
+    )
+    assert r_panel.status_code == 200, r_panel.text
+    datos = r_panel.json()
     assert datos["estado"] == "pagado"
     assert datos["pago"]["sucursal"] == "BANCA PEGUERO"
     assert float(datos["pago"]["monto"]) == 600.00

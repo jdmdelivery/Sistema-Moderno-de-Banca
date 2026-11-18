@@ -1729,14 +1729,20 @@ def terminal_venta(datos: VentaIn, db=Depends(get_db), terminal=Depends(terminal
 @app.post("/terminal/tickets/consultar")
 def terminal_consultar(datos: LlaveIn, db=Depends(get_db), terminal=Depends(terminal_actual),
                        operador=Depends(operador_actual)):
-    return servicios.consultar_ticket(db, datos.id, datos.serial)
+    # Solo tickets vendidos por la cajera de la sesión (no confiar en IDs de la APK).
+    return servicios.consultar_ticket(
+        db, datos.id, datos.serial, exigir_vendedor_id=operador.id,
+    )
 
 
 @app.post("/terminal/tickets/pagar")
 def terminal_pagar(datos: LlaveIn, db=Depends(get_db), terminal=Depends(terminal_actual),
                    operador=Depends(operador_actual)):
-    return servicios.pagar_ticket(db, datos.id, datos.serial, terminal.sucursal_id,
-                                  terminal.id, operador.id, operacion_id=datos.operacion_id)
+    return servicios.pagar_ticket(
+        db, datos.id, datos.serial, terminal.sucursal_id,
+        terminal.id, operador.id, operacion_id=datos.operacion_id,
+        exigir_vendedor_id=operador.id,
+    )
 
 
 @app.post("/terminal/tickets/reimprimir")
@@ -1840,15 +1846,20 @@ def terminal_reporte_resumen(desde: str, hasta: str, vista: str = "final",
 def terminal_reporte_pendientes(desde: str, hasta: str, formato: str = "json",
                                 db=Depends(get_db), terminal=Depends(terminal_actual),
                                 operador=Depends(operador_actual)):
-    propio = operador.id if operador.rol == "operador" else None
+    # Siempre la cajera autenticada: nunca listar tickets de otra.
+    # Ámbito real/prueba alineado con MODO_DESARROLLO (misma caja que ve la APK).
+    propio = operador.id
+    ambito_prueba = servicios.modo_desarrollo()
     if formato == "texto":
         return PlainTextResponse(
             servicios.pendientes_texto(
                 db, _fecha(desde), _fecha(hasta), terminal.sucursal_id, terminal, propio,
+                es_prueba=ambito_prueba,
             )
         )
     return servicios.reporte_pendientes(
         db, _fecha(desde), _fecha(hasta), terminal.sucursal_id, propio,
+        detalle_premios=True, es_prueba=ambito_prueba,
     )
 
 

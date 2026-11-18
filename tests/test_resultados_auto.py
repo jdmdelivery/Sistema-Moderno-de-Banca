@@ -184,8 +184,9 @@ def test_la_prueba_se_liquida_sola_sin_tocar_la_caja_real(entorno, monkeypatch):
 
 
 def test_el_pago_descuenta_la_caja_de_quien_paga_una_sola_vez(entorno):
+    """Solo la cajera vendedora puede pagar por terminal; la caja baja una sola vez."""
     vendedora = entorno.banca()
-    pagadora = entorno.banca(saldo=5000, codigo="2200", nombre="BANCA PEGUERO", usuario="vend2")
+    ajena = entorno.banca(saldo=5000, codigo="2200", nombre="BANCA PEGUERO", usuario="vend2")
     s = entorno.sorteo_id("La Primera 12")
     t = entorno.vender_ok(vendedora["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "19", "monto": 10}])
     entorno.liquidar(s, 19, 3, 45)
@@ -195,24 +196,31 @@ def test_el_pago_descuenta_la_caja_de_quien_paga_una_sola_vez(entorno):
         usuario.saldo_caja = 8000
     db.commit()
     db.close()
+    bloqueado = entorno.c.post(
+        "/terminal/tickets/pagar",
+        json={"id": t["id"], "serial": t["serial"], "operacion_id": "pago-ajeno"},
+        headers=ajena["headers"],
+    )
+    assert bloqueado.status_code == 403
     r = entorno.c.post(
         "/terminal/tickets/pagar",
         json={"id": t["id"], "serial": t["serial"], "operacion_id": "pago-1"},
-        headers=pagadora["headers"],
+        headers=vendedora["headers"],
     )
     assert r.status_code == 200, r.text
     assert r.json()["mi_caja"] == "7400.00"
     repetido = entorno.c.post(
         "/terminal/tickets/pagar",
         json={"id": t["id"], "serial": t["serial"], "operacion_id": "pago-1"},
-        headers=pagadora["headers"],
+        headers=vendedora["headers"],
     )
     assert repetido.status_code == 200
     db = dbmod.nueva_sesion()
-    assert str(db.query(Usuario).filter_by(usuario="vend2").one().saldo_caja) == "7400.00"
-    assert str(db.query(Usuario).filter_by(usuario="vend1").one().saldo_caja) == "8000.00"
+    assert str(db.query(Usuario).filter_by(usuario="vend1").one().saldo_caja) == "7400.00"
+    assert str(db.query(Usuario).filter_by(usuario="vend2").one().saldo_caja) == "8000.00"
     db.close()
-    assert entorno.saldo(pagadora["sucursal"]["id"]) == 4400
+    # Caja de sucursal vendedora: saldo inicial + venta 10 − premio 600.
+    assert entorno.saldo(vendedora["sucursal"]["id"]) == 99410.00
 
 
 def test_el_ciclo_no_consulta_rdlotto(entorno, monkeypatch):

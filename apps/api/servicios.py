@@ -1242,8 +1242,20 @@ def _vista_pago(db, ticket):
     }
 
 
-def consultar_ticket(db, ticket_id, serial, operacion_comprobante=None):
+MSG_TICKET_OTRA_CAJERA = "ESTE TICKET PERTENECE A OTRA CAJERA"
+
+
+def _exigir_vendedor_ticket(ticket, exigir_vendedor_id):
+    """Terminal: solo el cajero que vendió puede consultar/pagar ese ticket."""
+    if exigir_vendedor_id is None:
+        return
+    if ticket is None or ticket.usuario_id != exigir_vendedor_id:
+        raise ErrorServicio(403, MSG_TICKET_OTRA_CAJERA)
+
+
+def consultar_ticket(db, ticket_id, serial, operacion_comprobante=None, exigir_vendedor_id=None):
     ticket = buscar_ticket(db, ticket_id, serial)
+    _exigir_vendedor_ticket(ticket, exigir_vendedor_id)
     datos = ticket_a_dict(db, ticket)
     datos["no_oficial"] = bool(ticket.es_prueba)
     if ticket.es_prueba and not modo_desarrollo():
@@ -1542,9 +1554,11 @@ def _cobrar_premios(db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, o
     return _respuesta_pago(db, ticket.id, ticket.serial, usuario_id, operacion_id=op)
 
 
-def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuario_id, operacion_id=None):
+def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuario_id,
+                 operacion_id=None, exigir_vendedor_id=None):
     """Cobra los premios disponibles de un ticket. Un segundo intento no los cobra otra vez."""
     ticket = buscar_ticket(db, ticket_id, serial)
+    _exigir_vendedor_ticket(ticket, exigir_vendedor_id)
     if operacion_id:
         op = str(operacion_id).strip()[:40]
         previo = db.query(Ticket).filter_by(pago_operacion_id=op).first()
@@ -3363,8 +3377,10 @@ def cuadre_a_dict(c):
 
 
 # ------------------------------------------------------------------ reportes
-def _tickets_rango(db, desde, hasta, sucursal_id=None, usuario_id=None):
-    q = db.query(Ticket).filter(Ticket.fecha >= desde, Ticket.fecha <= hasta, Ticket.es_prueba.is_(False))
+def _tickets_rango(db, desde, hasta, sucursal_id=None, usuario_id=None, es_prueba=False):
+    q = db.query(Ticket).filter(
+        Ticket.fecha >= desde, Ticket.fecha <= hasta, Ticket.es_prueba.is_(bool(es_prueba)),
+    )
     if sucursal_id:
         q = q.filter(Ticket.sucursal_vendedora_id == sucursal_id)
     if usuario_id is not None:
@@ -3372,8 +3388,8 @@ def _tickets_rango(db, desde, hasta, sucursal_id=None, usuario_id=None):
     return q.order_by(Ticket.id).all()
 
 
-def _ticket_resumen(db, t):
-    return {
+def _ticket_resumen(db, t, detalle_premios=False):
+    fila = {
         "id": t.id,
         "serial": t.serial,
         "banca": t.sucursal_vendedora.nombre if t.sucursal_vendedora else "?",
@@ -3382,7 +3398,35 @@ def _ticket_resumen(db, t):
         "estado": t.estado,
         "premio_total": str(D(t.premio_total)),
         "pago": ticket_a_dict(db, t).get("pago"),
+        "cajero_id": t.usuario_id,
     }
+    if detalle_premios:
+        vista = _vista_pago(db, t)
+        fila["premios_por_pagar"] = vista.get("premios_por_pagar") or []
+        fila["premios_pagados"] = vista.get("premios_pagados") or []
+        fila["sorteos_pendientes"] = vista.get("sorteos_pendientes") or []
+        fila["premio_pendiente"] = vista.get("premio_pendiente")
+        fila["premio_pagado"] = vista.get("premio_pagado")
+        fila["importe_a_cobrar"] = vista.get("importe_a_cobrar")
+        fila["puede_pagar"] = bool(vista.get("puede_pagar"))
+        # Resumen corto para lista SUNMI (solo premios confirmados / disponibles).
+        lineas = []
+        for p in fila["premios_por_pagar"]:
+            lineas.append({
+                "loteria": p.get("loteria"),
+                "numeros": p.get("numeros"),
+                "premio": p.get("premio"),
+                "estado": "PENDIENTE",
+            })
+        for p in fila["premios_pagados"]:
+            lineas.append({
+                "loteria": p.get("loteria"),
+                "numeros": p.get("numeros"),
+                "premio": p.get("premio"),
+                "estado": "PAGADO",
+            })
+        fila["lineas_premio"] = lineas
+    return fila
 
 
 def reporte_ventas(db, desde, hasta, usuario_id=None, sucursal_id=None, limite=500):
@@ -4425,8 +4469,14 @@ def reporte_resumen(db, desde, hasta, vista, sucursal_id=None, usuario_id=None):
     return base
 
 
-def reporte_pendientes(db, desde, hasta, sucursal_id, usuario_id=None):
-    tickets = _tickets_rango(db, desde, hasta, sucursal_id, usuario_id)
+def reporte_pendientes(db, desde, hasta, sucursal_id, usuario_id=None, detalle_premios=False,
+                       es_prueba=False):
+    """Pendientes de pago. Si usuario_id viene, solo tickets vendidos por esa cajera.
+
+    es_prueba=True lista el ámbito de desarrollo (alineado con MODO_DESARROLLO);
+    el panel consorcio sigue usando el ámbito real por defecto.
+    """
+    tickets = _tickets_rango(db, desde, hasta, sucursal_id, usuario_id, es_prueba=es_prueba)
     pendientes = [
         t for t in tickets
         if t.estado in ("ganador", "parcial", "vendido") and _importe_sin_cobrar(t) > 0
@@ -4440,7 +4490,10 @@ def reporte_pendientes(db, desde, hasta, sucursal_id, usuario_id=None):
         "desde": desde.isoformat(),
         "hasta": hasta.isoformat(),
         "sucursal_id": sucursal_id,
-        "pendientes": [_ticket_resumen(db, t) for t in pendientes],
+        "usuario_id": usuario_id,
+        "pendientes": [
+            _ticket_resumen(db, t, detalle_premios=detalle_premios) for t in pendientes
+        ],
         "monto_pendiente": str(D(sum((_importe_sin_cobrar(t) for t in pendientes), D(0)))),
         "pagados_en_otra": [_ticket_resumen(db, t) for t in pagados_en_otra],
         "pagado_en_otra_monto": str(D(sum((D(t.premio_total) for t in pagados_en_otra), D(0)))),
@@ -4448,10 +4501,11 @@ def reporte_pendientes(db, desde, hasta, sucursal_id, usuario_id=None):
     }
 
 
-def pendientes_texto(db, desde, hasta, sucursal_id, terminal=None, usuario_id=None):
+def pendientes_texto(db, desde, hasta, sucursal_id, terminal=None, usuario_id=None,
+                     es_prueba=False):
     """Formato de texto imprimible en la térmica, como el observado en video 3."""
     sucursal = db.get(Sucursal, sucursal_id)
-    rep = reporte_pendientes(db, desde, hasta, sucursal_id, usuario_id)
+    rep = reporte_pendientes(db, desde, hasta, sucursal_id, usuario_id, es_prueba=es_prueba)
     ahora = ahora_local()
     lineas = [
         (sucursal.nombre if sucursal else "SUCURSAL").upper(),
