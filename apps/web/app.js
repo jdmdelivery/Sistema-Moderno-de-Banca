@@ -219,9 +219,15 @@ let GANADORES_RELOJ = null;
 let MENU_SCROLL_Y = 0;
 let MENU_SCROLL_BLOQUEADO = false;
 let MENU_ES_ESCRITORIO = null;
+let USUARIOS_ES_MOVIL = null;
+let SECCION_ACTIVA = "inicio";
 
 function esEscritorioMenu() {
   return window.matchMedia("(min-width: 901px)").matches;
+}
+/** Misma frontera que el menú: <901px = teléfono/tablet (tarjetas). */
+function esUsuariosMovil() {
+  return !esEscritorioMenu();
 }
 
 /** Bloquea el scroll del Dashboard detrás del menú móvil (Safari iPhone).
@@ -291,11 +297,23 @@ function sincronizarEstadoMenuInicial() {
 }
 /** Solo reacciona al cruzar el breakpoint; ignora resize de barra URL al scroll. */
 function onResizeMenu() {
-  if (!TOKEN) return;
-  const ahora = esEscritorioMenu();
-  if (MENU_ES_ESCRITORIO === ahora) return;
-  MENU_ES_ESCRITORIO = ahora;
-  sincronizarEstadoMenuInicial();
+  const ahoraEscritorio = esEscritorioMenu();
+  const ahoraUsuMovil = esUsuariosMovil();
+  if (TOKEN && MENU_ES_ESCRITORIO !== ahoraEscritorio) {
+    MENU_ES_ESCRITORIO = ahoraEscritorio;
+    sincronizarEstadoMenuInicial();
+  } else if (MENU_ES_ESCRITORIO === null) {
+    MENU_ES_ESCRITORIO = ahoraEscritorio;
+  }
+  // Re-pintar Usuarios solo al cruzar móvil↔escritorio (no en cada hide/show de barra URL).
+  if (USUARIOS_ES_MOVIL !== ahoraUsuMovil) {
+    USUARIOS_ES_MOVIL = ahoraUsuMovil;
+    if (TOKEN && SECCION_ACTIVA === "usuarios" && window._usuarios) {
+      const y = window.scrollY || window.pageYOffset || 0;
+      pintarUsuarios(window._usuarios, esAdminPanel());
+      window.requestAnimationFrame(() => window.scrollTo(0, y));
+    }
+  }
 }
 function ir(sec) {
   if (!puedeVerSeccion(sec)) {
@@ -306,6 +324,7 @@ function ir(sec) {
     GANADORES_RELOJ = null;
   }
   cerrarMenuMovil();
+  SECCION_ACTIVA = sec;
   $$(".navbtn").forEach((b) => b.classList.toggle("activo", b.dataset.sec === sec));
   $$(".seccion").forEach((s) => s.classList.toggle("activo", s.id === "sec-" + sec));
   const cargar = {
@@ -660,16 +679,20 @@ function tarjetaUsuarioHtml(u, soyAdmin) {
     <div class="usu-card-acciones">${acciones || '<span class="nota">—</span>'}</div>
   </article>`;
 }
-async function cargarUsuarios() {
-  aplicarVisibilidadRol();
-  const filtro = ($("#usu-filtro") && $("#usu-filtro").value) || "";
-  const ruta = filtro ? `/usuarios?estado=${encodeURIComponent(filtro)}` : "/usuarios";
-  const usuarios = await api(ruta);
-  const soyAdmin = esAdminPanel();
-  window._usuarios = usuarios;
+function pintarUsuarios(usuarios, soyAdmin) {
   const destino = $("#usu-tabla");
+  if (!destino) return;
+  USUARIOS_ES_MOVIL = esUsuariosMovil();
+  document.body.classList.toggle("usuarios-movil", USUARIOS_ES_MOVIL);
+  document.body.classList.toggle("usuarios-escritorio", !USUARIOS_ES_MOVIL);
   if (!usuarios.length) {
     destino.innerHTML = '<p class="nota">Sin datos.</p>';
+    return;
+  }
+  // iPhone/Samsung: SOLO tarjetas en el DOM (evita tabla ancha + scroll jump iOS).
+  // Escritorio: SOLO tabla.
+  if (USUARIOS_ES_MOVIL) {
+    destino.innerHTML = `<div class="usu-lista-movil" data-vista="movil">${usuarios.map((u) => tarjetaUsuarioHtml(u, soyAdmin)).join("")}</div>`;
     return;
   }
   const filas = usuarios.map((u) => {
@@ -684,17 +707,32 @@ async function cargarUsuarios() {
   });
   const columnas = ["Nombre", "Usuario", "Rol", "Sucursal", "Caja", "Caja de prueba", "Estado", "Acciones"];
   destino.innerHTML =
-    `<div class="usu-lista-movil">${usuarios.map((u) => tarjetaUsuarioHtml(u, soyAdmin)).join("")}</div>` +
-    `<div class="tabla-scroll usu-tabla-escritorio"><table><thead><tr>` +
+    `<div class="tabla-scroll usu-tabla-escritorio" data-vista="escritorio"><table><thead><tr>` +
     columnas.map((c) => `<th>${esc(c)}</th>`).join("") +
     `</tr></thead><tbody>${filas.join("")}</tbody></table></div>`;
+}
+async function cargarUsuarios() {
+  aplicarVisibilidadRol();
+  const filtro = ($("#usu-filtro") && $("#usu-filtro").value) || "";
+  const ruta = filtro ? `/usuarios?estado=${encodeURIComponent(filtro)}` : "/usuarios";
+  const y = window.scrollY || window.pageYOffset || 0;
+  const usuarios = await api(ruta);
+  const soyAdmin = esAdminPanel();
+  window._usuarios = usuarios;
+  pintarUsuarios(usuarios, soyAdmin);
+  // Evitar que el re-render de la lista tire el scroll al inicio (Safari iPhone).
+  window.requestAnimationFrame(() => window.scrollTo(0, y));
 }
 function editarUsuario(id) {
   const u = (window._usuarios || []).find((x) => x.id === id); if (!u) return;
   if (u.eliminado) { msg("#usu-msg", "Un usuario eliminado no se puede editar", false); return; }
+  const y = window.scrollY || window.pageYOffset || 0;
   $("#usu-id").value = u.id; $("#usu-nombre").value = u.nombre; $("#usu-usuario").value = u.usuario;
   $("#usu-rol").value = u.rol; $("#usu-sucursal").value = u.sucursal_id || "";
   $("#usu-clave").value = ""; $("#usu-activo").checked = u.activo;
+  msg("#usu-msg", `Editando ${u.usuario}`);
+  // No forzar focus: en iPhone focus() hace scrollIntoView y puede saltar la vista.
+  window.requestAnimationFrame(() => window.scrollTo(0, y));
 }
 function limpiarUsuario() {
   ["#usu-id", "#usu-nombre", "#usu-usuario", "#usu-clave"].forEach((i) => $(i).value = "");
@@ -1757,6 +1795,10 @@ async function marcarDesarrollo() {
 
 document.addEventListener("DOMContentLoaded", () => {
   marcarDesarrollo();
+  MENU_ES_ESCRITORIO = esEscritorioMenu();
+  USUARIOS_ES_MOVIL = esUsuariosMovil();
+  document.body.classList.toggle("usuarios-movil", USUARIOS_ES_MOVIL);
+  document.body.classList.toggle("usuarios-escritorio", !USUARIOS_ES_MOVIL);
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   }
@@ -1778,6 +1820,10 @@ document.addEventListener("DOMContentLoaded", () => {
     b.setAttribute("aria-expanded", abierto ? "true" : "false");
   }));
   window.addEventListener("resize", onResizeMenu);
+  // Safari iPhone: la barra URL dispara visualViewport; no debe resetear scroll ni menú.
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", () => {});
+  }
   if ($("#btn-super-refrescar")) $("#btn-super-refrescar").addEventListener("click", () => cargarSuperAdmin().catch((e) => msg("#super-msg", e.message, false)));
   if ($("#btn-super-perm-cargar")) $("#btn-super-perm-cargar").addEventListener("click", () => cargarPermisosSuper().catch((e) => msg("#super-perm-msg", e.message, false)));
   if ($("#btn-super-perm-guardar")) $("#btn-super-perm-guardar").addEventListener("click", () => guardarPermisosSuper().catch((e) => msg("#super-perm-msg", e.message, false)));

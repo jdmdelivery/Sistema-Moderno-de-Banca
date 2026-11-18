@@ -83,20 +83,28 @@ def test_usuarios_tarjetas_movil_y_tabla_escritorio(entorno):
     html = entorno.c.get("/").text
     css = entorno.c.get("/static/style.css").text
     js = entorno.c.get("/static/app.js").text
+    sw = entorno.c.get("/sw.js").text
     assert 'id="sec-usuarios"' in html
     assert "usu-hero" in html
+    assert "usuarios-elite-3" in html  # cache-bust CSS/JS
     assert "tarjetaUsuarioHtml" in js
+    assert "pintarUsuarios" in js and "esUsuariosMovil" in js
     assert "usu-lista-movil" in js and "usu-tabla-escritorio" in js
     assert "htmlAccionesUsuario" in js
     assert "editarUsuario(" in js and "bloquearUsuario(" in js
     assert "desbloquearUsuario(" in js and "eliminarUsuario(" in js
+    # En móvil solo se montan tarjetas (sin tabla en el DOM).
+    assert 'data-vista="movil"' in js
+    assert 'data-vista="escritorio"' in js
     # Sin IDs duplicados de formulario; acciones reutilizan handlers globales.
-    assert js.count('id="usu-id"') == 0  # ids viven en HTML, no se regeneran en JS
+    assert js.count('id="usu-id"') == 0
     assert "usu-lista-movil" in css and "usu-card" in css
     compact = css.replace(" ", "").replace("\r", "")
-    assert "#sec-usuarios.usu-lista-movil{display:flex" in compact
-    assert "#sec-usuarios.usu-tabla-escritorio{display:none" in compact
-    assert "@media(min-width:641px)" in compact
+    # Mobile-first: tarjetas visibles por defecto; tabla solo ≥901px.
+    assert ".usu-lista-movil{display:flex" in compact
+    assert ".usu-tabla-escritorio{display:none!important}" in compact
+    assert "@media(min-width:901px)" in compact
+    assert "banca-admin-shell-v3-usuarios-fix" in sw
 
 
 def test_fuente_resultados_es_conectate(entorno):

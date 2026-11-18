@@ -196,8 +196,14 @@ body.con-sesion .login-overlay{display:none !important}
 .usu-hero-txt h2{margin:0 0 4px;font-size:20px;color:#fff;letter-spacing:.02em}
 .usu-hero-txt .nota{margin:0;color:#d7e6f7;font-size:13px;line-height:1.4}
 .usu-filtro{margin-bottom:12px}
-.usu-lista-movil{display:none;flex-direction:column;gap:12px;width:100%}
-.usu-tabla-escritorio{display:block}
+#usu-tabla{overflow-anchor:none}
+/* Mobile-first: tarjetas por defecto. Escritorio (≥901px) muestra tabla. */
+.usu-lista-movil{display:flex;flex-direction:column;gap:12px;width:100%;max-width:100%}
+.usu-tabla-escritorio{display:none !important}
+body.usuarios-escritorio .usu-lista-movil{display:none !important}
+body.usuarios-escritorio .usu-tabla-escritorio{display:block !important}
+body.usuarios-movil .usu-lista-movil{display:flex !important}
+body.usuarios-movil .usu-tabla-escritorio{display:none !important}
 .usu-tabla-escritorio table{border-radius:12px}
 .usu-tabla-escritorio th{white-space:nowrap}
 .usu-card{
@@ -349,7 +355,8 @@ body.con-sesion .login-overlay{display:none !important}
   .card .num{font-size:clamp(15px,4.5vw,20px)}
   .tabla-scroll{display:block;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
   .tabla-scroll table{min-width:720px;width:max-content;max-width:none;font-size:12.5px}
-  #sec-usuarios .usu-lista-movil{display:flex}
+  /* Usuarios móvil: nunca forzar min-width de tabla genérica (la tabla no se monta). */
+  #sec-usuarios .usu-lista-movil{display:flex !important}
   #sec-usuarios .usu-tabla-escritorio{display:none !important}
   #sec-usuarios .usu-hero{padding:12px 14px;margin-bottom:10px}
   #sec-usuarios .usu-hero-txt h2{font-size:18px}
@@ -372,13 +379,6 @@ body.con-sesion .login-overlay{display:none !important}
   #sec-inicio .inicio-rango{grid-template-columns:1fr}
   .marca b{font-size:12.5px}
 }
-@media(min-width:641px){
-  #sec-usuarios .usu-lista-movil{display:none !important}
-  #sec-usuarios .usu-tabla-escritorio{display:block}
-  #sec-usuarios .usu-tabla-escritorio table{min-width:0;width:100%;font-size:13.5px}
-  #sec-usuarios .usu-tabla-escritorio th,#sec-usuarios .usu-tabla-escritorio td{padding:10px 12px;vertical-align:middle}
-  #sec-usuarios .acciones-fila{gap:6px}
-}
 @media(min-width:901px){
   html.menu-abierto{overflow:auto;height:auto}
   body.menu-abierto{position:static;overflow-x:hidden;overflow-y:auto;touch-action:auto}
@@ -386,6 +386,11 @@ body.con-sesion .login-overlay{display:none !important}
   body.menu-abierto header{z-index:50}
   body.con-sesion .nav-fondo{display:none !important}
   nav.sidebar{transition:transform .24s ease}
+  #sec-usuarios .usu-lista-movil{display:none !important}
+  #sec-usuarios .usu-tabla-escritorio{display:block !important}
+  #sec-usuarios .usu-tabla-escritorio table{min-width:0;width:100%;font-size:13.5px}
+  #sec-usuarios .usu-tabla-escritorio th,#sec-usuarios .usu-tabla-escritorio td{padding:10px 12px;vertical-align:middle}
+  #sec-usuarios .acciones-fila{gap:6px}
 }
 .gan-lista{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin:12px 0 20px}
 .gan-card{background:var(--panel);border:1px solid var(--borde);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:8px}
