@@ -795,6 +795,9 @@ async function eliminarUsuario(id) {
 }
 
 /* ---------------------------------------------------------- ventas cajeros */
+let VC_DETALLE_SCROLL = 0;
+let VC_DETALLE_ORIGEN = "ventas-cajeros";
+
 function rangoVentasCajeros(tipo) {
   const hoy = hoyISO();
   if (tipo === "ayer") return [sumarDias(hoy, -1), sumarDias(hoy, -1)];
@@ -805,20 +808,26 @@ function rangoVentasCajeros(tipo) {
   }
   return [hoy, hoy];
 }
+/** Tarjeta élite de lista: mismos datos (nombre, tickets, ventas_netas). */
 function filaCajeroCompacta(c) {
   const n = Number(c.tickets_vendidos || 0);
   const ticketsTxt = n === 1 ? "1 ticket" : `${n} tickets`;
-  return `<div class="vc-fila">
-    <div class="vc-fila-info">
-      <span class="vc-fila-nombre">${esc(c.nombre)}</span>
-      <span class="vc-fila-sep" aria-hidden="true">—</span>
-      <span class="vc-fila-meta">${ticketsTxt}</span>
-      <span class="vc-fila-sep" aria-hidden="true">—</span>
-      <span class="vc-fila-monto">${fmt(c.ventas_netas)}</span>
-      <span class="vc-fila-sep solo-escritorio" aria-hidden="true">—</span>
-      <button type="button" class="btn primario vc-fila-btn" onclick="verDetalleCajero(${c.usuario_id})">VER DETALLE</button>
+  return `<article class="vc-card">
+    <div class="vc-card-head">
+      <div class="vc-card-nombre">${esc(c.nombre)}</div>
     </div>
-  </div>`;
+    <div class="vc-card-body">
+      <div class="vc-card-stat">
+        <span class="k">Tickets</span>
+        <b>${esc(ticketsTxt)}</b>
+      </div>
+      <div class="vc-card-stat">
+        <span class="k">Monto</span>
+        <b class="vc-card-monto">${fmt(c.ventas_netas)}</b>
+      </div>
+    </div>
+    <button type="button" class="btn vc-card-btn" onclick="verDetalleCajero(${c.usuario_id})">VER DETALLE</button>
+  </article>`;
 }
 async function cargarVentasCajeros() {
   await cargarCatalogos();
@@ -853,9 +862,28 @@ async function refrescarVentasCajeros() {
     msg("#vc-msg", "");
   } catch (e) { msg("#vc-msg", e.message, false); }
 }
+function seccionActivaId() {
+  const sec = document.querySelector("main .seccion.activo");
+  return sec ? sec.id.replace(/^sec-/, "") : "ventas-cajeros";
+}
+function textoVolverDetalleCajero(_origen) {
+  return "← VOLVER A USUARIOS";
+}
+function htmlItemHistorialVc(filas) {
+  return filas.map((f) =>
+    `<div class="vc-hist-item">
+      <div class="vc-hist-top">${f.top}</div>
+      ${f.meta ? `<div class="vc-hist-meta">${f.meta}</div>` : ""}
+    </div>`
+  ).join("");
+}
 async function verDetalleCajero(id) {
   const modal = $("#vc-modal");
   const cuerpo = $("#vc-modal-cuerpo");
+  const btnVolver = $("#vc-modal-volver");
+  VC_DETALLE_ORIGEN = seccionActivaId();
+  VC_DETALLE_SCROLL = window.scrollY || window.pageYOffset || 0;
+  if (btnVolver) btnVolver.textContent = textoVolverDetalleCajero(VC_DETALLE_ORIGEN);
   $("#vc-modal-titulo").textContent = "Detalle del cajero";
   cuerpo.innerHTML = '<p class="nota">Cargando…</p>';
   modal.hidden = false;
@@ -866,37 +894,58 @@ async function verDetalleCajero(id) {
     const d = await api(`/reportes/ventas-cajeros/${id}?` + q.toString());
     const r = d.resumen || {};
     $("#vc-modal-titulo").textContent = `${r.nombre || "Cajero"} (${r.usuario || ""})`;
-    const ventas = (d.ventas || []).map((t) =>
-      `<div class="gan-jugada"><b>#${esc(t.id)}</b> · ${esc(t.estado)} · ${fmt(t.total)}
-      <br><span class="meta">${esc(t.vendido_en || t.fecha)} · vendió este ticket</span></div>`
-    ).join("") || '<p class="nota">Sin ventas en el período.</p>';
-    const pagos = (d.premios_pagados || []).map((p) =>
-      `<div class="gan-jugada"><b>Ticket #${esc(p.ticket_id)}</b> · ${fmt(p.premio)} · ${esc(p.numeros || "")}
-      <br><span class="meta">${esc(p.pagado_en || "—")} · pagó este cajero · vendió: ${esc(p.vendedor || "—")}</span></div>`
-    ).join("") || '<p class="nota">Sin premios pagados por este cajero en el período.</p>';
-    const movs = (d.movimientos || []).map((m) =>
-      `<div class="gan-jugada"><b>${esc(m.tipo)}</b> · ${fmt(m.monto)}
-      <br><span class="meta">${esc(m.creado_en || "—")} · ${esc(m.referencia || "")}</span></div>`
-    ).join("") || '<p class="nota">Sin movimientos en el período.</p>';
+    const ventas = (d.ventas || []).length
+      ? htmlItemHistorialVc((d.ventas || []).map((t) => ({
+          top: `<b>#${esc(t.id)}</b><span class="vc-hist-estado">${esc(t.estado)}</span><span class="vc-hist-monto">${fmt(t.total)}</span>`,
+          meta: `${esc(t.vendido_en || t.fecha)} · vendió este ticket`,
+        })))
+      : '<p class="nota">Sin ventas en el período.</p>';
+    const pagos = (d.premios_pagados || []).length
+      ? htmlItemHistorialVc((d.premios_pagados || []).map((p) => ({
+          top: `<b>Ticket #${esc(p.ticket_id)}</b><span class="vc-hist-monto">${fmt(p.premio)}</span>`,
+          meta: `${esc(p.numeros || "—")} · ${esc(p.pagado_en || "—")} · pagó este cajero · vendió: ${esc(p.vendedor || "—")}`,
+        })))
+      : '<p class="nota">Sin premios pagados por este cajero en el período.</p>';
+    const movs = (d.movimientos || []).length
+      ? htmlItemHistorialVc((d.movimientos || []).map((m) => ({
+          top: `<b>${esc(m.tipo)}</b><span class="vc-hist-monto">${fmt(m.monto)}</span>`,
+          meta: `${esc(m.creado_en || "—")} · ${esc(m.referencia || "")}`,
+        })))
+      : '<p class="nota">Sin movimientos en el período.</p>';
     cuerpo.innerHTML = `
-      <div class="vc-detalle-cab">
-        ${pillEstadoUsuario(r)} · ${esc(r.sucursal || "—")}
-        <div class="meta">Última operación: ${esc(r.ultima_operacion || "—")}</div>
+      <div class="vc-detalle-hero">
+        <div class="vc-detalle-hero-ico" aria-hidden="true">👤</div>
+        <div class="vc-detalle-hero-txt">
+          <h4>${esc(r.nombre || "Cajero")}</h4>
+          <p>${esc(r.sucursal || "—")} · ${esc(r.usuario || "")}</p>
+          <div class="vc-detalle-hero-meta">${pillEstadoUsuario(r)} <span>Última operación: ${esc(r.ultima_operacion || "—")}</span></div>
+        </div>
       </div>
       <div class="vc-detalle-montos">
-        <div>Ventas brutas<b>${fmt(r.ventas_brutas)}</b></div>
-        <div>Anulaciones<b>${fmt(r.anulaciones)}</b></div>
-        <div>Ventas netas<b>${fmt(r.ventas_netas)}</b></div>
-        <div>Premios pagados<b>${fmt(r.premios_pagados)}</b></div>
-        <div>Recaudación del período<b>${fmt(r.recaudacion)}</b></div>
-        <div>Fondo asignado<b>${fmt(r.fondo_asignado)}</b></div>
-        <div>Entregas<b>${fmt(r.entregas)}</b></div>
-        <div>MI CAJA<b>${fmt(r.mi_caja)}</b></div>
+        <div><span class="k">Ventas brutas</span><b>${fmt(r.ventas_brutas)}</b></div>
+        <div><span class="k">Anulaciones</span><b>${fmt(r.anulaciones)}</b></div>
+        <div><span class="k">Ventas netas</span><b>${fmt(r.ventas_netas)}</b></div>
+        <div><span class="k">Premios pagados</span><b>${fmt(r.premios_pagados)}</b></div>
+        <div><span class="k">Recaudación del período</span><b>${fmt(r.recaudacion)}</b></div>
+        <div><span class="k">Fondo asignado</span><b>${fmt(r.fondo_asignado)}</b></div>
+        <div><span class="k">Entregas</span><b>${fmt(r.entregas)}</b></div>
+        <div><span class="k">MI CAJA</span><b>${fmt(r.mi_caja)}</b></div>
+        <div><span class="k">Tickets vigentes</span><b>${esc(r.tickets_vigentes)}</b></div>
+        <div><span class="k">Tickets anulados</span><b>${esc(r.tickets_anulados)}</b></div>
       </div>
-      <div class="meta" style="margin:8px 0 12px">Tickets: ${esc(r.tickets_vendidos)} · Vigentes: ${esc(r.tickets_vigentes)} · Anulados: ${esc(r.tickets_anulados)}</div>
-      <div class="gan-grupo"><h5>Tickets vendidos</h5>${ventas}</div>
-      <div class="gan-grupo"><h5>Premios que pagó</h5>${pagos}</div>
-      <div class="gan-grupo"><h5>Movimientos de caja</h5>${movs}</div>`;
+      <p class="vc-detalle-tickets-meta">Tickets vendidos: ${esc(r.tickets_vendidos)}</p>
+      <section class="vc-hist">
+        <h5>Tickets vendidos</h5>
+        <div class="vc-hist-lista">${ventas}</div>
+      </section>
+      <section class="vc-hist">
+        <h5>Premios que pagó</h5>
+        <div class="vc-hist-lista">${pagos}</div>
+      </section>
+      <section class="vc-hist">
+        <h5>Movimientos de caja</h5>
+        <div class="vc-hist-lista">${movs}</div>
+      </section>`;
   } catch (e) {
     cuerpo.innerHTML = `<p class="msg error">${esc(e.message)}</p>`;
   }
@@ -904,6 +953,12 @@ async function verDetalleCajero(id) {
 function cerrarDetalleCajero() {
   const modal = $("#vc-modal");
   if (modal) modal.hidden = true;
+  // Cierra overlay sin ir()/recargar: conserva filtros, DOM de lista y scroll.
+  const y = VC_DETALLE_SCROLL || 0;
+  requestAnimationFrame(() => {
+    window.scrollTo(0, y);
+    requestAnimationFrame(() => window.scrollTo(0, y));
+  });
 }
 window.verDetalleCajero = verDetalleCajero;
 window.cerrarDetalleCajero = cerrarDetalleCajero;
@@ -1845,6 +1900,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }));
   }
   if ($("#vc-modal-cerrar")) $("#vc-modal-cerrar").addEventListener("click", cerrarDetalleCajero);
+  if ($("#vc-modal-volver")) $("#vc-modal-volver").addEventListener("click", cerrarDetalleCajero);
   if ($("#vc-modal")) $("#vc-modal").addEventListener("click", (e) => { if (e.target === $("#vc-modal")) cerrarDetalleCajero(); });
   $("#btn-sor-guardar").addEventListener("click", guardarSorteo);
   $("#btn-sor-limpiar").addEventListener("click", limpiarSorteo);

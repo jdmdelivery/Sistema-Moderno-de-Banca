@@ -252,30 +252,110 @@ body.usuarios-movil .usu-tabla-escritorio{display:none !important}
 .caj-card .meta{color:var(--suave);font-size:13px;line-height:1.45}
 .caj-card .montos{display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px}
 .caj-card .montos b{display:block;color:var(--texto);font-size:15px;overflow-wrap:anywhere}
-/* Ventas por Cajero: lista compacta (tema verde del panel). */
+/* Ventas por Cajero: tarjetas élite (tema oscuro + encabezado azul). */
+.sr-only{
+  position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
 .vc-filtros{align-items:end}
 .vc-chips{display:flex;flex-wrap:wrap;gap:8px;width:100%}
 .vc-lista{
-  margin:8px 0 20px;background:var(--panel);border:1px solid var(--borde);
-  border-radius:12px;overflow:hidden;
+  margin:8px 0 20px;display:flex;flex-direction:column;gap:12px;
+  background:transparent;border:none;overflow:visible;width:100%;max-width:100%;
 }
-.vc-fila{
-  padding:12px 14px;border-bottom:1px solid var(--borde);min-width:0;
+.vc-card{
+  background:linear-gradient(180deg,#1a2820 0%,#142019 100%);
+  border:1px solid #2c4234;border-radius:16px;overflow:hidden;min-width:0;
+  box-shadow:0 8px 22px rgba(0,0,0,.22);
+  display:flex;flex-direction:column;
 }
-.vc-fila:last-child{border-bottom:none}
-.vc-fila-info{
-  min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;
+.vc-card-head{
+  background:linear-gradient(135deg,#14365c 0%,#1e6fd9 72%,#2a7de0 100%);
+  border-bottom:1px solid #2a5f96;padding:12px 14px;
 }
-.vc-fila-nombre{font-weight:600;font-size:15px;overflow-wrap:anywhere}
-.vc-fila-meta,.vc-fila-sep{color:var(--suave);font-size:13.5px}
-.vc-fila-monto{color:var(--verde);font-weight:600;font-size:14.5px;overflow-wrap:anywhere}
-.vc-fila-btn{flex:0 0 auto;white-space:nowrap;min-height:40px}
-.vc-detalle-cab{margin-bottom:10px;line-height:1.45}
+.vc-card-nombre{
+  margin:0;font-size:17px;font-weight:700;line-height:1.25;color:#fff;
+  letter-spacing:.02em;overflow-wrap:anywhere;word-break:break-word;
+}
+.vc-card-body{
+  display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px 14px 4px;
+}
+.vc-card-stat .k{display:block;color:var(--suave);font-size:11.5px;margin-bottom:2px}
+.vc-card-stat b{display:block;color:var(--texto);font-size:15px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}
+.vc-card-monto{color:var(--verde) !important}
+.vc-card-btn{
+  margin:10px 14px 14px;width:auto;align-self:stretch;min-height:42px;padding:10px 14px;
+  font-size:13.5px;font-weight:700;letter-spacing:.03em;border-radius:10px;
+  background:transparent;color:#d7e6f7;border:1px solid #2a5f96;
+}
+.vc-card-btn:hover{background:rgba(30,111,217,.18);border-color:#1e6fd9;color:#fff}
+.vc-modal-caja{width:min(760px,100%)}
+.vc-modal-cab{
+  display:flex;align-items:center;gap:8px;justify-content:space-between;
+  background:linear-gradient(180deg,#102744 0%,#0b1c33 100%);
+  border-bottom:1px solid #1a3a5c;
+}
+.vc-volver{
+  flex:1;min-width:0;min-height:42px;padding:10px 12px;font-size:13.5px;font-weight:700;
+  text-align:left;border-radius:10px;background:rgba(30,111,217,.16);
+  border:1px solid rgba(30,111,217,.35);color:#d7e6f7;letter-spacing:.01em;
+}
+.vc-volver:hover{background:rgba(30,111,217,.28);color:#fff}
+.vc-modal-x{flex-shrink:0}
+.vc-modal-cuerpo{padding-top:12px}
+.vc-detalle-hero{
+  display:flex;align-items:flex-start;gap:12px;
+  background:linear-gradient(135deg,#14365c 0%,#1e6fd9 70%,#2a7de0 100%);
+  border:1px solid #2a5f96;border-radius:16px;padding:14px;margin:0 0 12px;
+  box-shadow:0 10px 28px rgba(20,54,92,.35);
+}
+.vc-detalle-hero-ico{
+  flex-shrink:0;width:44px;height:44px;border-radius:12px;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);font-size:22px;
+}
+.vc-detalle-hero-txt{min-width:0;flex:1}
+.vc-detalle-hero-txt h4{margin:0 0 4px;font-size:19px;color:#fff;letter-spacing:.02em;overflow-wrap:anywhere}
+.vc-detalle-hero-txt p{margin:0;color:#d7e6f7;font-size:13px;line-height:1.4;overflow-wrap:anywhere}
+.vc-detalle-hero-meta{
+  margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;
+  color:#cfe4ff;font-size:12.5px;
+}
 .vc-detalle-montos{
-  display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
-  gap:10px;margin:0 0 8px;font-size:13px;color:var(--suave);
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:10px;margin:0 0 10px;font-size:12.5px;color:var(--suave);
 }
-.vc-detalle-montos b{display:block;color:var(--texto);font-size:15px;margin-top:2px;overflow-wrap:anywhere}
+.vc-detalle-montos > div{
+  background:var(--panel2);border:1px solid var(--borde);border-radius:12px;padding:10px 12px;min-width:0;
+}
+.vc-detalle-montos .k{display:block;color:var(--suave);font-size:11.5px;margin-bottom:3px;line-height:1.3}
+.vc-detalle-montos b{display:block;color:var(--texto);font-size:15px;margin-top:0;overflow-wrap:anywhere;line-height:1.25}
+.vc-detalle-tickets-meta{margin:0 0 12px;color:var(--suave);font-size:13px}
+.vc-hist{
+  border:1px solid var(--borde);border-radius:14px;padding:12px;margin:0 0 12px;
+  background:var(--panel2);min-width:0;
+}
+.vc-hist h5{
+  margin:0 0 10px;font-size:14px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:#d7e6f7;padding-bottom:8px;border-bottom:1px solid rgba(42,95,150,.45);
+}
+.vc-hist-lista{display:flex;flex-direction:column;gap:0}
+.vc-hist-item{
+  padding:10px 0;border-top:1px solid rgba(44,66,52,.85);min-width:0;
+}
+.vc-hist-item:first-child{border-top:none;padding-top:0}
+.vc-hist-top{
+  display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;
+  font-size:13.5px;line-height:1.35;overflow-wrap:anywhere;
+}
+.vc-hist-top b{color:var(--texto);font-weight:700}
+.vc-hist-estado{
+  display:inline-flex;align-items:center;font-size:11px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;padding:3px 8px;border-radius:999px;
+  background:#1e3a5f;color:#cfe4ff;border:1px solid #2a5f96;
+}
+.vc-hist-monto{margin-left:auto;color:var(--verde);font-weight:700;white-space:nowrap}
+.vc-hist-meta{margin-top:4px;color:var(--suave);font-size:12.5px;line-height:1.4;overflow-wrap:anywhere}
 .tic-lista{display:flex;flex-direction:column;gap:12px;width:100%}
 .tic-card{background:var(--panel);border:1px solid var(--borde);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0}
 .tic-cab{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
@@ -316,10 +396,12 @@ body.usuarios-movil .usu-tabla-escritorio{display:none !important}
   .vc-filtros{flex-direction:column;align-items:stretch;gap:8px;padding:10px}
   .vc-chips{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
   .vc-chips .btn{width:100%;min-width:0;padding:11px 8px;font-size:13px}
-  .vc-fila{padding:12px}
-  .vc-fila-info{gap:8px}
-  .vc-fila-btn{width:100%;min-height:44px;margin-left:0}
+  .vc-card-nombre{font-size:16.5px}
+  .vc-card-btn{width:100%;min-height:44px;margin:8px 12px 12px;align-self:stretch}
   .vc-detalle-montos{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .vc-detalle-hero{padding:12px}
+  .vc-detalle-hero-txt h4{font-size:17px}
+  .vc-volver{font-size:13px;padding:10px}
   body.con-sesion main.panel-principal{margin-left:0;max-width:100%}
   .btn,.btn.primario,.btn.peligro{min-height:46px;padding:12px 16px;font-size:15px}
   .btn.fila,.btn.chico{min-height:40px;padding:8px 12px;font-size:14px}
@@ -391,6 +473,24 @@ body.usuarios-movil .usu-tabla-escritorio{display:none !important}
   #sec-usuarios .usu-tabla-escritorio table{min-width:0;width:100%;font-size:13.5px}
   #sec-usuarios .usu-tabla-escritorio th,#sec-usuarios .usu-tabla-escritorio td{padding:10px 12px;vertical-align:middle}
   #sec-usuarios .acciones-fila{gap:6px}
+  /* Ventas cajeros escritorio: tarjeta horizontal compacta */
+  .vc-lista{gap:10px}
+  .vc-card{
+    display:grid;grid-template-columns:minmax(160px,.9fr) minmax(220px,1.1fr) auto;
+    align-items:stretch;gap:0;
+  }
+  .vc-card-head{
+    display:flex;align-items:center;padding:14px 16px;border-bottom:none;
+    border-right:1px solid rgba(42,95,150,.55);
+  }
+  .vc-card-body{
+    display:flex;align-items:center;gap:28px;padding:14px 18px;grid-template-columns:none;
+  }
+  .vc-card-stat{min-width:110px}
+  .vc-card-btn{
+    margin:14px 16px;align-self:center;width:auto;min-width:148px;white-space:nowrap;
+  }
+  .vc-detalle-montos{grid-template-columns:repeat(4,minmax(0,1fr))}
 }
 .gan-lista{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin:12px 0 20px}
 .gan-card{background:var(--panel);border:1px solid var(--borde);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:8px}

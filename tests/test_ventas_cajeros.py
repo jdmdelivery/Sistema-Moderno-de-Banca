@@ -59,15 +59,23 @@ def test_panel_tiene_seccion_ventas_cajeros(entorno):
     assert 'id="sec-ventas-cajeros"' in html
     assert 'id="vc-lista"' in html
     assert 'vc-lista' in html
+    assert 'id="vc-modal-volver"' in html
+    assert "VOLVER A USUARIOS" in html
     js = entorno.c.get("/static/app.js").text
     assert "cargarVentasCajeros" in js
     assert "verDetalleCajero" in js
     assert "filaCajeroCompacta" in js
+    assert "cerrarDetalleCajero" in js
+    assert "VC_DETALLE_SCROLL" in js
     assert "VER DETALLE" in js
-    assert "tarjetaCajero" not in js
+    assert "vc-card" in js
+    assert "vc-hist" in js
     css = entorno.c.get("/static/style.css").text
-    assert ".vc-fila" in css
+    assert ".vc-card" in css
     assert ".vc-lista" in css
+    assert ".vc-volver" in css
+    assert ".vc-detalle-hero" in css
+    assert ".vc-hist" in css
 
 
 def test_lista_compacta_coincide_con_detalle(entorno, monkeypatch, fijar_hora):
