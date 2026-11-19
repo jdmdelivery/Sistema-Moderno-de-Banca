@@ -1744,6 +1744,8 @@ def panel_asignar_fondo(datos: FondoIn, db=Depends(get_db),
 class ComisionIn(BaseModel):
     usuario_id: int
     porcentaje: float
+    # Autorización expresa: aplica el % desde el inicio del ciclo abierto (no inventa %).
+    aplicar_desde_inicio_ciclo: bool = False
 
 
 class LiquidacionIn(BaseModel):
@@ -1775,7 +1777,10 @@ def panel_comisiones(sucursal_id: int | None = None, usuario_id: int | None = No
 @app.post("/comisiones", status_code=201)
 def panel_guardar_comision(datos: ComisionIn, db=Depends(get_db),
                            usuario=Depends(requiere_rol("admin"))):
-    return servicios.guardar_comision(db, usuario, datos.usuario_id, datos.porcentaje)
+    return servicios.guardar_comision(
+        db, usuario, datos.usuario_id, datos.porcentaje,
+        aplicar_desde_inicio_ciclo=bool(datos.aplicar_desde_inicio_ciclo),
+    )
 
 
 @app.get("/comisiones/resumen")

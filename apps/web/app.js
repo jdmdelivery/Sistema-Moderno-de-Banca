@@ -1050,6 +1050,9 @@ async function verDetalleCajero(id) {
     const notaCierre = (com.bloqueos_cierre || []).length
       ? `<p class="vc-comision-periodo-nota">${esc((com.bloqueos_cierre || []).join(" · "))}</p>`
       : "";
+    const notaBalance = com.nota_balance
+      ? `<p class="vc-comision-periodo-nota">${esc(com.nota_balance)}</p>`
+      : "";
     cuerpo.innerHTML = `
       <div class="vc-detalle-hero">
         <div class="vc-detalle-hero-ico" aria-hidden="true">👤</div>
@@ -1074,6 +1077,7 @@ async function verDetalleCajero(id) {
           <div><span class="k">PORCENTAJE VIGENTE</span><b>${esc(pctVigente)}%</b></div>
           <div class="vc-comision-pendiente"><span class="k">BALANCE DE COMISIÓN</span><b class="vc-card-monto">${fmt(balance)}</b></div>
         </div>
+        ${notaBalance}
         ${notaCierre}
         <div class="vc-comision-acciones">${btnCerrar}</div>
       </section>
@@ -1884,12 +1888,26 @@ function pintarCajerasComision() {
 async function guardarComision() {
   const cajera = $("#com-cajera").value;
   const porcentaje = $("#com-porcentaje").value;
+  const aplicarCiclo = !!$("#com-aplicar-ciclo")?.checked;
   if (!cajera) throw new Error("Seleccione una cajera");
   if (porcentaje === "" || Number(porcentaje) < 0 || Number(porcentaje) > 100) {
     throw new Error("El porcentaje debe estar entre 0 y 100");
   }
-  const r = await post("/comisiones", { usuario_id: Number(cajera), porcentaje: Number(porcentaje) });
-  msg("#com-msg", `Porcentaje de ${r.cajera}: ${r.porcentaje}%`, true);
+  if (aplicarCiclo) {
+    const ok = confirm(
+      "¿Autoriza aplicar este porcentaje desde el INICIO DEL CICLO ABIERTO?\n\n"
+      + "Solo cubre ventas del ciclo que no tenían otro porcentaje registrado.\n"
+      + "No modifica MI CAJA ni Banco General.",
+    );
+    if (!ok) return;
+  }
+  const r = await post("/comisiones", {
+    usuario_id: Number(cajera),
+    porcentaje: Number(porcentaje),
+    aplicar_desde_inicio_ciclo: aplicarCiclo,
+  });
+  msg("#com-msg", `Porcentaje de ${r.cajera}: ${r.porcentaje}% (desde ${r.vigente_desde})`, true);
+  if ($("#com-aplicar-ciclo")) $("#com-aplicar-ciclo").checked = false;
   await pintarHistorialComision();
 }
 async function pintarHistorialComision() {

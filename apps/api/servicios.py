@@ -3792,7 +3792,29 @@ def comision_a_dict(db, fila):
     }
 
 
-def guardar_comision(db, admin, usuario_id, porcentaje):
+def _momento_aplicacion_desde_ciclo(db, cajera, prueba=False):
+    """Inicio del ciclo abierto para autorizar % sobre ventas ya hechas sin inventar %.
+
+    Con cierre: usa cerrado_en (las ventas del ciclo nuevo tienen vendido_en > ese momento).
+    Sin cierre: usa el momento de la primera venta del bucket (origen del ciclo).
+    """
+    inicio = _inicio_ciclo_perfil(db, cajera, bool(prueba))
+    if inicio is not None:
+        return inicio
+    q = (
+        db.query(Ticket)
+        .filter(Ticket.usuario_id == cajera.id, Ticket.es_prueba.is_(bool(prueba)))
+        .order_by(Ticket.id.asc())
+    )
+    momentos = []
+    for ticket in q.all():
+        momentos.append(ticket.vendido_en or datetime.combine(ticket.fecha, datetime.min.time()))
+    if momentos:
+        return min(momentos)
+    return ahora_local()
+
+
+def guardar_comision(db, admin, usuario_id, porcentaje, aplicar_desde_inicio_ciclo=False):
     from . import permisos as perm
 
     if admin is None or not perm.es_admin_panel(admin):
@@ -3805,20 +3827,42 @@ def guardar_comision(db, admin, usuario_id, porcentaje):
         raise ErrorServicio(400, "Seleccione una cajera activa")
     perm.assert_usuario_en_alcance(db, admin, cajera)
     ahora = ahora_local()
+    aplicar = bool(aplicar_desde_inicio_ciclo)
     ultima = (
         db.query(ComisionCajera)
         .filter(ComisionCajera.usuario_id == cajera.id)
         .order_by(ComisionCajera.vigente_desde.desc(), ComisionCajera.id.desc())
         .first()
     )
-    if ultima is not None and D(ultima.porcentaje) == pct:
+    # Sin autorización expresa: no reescribe el pasado ni duplica el mismo %.
+    if ultima is not None and D(ultima.porcentaje) == pct and not aplicar:
         return comision_a_dict(db, ultima)
+
+    usar_prueba = bool(modo_desarrollo())
+    if aplicar:
+        vigente = _momento_aplicacion_desde_ciclo(db, cajera, usar_prueba)
+        # Idempotencia: si ya hay el mismo % cubriendo desde (o antes de) el inicio del ciclo, no insertar otra fila.
+        cubierta = (
+            db.query(ComisionCajera)
+            .filter(
+                ComisionCajera.usuario_id == cajera.id,
+                ComisionCajera.porcentaje == pct,
+                ComisionCajera.vigente_desde <= vigente,
+            )
+            .order_by(ComisionCajera.vigente_desde.asc(), ComisionCajera.id.asc())
+            .first()
+        )
+        if cubierta is not None:
+            return comision_a_dict(db, cubierta)
+    else:
+        vigente = ahora
+
     fila = ComisionCajera(
         usuario_id=cajera.id,
         sucursal_id=cajera.sucursal_id,
         porcentaje=pct,
         porcentaje_anterior=D(ultima.porcentaje) if ultima is not None else None,
-        vigente_desde=ahora,
+        vigente_desde=vigente,
         autorizado_por=admin.id,
         creado_en=ahora,
     )
@@ -3826,8 +3870,14 @@ def guardar_comision(db, admin, usuario_id, porcentaje):
     db.flush()
     auditar(
         db, "comision", fila.id, "comision_cajera", usuario_id=admin.id,
-        detalle={"cajera_id": cajera.id, "anterior": None if ultima is None else str(D(ultima.porcentaje)),
-                 "nuevo": str(pct)},
+        detalle={
+            "cajera_id": cajera.id,
+            "anterior": None if ultima is None else str(D(ultima.porcentaje)),
+            "nuevo": str(pct),
+            "aplicar_desde_inicio_ciclo": aplicar,
+            "vigente_desde": vigente.isoformat(sep=" "),
+            "no_borra_datos": True,
+        },
     )
     db.commit()
     db.refresh(fila)
@@ -4214,10 +4264,13 @@ def saldo_comision_cajera(db, cajera, prueba=False):
             "comision_pendiente": "0.00",
             "pagado_en_exceso": "0.00",
             "ventas_validas": "0.00",
+            "ventas_sin_porcentaje": "0.00",
+            "tickets_sin_porcentaje": 0,
             "tickets_vendidos": 0,
             "tickets_anulados": 0,
             "desglose": [],
             "ciclo_desde": None,
+            "nota_balance": None,
             "descuenta_mi_caja": False,
             "descuenta_caja_general": False,
         }
@@ -4230,6 +4283,19 @@ def saldo_comision_cajera(db, cajera, prueba=False):
     crudo = D(acumulada - pagada)
     pendiente = D(max(D(0), crudo))
     exceso = D(max(D(0), D(-crudo)))
+    sin_pct_ventas = D(0)
+    sin_pct_tickets = 0
+    for fila in calculo.get("desglose") or []:
+        if D(fila.get("porcentaje") or 0) == 0:
+            sin_pct_ventas += D(fila.get("ventas") or 0)
+            sin_pct_tickets += int(fila.get("tickets") or 0)
+    nota = None
+    if sin_pct_ventas > 0 and pendiente == 0:
+        nota = (
+            f"Hay {sin_pct_tickets} venta(s) del ciclo ({sin_pct_ventas}) sin porcentaje "
+            "registrado al momento de vender. El % vigente no se aplica retroactivo "
+            "salvo autorización expresa (aplicar desde inicio del ciclo)."
+        )
     return {
         "porcentaje_vigente": _pct_texto(_porcentaje_vigente(db, cajera.id, ahora_local())),
         "comision_acumulada": str(acumulada),
@@ -4237,10 +4303,13 @@ def saldo_comision_cajera(db, cajera, prueba=False):
         "comision_pendiente": str(pendiente),
         "pagado_en_exceso": str(exceso),
         "ventas_validas": calculo["ventas_validas"],
+        "ventas_sin_porcentaje": str(D(sin_pct_ventas)),
+        "tickets_sin_porcentaje": sin_pct_tickets,
         "tickets_vendidos": calculo["tickets_vendidos"],
         "tickets_anulados": calculo["tickets_anulados"],
         "desglose": calculo["desglose"],
         "ciclo_desde": inicio.isoformat(sep=" ") if inicio else None,
+        "nota_balance": nota,
         "descuenta_mi_caja": False,
         "descuenta_caja_general": False,
     }
@@ -5751,10 +5820,13 @@ def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
         "comision_pendiente": saldo["comision_pendiente"],
         "pagado_en_exceso": saldo["pagado_en_exceso"],
         "ventas_validas": saldo["ventas_validas"],
+        "ventas_sin_porcentaje": saldo.get("ventas_sin_porcentaje") or "0.00",
+        "tickets_sin_porcentaje": int(saldo.get("tickets_sin_porcentaje") or 0),
         "tickets_vendidos": int(saldo["tickets_vendidos"] or 0),
         "tickets_anulados": int(saldo["tickets_anulados"] or 0),
         "desglose": saldo.get("desglose") or [],
         "ciclo_desde": saldo.get("ciclo_desde"),
+        "nota_balance": saldo.get("nota_balance"),
         "historial_pagos": historial_pagos_comision,
         "historial_cierres": historial_cierres,
         "puede_cerrar_ciclo": cond_cierre["puede_cerrar"],
