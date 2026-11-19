@@ -1025,6 +1025,14 @@ async function verDetalleCajero(id) {
           meta: `${esc(m.creado_en || "—")} · ${esc(m.referencia || "")}`,
         })))
       : '<p class="nota">Sin movimientos en el período.</p>';
+    const com = d.comision || {};
+    const pctVigente = (com.porcentaje_vigente == null || com.porcentaje_vigente === "")
+      ? "0" : String(com.porcentaje_vigente);
+    const desgloseCom = (com.desglose || []).length > 1
+      ? `<ul class="vc-comision-desglose">${(com.desglose || []).map((fila) =>
+          `<li>${esc(fila.porcentaje)}% sobre ${fmt(fila.ventas)} = ${fmt(fila.comision)}</li>`
+        ).join("")}</ul>`
+      : "";
     cuerpo.innerHTML = `
       <div class="vc-detalle-hero">
         <div class="vc-detalle-hero-ico" aria-hidden="true">👤</div>
@@ -1035,17 +1043,23 @@ async function verDetalleCajero(id) {
         </div>
       </div>
       <div class="vc-detalle-montos">
-        <div><span class="k">Ventas brutas</span><b>${fmt(r.ventas_brutas)}</b></div>
-        <div><span class="k">Anulaciones</span><b>${fmt(r.anulaciones)}</b></div>
-        <div><span class="k">Ventas netas</span><b>${fmt(r.ventas_netas)}</b></div>
-        <div><span class="k">Premios pagados</span><b>${fmt(r.premios_pagados)}</b></div>
+        <div class="vc-monto-dest"><span class="k">Ventas netas</span><b class="vc-card-monto">${fmt(r.ventas_netas)}</b></div>
+        <div class="vc-monto-dest"><span class="k">Premios pagados</span><b>${fmt(r.premios_pagados)}</b></div>
+        <div class="vc-monto-dest"><span class="k">MI CAJA</span><b>${fmt(r.mi_caja)}</b></div>
         <div><span class="k">Recaudación del período</span><b>${fmt(r.recaudacion)}</b></div>
         <div><span class="k">Fondo asignado</span><b>${fmt(r.fondo_asignado)}</b></div>
         <div><span class="k">Entregas</span><b>${fmt(r.entregas)}</b></div>
-        <div><span class="k">MI CAJA</span><b>${fmt(r.mi_caja)}</b></div>
         <div><span class="k">Tickets vigentes</span><b>${esc(r.tickets_vigentes)}</b></div>
         <div><span class="k">Tickets anulados</span><b>${esc(r.tickets_anulados)}</b></div>
       </div>
+      <section class="vc-comision-card" aria-label="Comisión ganada">
+        <h5>COMISIÓN GANADA</h5>
+        <div class="vc-comision-grid">
+          <div><span class="k">Porcentaje vigente</span><b>${esc(pctVigente)}%</b></div>
+          <div><span class="k">Comisión del período</span><b class="vc-card-monto">${fmt(com.comision || 0)}</b></div>
+        </div>
+        ${desgloseCom}
+      </section>
       <p class="vc-detalle-tickets-meta">Tickets vendidos: ${esc(r.tickets_vendidos)}</p>
       <section class="vc-hist">
         <h5>Tickets vendidos</h5>

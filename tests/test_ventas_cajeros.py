@@ -88,12 +88,24 @@ def test_panel_tiene_seccion_ventas_cajeros(entorno):
     assert "VER DETALLE" in js
     assert "vc-card" in js
     assert "vc-hist" in js
+    assert "COMISIÓN GANADA" in js
+    assert "vc-comision-card" in js
+    assert "porcentaje_vigente" in js
+    assert "Ventas netas" in js
+    assert "Premios pagados" in js
+    assert "MI CAJA" in js
+    # Perfil simplificado: brutas/anulaciones siguen en API, no en tarjetas del detalle.
+    assert "Ventas brutas" not in js
+    assert ">Anulaciones<" not in js and "Anulaciones</span>" not in js
     css = entorno.c.get("/static/style.css").text
     assert ".vc-card" in css
     assert ".vc-lista" in css
     assert ".vc-volver" in css
     assert ".vc-detalle-hero" in css
     assert ".vc-hist" in css
+    assert ".vc-comision-card" in css
+    assert ".vc-comision-grid" in css
+    assert ".vc-monto-dest" in css
 
 
 def test_lista_compacta_coincide_con_detalle(entorno, monkeypatch, fijar_hora):
@@ -123,3 +135,78 @@ def test_lista_compacta_coincide_con_detalle(entorno, monkeypatch, fijar_hora):
     assert r["mi_caja"] == fila["mi_caja"]
     assert float(fila["ventas_netas"]) == 35
     assert fila["tickets_vendidos"] == 2
+
+
+def test_detalle_muestra_comision_ganada_por_periodo(entorno, monkeypatch, fijar_hora):
+    """Perfil individual: comisión con % vigente al vender; anulados fuera; no toca cajas."""
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    fijar_hora(datetime(2026, 11, 14, 10, 0, 0))
+    a = entorno.banca(saldo=8000, usuario="vccom1", clave="prueba123")
+    otra = entorno.banca(saldo=500, codigo="3300", nombre="OTRA BANCA VC", usuario="vccom2", clave="prueba123")
+    usuarios = entorno.c.get("/usuarios", headers=entorno.admin).json()
+    u1 = next(u for u in usuarios if u["usuario"] == "vccom1")
+    u2 = next(u for u in usuarios if u["usuario"] == "vccom2")
+    # Sin porcentaje: comisión 0 aunque haya ventas.
+    lot = entorno.sorteo_id("LOTEDOM")
+    entorno.vender_ok(a["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "01", "monto": 100}])
+    sin = entorno.c.get(
+        f"/reportes/ventas-cajeros/{u1['id']}?desde=2026-11-14&hasta=2026-11-14",
+        headers=entorno.admin,
+    )
+    assert sin.status_code == 200, sin.text
+    assert sin.json()["comision"]["comision"] == "0.00"
+    assert sin.json()["comision"]["porcentaje_vigente"] == "0"
+    assert sin.json()["comision"]["descuenta_mi_caja"] is False
+
+    # Asignar % después de la venta sin comisión (no reescribe el pasado).
+    fijar_hora(datetime(2026, 11, 14, 10, 30, 0))
+    asig = entorno.c.post("/comisiones", json={"usuario_id": u1["id"], "porcentaje": 15},
+                          headers=entorno.admin)
+    assert asig.status_code == 201, asig.text
+    entorno.c.post("/comisiones", json={"usuario_id": u2["id"], "porcentaje": 10},
+                   headers=entorno.admin)
+    # Venta bajo 15% + anulado (no cuenta) + cambio a 10% + venta bajo 10%.
+    entorno.vender_ok(a["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "02", "monto": 1000}])
+    anulado = entorno.vender_ok(a["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "03", "monto": 200}])
+    entorno.c.post("/terminal/tickets/anular", json={
+        "id": anulado["id"], "serial": anulado["serial"], "motivo": "error",
+    }, headers=a["headers"])
+    fijar_hora(datetime(2026, 11, 14, 15, 0, 0))
+    cambio = entorno.c.post("/comisiones", json={"usuario_id": u1["id"], "porcentaje": 10},
+                            headers=entorno.admin)
+    assert cambio.status_code == 201, cambio.text
+    tarde = entorno.sorteo_id("Leidsa 3:55 PM")
+    entorno.vender_ok(a["headers"], [{"tipo": "QN", "sorteos": [tarde], "numeros": "04", "monto": 500}])
+    entorno.vender_ok(otra["headers"], [{"tipo": "QN", "sorteos": [tarde], "numeros": "05", "monto": 800}])
+
+    caja_antes = entorno.c.get("/terminal/sorteos", headers=a["headers"]).json()["mi_caja"]
+    general_antes = entorno.saldo(a["sucursal"]["id"])
+    det = entorno.c.get(
+        f"/reportes/ventas-cajeros/{u1['id']}?desde=2026-11-14&hasta=2026-11-14",
+        headers=entorno.admin,
+    )
+    assert det.status_code == 200, det.text
+    com = det.json()["comision"]
+    # 100×0% + 1000×15% + 500×10% = 200; anulado fuera; venta ajena fuera.
+    assert com["comision"] == "200.00"
+    assert com["porcentaje_vigente"] == "10"
+    assert com["tickets_anulados"] == 1
+    assert len(com["desglose"]) >= 2
+    assert com["descuenta_mi_caja"] is False
+    assert com["informativa"] is True
+    assert entorno.c.get("/terminal/sorteos", headers=a["headers"]).json()["mi_caja"] == caja_antes
+    assert entorno.saldo(a["sucursal"]["id"]) == general_antes
+
+    ajena = entorno.c.get(
+        f"/reportes/ventas-cajeros/{u2['id']}?desde=2026-11-14&hasta=2026-11-14",
+        headers=entorno.admin,
+    )
+    assert ajena.status_code == 200, ajena.text
+    assert ajena.json()["comision"]["comision"] == "80.00"  # 800 × 10%
+    assert "800.00" not in det.json()["comision"]["ventas_validas"]
+
+    vacio = entorno.c.get(
+        f"/reportes/ventas-cajeros/{u1['id']}?desde=2026-11-13&hasta=2026-11-13",
+        headers=entorno.admin,
+    )
+    assert vacio.json()["comision"]["comision"] == "0.00"

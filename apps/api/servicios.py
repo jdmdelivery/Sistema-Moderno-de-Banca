@@ -5142,10 +5142,34 @@ def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
         "creado_en": m.creado_en.isoformat(sep=" ") if m.creado_en else None,
         "saldo_resultante": str(D(m.saldo_resultante)) if m.saldo_resultante is not None else None,
     } for m in movs]
+    # Comisión informativa del período: mismo motor que /comisiones/resumen.
+    # No toca MI CAJA, Banco General ni liquidaciones.
+    if cajero.sucursal_id:
+        calculo = comision_periodo(db, desde, hasta, cajero.sucursal_id, cajero.id)
+        bloque = calculo["prueba"] if prueba and calculo.get("prueba") else calculo["real"]
+    else:
+        bloque = {
+            "ventas_validas": "0.00", "tickets_vendidos": 0, "tickets_anulados": 0,
+            "premios_pagados": "0.00", "porcentaje": None, "comision": "0.00",
+            "desglose": [], "descuenta_mi_caja": False, "descuenta_caja_general": False,
+        }
+    comision = {
+        "porcentaje_vigente": _pct_texto(_porcentaje_vigente(db, cajero.id, ahora_local())),
+        "porcentaje_periodo": bloque.get("porcentaje"),
+        "comision": str(D(bloque.get("comision") or 0)),
+        "ventas_validas": str(D(bloque.get("ventas_validas") or 0)),
+        "tickets_vendidos": int(bloque.get("tickets_vendidos") or 0),
+        "tickets_anulados": int(bloque.get("tickets_anulados") or 0),
+        "desglose": bloque.get("desglose") or [],
+        "descuenta_mi_caja": False,
+        "descuenta_caja_general": False,
+        "informativa": True,
+    }
     return {
         "desde": desde.isoformat(),
         "hasta": hasta.isoformat(),
         "resumen": fila,
+        "comision": comision,
         "ventas": historial_ventas,
         "premios_pagados": historial_pagos,
         "movimientos": movimientos,

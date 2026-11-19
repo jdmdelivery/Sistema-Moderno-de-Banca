@@ -336,9 +336,33 @@ body.usuarios-movil .usu-tabla-escritorio{display:none !important}
 .vc-detalle-montos > div{
   background:var(--panel2);border:1px solid var(--borde);border-radius:12px;padding:10px 12px;min-width:0;
 }
+.vc-detalle-montos .vc-monto-dest{
+  border-color:rgba(30,111,217,.45);
+  background:linear-gradient(180deg,rgba(30,111,217,.12),var(--panel2));
+}
 .vc-detalle-montos .k{display:block;color:var(--suave);font-size:11.5px;margin-bottom:3px;line-height:1.3}
 .vc-detalle-montos b{display:block;color:var(--texto);font-size:15px;margin-top:0;overflow-wrap:anywhere;line-height:1.25}
 .vc-detalle-tickets-meta{margin:0 0 12px;color:var(--suave);font-size:13px}
+.vc-comision-card{
+  border:1px solid var(--borde);border-radius:14px;padding:12px;margin:0 0 12px;
+  background:var(--panel2);min-width:0;
+}
+.vc-comision-card h5{
+  margin:0 0 10px;font-size:14px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:#d7e6f7;padding-bottom:8px;border-bottom:1px solid rgba(42,95,150,.45);
+}
+.vc-comision-grid{
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;font-size:12.5px;
+}
+.vc-comision-grid > div{
+  background:var(--panel);border:1px solid var(--borde);border-radius:12px;padding:10px 12px;min-width:0;
+}
+.vc-comision-grid .k{display:block;color:var(--suave);font-size:11.5px;margin-bottom:3px;line-height:1.3}
+.vc-comision-grid b{display:block;color:var(--texto);font-size:15px;line-height:1.25;overflow-wrap:anywhere}
+.vc-comision-desglose{
+  margin:10px 0 0;padding:0 0 0 18px;color:var(--suave);font-size:12.5px;line-height:1.45;
+}
+.vc-comision-desglose li{margin:0 0 4px}
 .vc-hist{
   border:1px solid var(--borde);border-radius:14px;padding:12px;margin:0 0 12px;
   background:var(--panel2);min-width:0;
@@ -499,6 +523,7 @@ body.usuarios-movil .usu-tabla-escritorio{display:none !important}
     margin:14px 16px;align-self:center;width:auto;min-width:148px;white-space:nowrap;
   }
   .vc-detalle-montos{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .vc-comision-grid{grid-template-columns:repeat(2,minmax(0,1fr));max-width:420px}
 }
 .gan-lista{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin:12px 0 20px}
 .gan-card{background:var(--panel);border:1px solid var(--borde);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:8px}
