@@ -8,12 +8,19 @@ def test_dos_cajeros_separados_y_premio_de_otro(entorno, monkeypatch, fijar_hora
     a = entorno.banca(saldo=5000, usuario="vc1", clave="prueba123")
     entorno.operador("vc2", "prueba123", a["sucursal"]["id"])
     paga = entorno.login_terminal("vc2", "prueba123")
-    jose = next(u for u in entorno.c.get("/usuarios", headers=entorno.admin).json() if u["usuario"] == "vc2")
-    fondo = entorno.c.post("/fondos", json={
-        "sucursal_id": a["sucursal"]["id"], "usuario_id": jose["id"], "monto": 1000,
+    usuarios = entorno.c.get("/usuarios", headers=entorno.admin).json()
+    vc1 = next(u for u in usuarios if u["usuario"] == "vc1")
+    vc2 = next(u for u in usuarios if u["usuario"] == "vc2")
+    fondo_vc1 = entorno.c.post("/fondos", json={
+        "sucursal_id": a["sucursal"]["id"], "usuario_id": vc1["id"], "monto": 1000,
+        "tipo": "aporte_prueba", "operacion_id": "fondo-vc1",
+    }, headers=entorno.admin)
+    assert fondo_vc1.status_code == 201, fondo_vc1.text
+    fondo_vc2 = entorno.c.post("/fondos", json={
+        "sucursal_id": a["sucursal"]["id"], "usuario_id": vc2["id"], "monto": 500,
         "tipo": "aporte_prueba", "operacion_id": "fondo-vc2",
     }, headers=entorno.admin)
-    assert fondo.status_code == 201, fondo.text
+    assert fondo_vc2.status_code == 201, fondo_vc2.text
     lot = entorno.sorteo_id("LOTEDOM")
     t = entorno.vender_ok(a["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "25", "monto": 10}])
     entorno.vender_ok(paga, [{"tipo": "QN", "sorteos": [lot], "numeros": "11", "monto": 5}])
@@ -21,9 +28,16 @@ def test_dos_cajeros_separados_y_premio_de_otro(entorno, monkeypatch, fijar_hora
         "sorteo_id": lot, "fecha": "2026-11-14", "premio1": 25, "premio2": 1, "premio3": 2, "simulado": True,
     }, headers=entorno.admin)
     assert sim.status_code == 201, sim.text
-    pago = entorno.c.post("/terminal/tickets/pagar", json={
-        "id": t["id"], "serial": t["serial"], "operacion_id": "pago-vc2",
+    # Terminal: otra cajera de la misma sucursal NO puede pagar el ticket ajeno.
+    ajeno = entorno.c.post("/terminal/tickets/pagar", json={
+        "id": t["id"], "serial": t["serial"], "operacion_id": "pago-vc2-bloqueado",
     }, headers=paga)
+    assert ajeno.status_code == 403, ajeno.text
+    assert "OTRA CAJERA" in ajeno.json()["detail"]
+    # Solo la cajera vendedora cobra; el premio se atribuye al pagador (= vendedor).
+    pago = entorno.c.post("/terminal/tickets/pagar", json={
+        "id": t["id"], "serial": t["serial"], "operacion_id": "pago-vc1",
+    }, headers=a["headers"])
     assert pago.status_code == 200, pago.text
 
     r = entorno.c.get("/reportes/ventas-cajeros?desde=2026-11-14&hasta=2026-11-14", headers=entorno.admin)
@@ -31,13 +45,17 @@ def test_dos_cajeros_separados_y_premio_de_otro(entorno, monkeypatch, fijar_hora
     filas = {f["usuario"]: f for f in r.json()["cajeros"]}
     assert "vc1" in filas and "vc2" in filas
     assert float(filas["vc1"]["ventas_netas"]) == 10
-    assert float(filas["vc1"]["premios_pagados"]) == 0  # vendió, no pagó
+    assert float(filas["vc1"]["premios_pagados"]) == 600  # vendió y cobró
     assert float(filas["vc2"]["ventas_netas"]) == 5
-    assert float(filas["vc2"]["premios_pagados"]) == 600  # pagó el premio
-    assert float(filas["vc2"]["fondo_asignado"]) == 1000
-    assert float(filas["vc2"]["recaudacion"]) == 5 - 600
+    assert float(filas["vc2"]["premios_pagados"]) == 0  # no pudo cobrar el ajeno
+    assert float(filas["vc1"]["fondo_asignado"]) == 1000
+    assert float(filas["vc2"]["fondo_asignado"]) == 500
+    assert float(filas["vc2"]["recaudacion"]) == 5
 
-    det = entorno.c.get(f"/reportes/ventas-cajeros/{jose['id']}?desde=2026-11-14&hasta=2026-11-14", headers=entorno.admin)
+    det = entorno.c.get(
+        f"/reportes/ventas-cajeros/{vc1['id']}?desde=2026-11-14&hasta=2026-11-14",
+        headers=entorno.admin,
+    )
     assert det.status_code == 200
     assert det.json()["premios_pagados"]
     assert det.json()["premios_pagados"][0]["vendedor_usuario"] == "vc1"

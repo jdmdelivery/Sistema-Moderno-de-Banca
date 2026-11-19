@@ -84,6 +84,7 @@ const SECCIONES_SOLO_SUPER = new Set(["super", "terminales", "sorteos", "resulta
 function puedeVerSeccion(sec) {
   if (!sec) return false;
   if (SECCIONES_SOLO_SUPER.has(sec)) return esSuperAdmin();
+  if (sec === "diseno-ticket") return esAdminPanel();
   return true;
 }
 function etiquetaRol(rol) {
@@ -119,6 +120,9 @@ function actualizarEncabezadoContexto() {
 function aplicarVisibilidadRol() {
   $$("[data-solo-super]").forEach((el) => {
     el.hidden = !esSuperAdmin();
+  });
+  $$("[data-solo-admin]").forEach((el) => {
+    el.hidden = !esAdminPanel();
   });
   const grupoConsorcio = document.querySelector('.nav-grupo[data-grupo="consorcio"]');
   if (grupoConsorcio) grupoConsorcio.hidden = !esSuperAdmin();
@@ -335,6 +339,7 @@ function ir(sec) {
     fuente: cargarFuente, ganadores: cargarGanadores,
     caja: cargarCaja, entregas: cargarEntregas, fondos: cargarFondos, comisiones: cargarComisiones,
     reportes: cargarReportes, auditoria: async () => {},
+    "diseno-ticket": cargarDisenoTicket,
   }[sec];
   if (cargar) cargar().catch((e) => console.error(e));
 }
@@ -792,6 +797,114 @@ async function eliminarUsuario(id) {
       : `${u.usuario} quedó ELIMINADO (historial conservado).`);
     await cargarUsuarios();
   } catch (e) { msg("#usu-msg", e.message, false); }
+}
+
+/* ----------------------------------------------------- diseño ticket panel */
+function dtConfigDesdeForm() {
+  return {
+    ancho_px: 384,
+    encabezado: {
+      mostrar_nombre_banca: true,
+      mostrar_codigo: true,
+      tamano_nombre: parseInt($("#dt-tam-nombre").value || 26, 10),
+      centrado: true,
+    },
+    qr: {
+      posicion: $("#dt-qr-pos").value || "superior",
+      tamano_px: parseInt($("#dt-qr-tam").value || 168, 10),
+    },
+    tipografia: {
+      cuerpo: 18,
+      jugada: parseInt($("#dt-tam-jugada").value || 22, 10),
+      total: parseInt($("#dt-tam-total").value || 22, 10),
+      titulo_seccion: 17,
+    },
+    secciones: {
+      qn: !!$("#dt-sec-qn").checked,
+      pl: !!$("#dt-sec-pl").checked,
+      sp: !!$("#dt-sec-sp").checked,
+      tr: !!$("#dt-sec-tr").checked,
+    },
+    moneda_prefijo: "$ ",
+    mensaje_inferior: ($("#dt-mensaje").value || "").trim(),
+    mostrar_linea_sistema: false,
+  };
+}
+function dtAplicarConfig(cfg) {
+  if (!cfg) return;
+  const enc = cfg.encabezado || {};
+  const tip = cfg.tipografia || {};
+  const qr = cfg.qr || {};
+  const sec = cfg.secciones || {};
+  if ($("#dt-tam-nombre")) $("#dt-tam-nombre").value = enc.tamano_nombre || 26;
+  if ($("#dt-tam-jugada")) $("#dt-tam-jugada").value = tip.jugada || 22;
+  if ($("#dt-tam-total")) $("#dt-tam-total").value = tip.total || 22;
+  if ($("#dt-qr-tam")) $("#dt-qr-tam").value = qr.tamano_px || 168;
+  if ($("#dt-qr-pos")) $("#dt-qr-pos").value = qr.posicion || "superior";
+  if ($("#dt-mensaje")) $("#dt-mensaje").value = cfg.mensaje_inferior || "";
+  if ($("#dt-sec-qn")) $("#dt-sec-qn").checked = sec.qn !== false;
+  if ($("#dt-sec-pl")) $("#dt-sec-pl").checked = sec.pl !== false;
+  if ($("#dt-sec-sp")) $("#dt-sec-sp").checked = sec.sp !== false;
+  if ($("#dt-sec-tr")) $("#dt-sec-tr").checked = sec.tr !== false;
+}
+async function cargarDisenoTicket() {
+  await cargarCatalogos();
+  const sel = $("#dt-sucursal");
+  if (!sel) return;
+  sel.innerHTML = SUCURSALES.map(
+    (s) => `<option value="${s.id}">${esc(s.codigo)} — ${esc(s.nombre)}</option>`
+  ).join("");
+  if (YO && YO.sucursal_id) sel.value = String(YO.sucursal_id);
+  await refrescarDisenoTicket();
+}
+async function refrescarDisenoTicket() {
+  const sid = $("#dt-sucursal") && $("#dt-sucursal").value;
+  if (!sid) return;
+  try {
+    const d = await api("/panel/diseno-ticket?sucursal_id=" + encodeURIComponent(sid));
+    dtAplicarConfig(d.config || {});
+    if ($("#dt-activo")) $("#dt-activo").checked = d.activo !== false;
+    if ($("#dt-tr-nota")) {
+      $("#dt-tr-nota").textContent = d.tr_habilitado
+        ? "TR (tripleta) está habilitada en el catálogo."
+        : "TR no está habilitada en el catálogo: la sección no se imprimirá.";
+    }
+    msg("#dt-msg", "Diseño cargado.");
+    await previewDisenoTicket();
+  } catch (e) { msg("#dt-msg", e.message, false); }
+}
+async function previewDisenoTicket() {
+  const sid = $("#dt-sucursal") && $("#dt-sucursal").value;
+  const body = { config: dtConfigDesdeForm(), activo: !!($("#dt-activo") && $("#dt-activo").checked) };
+  const r = await fetch("/panel/diseno-ticket/preview" + (sid ? ("?sucursal_id=" + encodeURIComponent(sid)) : ""), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(TOKEN ? { Authorization: "Bearer " + TOKEN } : {}) },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(t || ("HTTP " + r.status));
+  }
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const img = $("#dt-preview");
+  if (img) {
+    if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+    img.dataset.url = url;
+    img.src = url;
+  }
+}
+async function guardarDisenoTicket() {
+  const sid = $("#dt-sucursal") && $("#dt-sucursal").value;
+  if (!sid) return;
+  try {
+    await put("/panel/diseno-ticket?sucursal_id=" + encodeURIComponent(sid), {
+      config: dtConfigDesdeForm(),
+      activo: !!($("#dt-activo") && $("#dt-activo").checked),
+    });
+    msg("#dt-msg", "Diseño guardado. Las APK nuevas lo usarán sin reinstalarse.");
+    await previewDisenoTicket();
+  } catch (e) { msg("#dt-msg", e.message, false); }
 }
 
 /* ---------------------------------------------------------- ventas cajeros */
@@ -1902,6 +2015,10 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("#vc-modal-cerrar")) $("#vc-modal-cerrar").addEventListener("click", cerrarDetalleCajero);
   if ($("#vc-modal-volver")) $("#vc-modal-volver").addEventListener("click", cerrarDetalleCajero);
   if ($("#vc-modal")) $("#vc-modal").addEventListener("click", (e) => { if (e.target === $("#vc-modal")) cerrarDetalleCajero(); });
+  if ($("#btn-dt-cargar")) $("#btn-dt-cargar").addEventListener("click", () => refrescarDisenoTicket().catch((e) => msg("#dt-msg", e.message, false)));
+  if ($("#btn-dt-preview")) $("#btn-dt-preview").addEventListener("click", () => previewDisenoTicket().catch((e) => msg("#dt-msg", e.message, false)));
+  if ($("#btn-dt-guardar")) $("#btn-dt-guardar").addEventListener("click", () => guardarDisenoTicket());
+  if ($("#dt-sucursal")) $("#dt-sucursal").addEventListener("change", () => refrescarDisenoTicket().catch((e) => msg("#dt-msg", e.message, false)));
   $("#btn-sor-guardar").addEventListener("click", guardarSorteo);
   $("#btn-sor-limpiar").addEventListener("click", limpiarSorteo);
   $("#tab-tipo").addEventListener("change", actualizarClavesTabla);

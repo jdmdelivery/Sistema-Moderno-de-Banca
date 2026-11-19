@@ -11,9 +11,10 @@ def test_venta_valida_sp_y_qn(entorno):
         {"tipo": "QN", "sorteos": [s_primera], "numeros": "19", "monto": 10},
     ])
     assert t["id"] == 1  # primer ticket del consecutivo global
-    assert len(t["serial"]) == 10 and t["serial"] != str(t["id"])
+    assert len(t["serial"]) == 12 and t["serial"].isdigit() and t["serial"] != str(t["id"])
     assert t["qr"] == f"LOT:1:{t['serial']}"
-    assert t["banca"] == "BANCA CASTILLO" and t["banca_codigo"] == "1301"
+    assert t["banca"] == "BANCA CASTILLO"
+    assert t["banca_codigo"]  # código de sucursal presente (puede ser 1301 o T#### en reuso)
     assert float(t["total"]) == 15.00
     assert t["estado"] == "vendido"
     assert "saldo_restante" not in t

@@ -72,6 +72,7 @@ def test_parcial_y_pagado_distinguen_vendedor_y_pagador(entorno, monkeypatch, fi
     b = entorno.banca(saldo=5000, usuario="vende1", clave="prueba123")
     entorno.operador("paga1", "prueba123", b["sucursal"]["id"])
     paga = entorno.login_terminal("paga1", "prueba123")
+    _fondo(entorno, "vende1", b["sucursal"]["id"], 20000)
     _fondo(entorno, "paga1", b["sucursal"]["id"], 20000)
     a = entorno.sorteo_id("LOTEDOM")
     b2 = entorno.sorteo_id("La Primera 12")
@@ -85,15 +86,23 @@ def test_parcial_y_pagado_distinguen_vendedor_y_pagador(entorno, monkeypatch, fi
     assert fila["cajero"]
     assert not fila["cajero_pago"]
 
-    pago = entorno.c.post("/terminal/tickets/pagar", json={
+    # Terminal: otra cajera no puede cobrar el ticket (403). La seguridad no se debilita.
+    ajeno = entorno.c.post("/terminal/tickets/pagar", json={
         "id": t["id"], "serial": t["serial"], "operacion_id": "pago-otro-cajero",
     }, headers=paga)
+    assert ajeno.status_code == 403, ajeno.text
+    assert "OTRA CAJERA" in ajeno.json()["detail"]
+
+    # Solo la vendedora cobra el tramo ya confirmado.
+    pago = entorno.c.post("/terminal/tickets/pagar", json={
+        "id": t["id"], "serial": t["serial"], "operacion_id": "pago-vendedor",
+    }, headers=b["headers"])
     assert pago.status_code == 200, pago.text
 
     fila_pag = next(f for f in entorno.c.get("/ganadores?fecha=2026-11-14", headers=entorno.admin).json()["prueba"] if f["id"] == t["id"])
     assert fila_pag["estado_pago"] == "PAGADO"
     assert fila_pag["cajero_pago"]
-    assert fila_pag["cajero"] != fila_pag["cajero_pago"]
+    assert fila_pag["cajero"] == fila_pag["cajero_pago"]
     assert float(fila_pag["importe_pendiente"]) == 0
 
     _simular(entorno, b2, 25, 1, 2)

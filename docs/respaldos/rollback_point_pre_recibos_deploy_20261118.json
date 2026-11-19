@@ -1,0 +1,13 @@
+{
+  "purpose": "Punto de reversión previo al deploy de recibos PNG",
+  "service_id": "srv-dbsfbem7bikc73feg280",
+  "service_url": "https://sistema-de-banca-moderna.onrender.com",
+  "live_deploy_id": "dep-dburiqui0phs73bf43v0",
+  "live_commit": "d4c1f9ba1559cff60eb6aab4ff81b58335f41c5d",
+  "live_commit_message": "fix: diseno elite de lista y detalle de cajeros con VOLVER.",
+  "live_finished": "2026-11-18T14:43:44Z",
+  "modo_desarrollo": true,
+  "modo_desarrollo_action": "NO MODIFICAR",
+  "nota_reversion": "Revertir solo el deploy de código vía Render al commit/deploy anterior. No restaurar PostgreSQL automáticamente ni sobrescribir datos nuevos.",
+  "created_at": "2026-11-18T22:35:00"
+}

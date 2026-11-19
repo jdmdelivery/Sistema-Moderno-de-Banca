@@ -277,4 +277,5 @@ def test_el_comprobante_suma_solo_lo_cobrado(entorno, monkeypatch):
     assert "TOTAL PAGADO: RD$700.00" in texto
     assert "Número ganador: 25" in texto
     assert "Número ganador: 54" in texto
-    assert "99" not in texto
+    # No listar un número no cobrado/inexistente; Ticket/S/N pueden contener "99".
+    assert "Número ganador: 99" not in texto

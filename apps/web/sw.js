@@ -1,12 +1,12 @@
 /* Service worker del Panel. Solo cachea la cáscara estática.
    Nunca guarda tokens, tickets, saldos ni respuestas de la API. */
-const CACHE = "banca-admin-shell-v4-cajeros-elite";
+const CACHE = "banca-admin-shell-v5-ticket-img-local";
 const SHELL = [
   "/",
   "/static/style.css",
-  "/static/style.css?v=cajeros-elite-1",
+  "/static/style.css?v=ticket-img-local-1",
   "/static/app.js",
-  "/static/app.js?v=cajeros-elite-1",
+  "/static/app.js?v=ticket-img-local-1",
   "/static/icons/icon-192.png",
   "/static/icons/icon-512.png",
   "/manifest.webmanifest",

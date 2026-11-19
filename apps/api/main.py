@@ -8,7 +8,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -406,6 +406,69 @@ def movimientos(sucursal_id: int, limite: int = 100, db=Depends(get_db), usuario
         .all()
     )
     return [movimiento_dict(m) for m in filas]
+
+
+# ---------------------------------------------------------- diseño ticket (panel)
+class DisenoTicketIn(BaseModel):
+    config: dict
+    activo: bool = True
+
+
+@app.get("/panel/diseno-ticket")
+def panel_diseno_ticket_get(
+    sucursal_id: int | None = None,
+    db=Depends(get_db),
+    usuario=Depends(requiere_rol("admin", "super_admin")),
+):
+    from . import impresion_servidor as imp
+
+    sid = sucursal_id or usuario.sucursal_id
+    if sid is None:
+        raise ErrorServicio(400, "Indique sucursal_id")
+    permisos.assert_sucursal_permitida(db, usuario, sid)
+    try:
+        return imp.diseno_a_dict(db, int(sid))
+    except imp.ErrorImpresion as e:
+        raise ErrorServicio(e.codigo, e.detalle)
+
+
+@app.put("/panel/diseno-ticket")
+def panel_diseno_ticket_put(
+    datos: DisenoTicketIn,
+    sucursal_id: int | None = None,
+    db=Depends(get_db),
+    usuario=Depends(requiere_rol("admin", "super_admin")),
+):
+    from . import impresion_servidor as imp
+
+    sid = sucursal_id or usuario.sucursal_id
+    if sid is None:
+        raise ErrorServicio(400, "Indique sucursal_id")
+    permisos.assert_sucursal_permitida(db, usuario, sid)
+    try:
+        return imp.guardar_diseno(db, int(sid), datos.config, usuario.id, activo=datos.activo)
+    except imp.ErrorImpresion as e:
+        raise ErrorServicio(e.codigo, e.detalle)
+
+
+@app.post("/panel/diseno-ticket/preview")
+def panel_diseno_ticket_preview(
+    datos: DisenoTicketIn | None = None,
+    sucursal_id: int | None = None,
+    db=Depends(get_db),
+    usuario=Depends(requiere_rol("admin", "super_admin")),
+):
+    from . import impresion_servidor as imp
+
+    sid = sucursal_id or usuario.sucursal_id
+    if sid is not None:
+        permisos.assert_sucursal_permitida(db, usuario, sid)
+    cfg = datos.config if datos else None
+    try:
+        png = imp.render_preview(db, int(sid) if sid else None, cfg)
+    except Exception as e:
+        raise ErrorServicio(500, f"No se pudo generar la vista previa: {e}")
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 # ---------------------------------------------------------------- terminales
@@ -1616,6 +1679,31 @@ def terminal_reimprimir_entrega(entrega_id: int, db=Depends(get_db), terminal=De
     return servicios.entrega_para_reimprimir(db, operador.id, entrega_id)
 
 
+@app.get("/terminal/entregas/{entrega_id}/imagen")
+def terminal_entrega_imagen(
+    entrega_id: int,
+    db=Depends(get_db),
+    terminal=Depends(terminal_actual),
+    operador=Depends(operador_actual),
+):
+    """PNG 384 px de entrega. Reimpresión: no mueve dinero."""
+    from . import impresion_servidor as imp
+
+    try:
+        png = imp.render_entrega_id(db, entrega_id, operador)
+    except ErrorServicio:
+        raise
+    except imp.ErrorImpresion as e:
+        raise ErrorServicio(e.codigo, e.detalle)
+    except Exception as e:
+        raise ErrorServicio(500, f"No se pudo generar la imagen de la entrega: {e}")
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store", "X-Ticket-Ancho": "384"},
+    )
+
+
 @app.get("/entregas")
 def panel_entregas(sucursal_id: int | None = None, db=Depends(get_db),
                    usuario=Depends(requiere_rol("admin", "supervisor"))):
@@ -1751,6 +1839,70 @@ def terminal_reimprimir(datos: LlaveIn, db=Depends(get_db), terminal=Depends(ter
     return servicios.reimprimir_ticket(db, datos.id, datos.serial, operador.id, terminal_id=terminal.id)
 
 
+@app.get("/terminal/tickets/{ticket_id}/imagen")
+def terminal_ticket_imagen(
+    ticket_id: int,
+    serial: str = Query(..., min_length=4),
+    db=Depends(get_db),
+    terminal=Depends(terminal_actual),
+    operador=Depends(operador_actual),
+):
+    """PNG 384 px del ticket. Aislado por sucursal. No altera venta ni premios."""
+    from . import impresion_servidor as imp
+
+    try:
+        ticket = servicios.buscar_ticket(db, ticket_id, serial.strip().upper())
+        imp.autorizar_imagen_terminal(db, ticket, terminal, operador)
+        png, ticket = imp.render_ticket_id(db, ticket_id, serial.strip().upper())
+    except ErrorServicio as e:
+        raise
+    except imp.ErrorImpresion as e:
+        raise ErrorServicio(e.codigo, e.detalle)
+    except Exception as e:
+        raise ErrorServicio(500, f"No se pudo generar la imagen del ticket: {e}")
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Ticket-QR": f"LOT:{ticket_id}:{serial.strip().upper()}",
+            "X-Ticket-Ancho": "384",
+        },
+    )
+
+
+@app.get("/terminal/tickets/{ticket_id}/pago/imagen")
+def terminal_pago_imagen(
+    ticket_id: int,
+    serial: str = Query(..., min_length=4),
+    operacion: str | None = Query(None),
+    reimpresion: bool = Query(False),
+    db=Depends(get_db),
+    terminal=Depends(terminal_actual),
+    operador=Depends(operador_actual),
+):
+    """PNG del comprobante de pago. No cobra; reimpresión conserva el pago original."""
+    from . import impresion_servidor as imp
+
+    try:
+        ticket = servicios.buscar_ticket(db, ticket_id, serial.strip().upper())
+        imp.autorizar_imagen_terminal(db, ticket, terminal, operador)
+        png = imp.render_pago_ticket(
+            db, ticket_id, serial.strip().upper(), operacion, reimpresion=reimpresion,
+        )
+    except ErrorServicio:
+        raise
+    except imp.ErrorImpresion as e:
+        raise ErrorServicio(e.codigo, e.detalle)
+    except Exception as e:
+        raise ErrorServicio(500, f"No se pudo generar la imagen del pago: {e}")
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store", "X-Ticket-Ancho": "384"},
+    )
+
+
 @app.post("/terminal/tickets/anular")
 def terminal_anular(datos: AnularIn, db=Depends(get_db), terminal=Depends(terminal_actual),
                     operador=Depends(operador_actual)):
@@ -1814,19 +1966,47 @@ def terminal_resumen_dia(desde: str | None = None, hasta: str | None = None, alc
     fin = _fecha(hasta) if hasta else hoy
     if fin < inicio:
         raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
-    # Un cajero no puede pedir alcance=sucursal por querystring.
-    if operador.rol == "operador":
-        alcance = "cajero"
+    # No reescribir alcance en silencio: servicios.resumen_dia responde 403
+    # si un operador pide alcance=sucursal (no se elevan privilegios).
     sucursal = db.get(Sucursal, terminal.sucursal_id)
     return servicios.resumen_dia(db, inicio, fin, operador, sucursal, terminal, alcance)
+
+
+@app.get("/terminal/reportes/dia/imagen")
+def terminal_resumen_dia_imagen(
+    desde: str | None = None,
+    hasta: str | None = None,
+    alcance: str = "cajero",
+    db=Depends(get_db),
+    terminal=Depends(terminal_actual),
+    operador=Depends(operador_actual),
+):
+    """PNG 384 px del resumen de caja. Solo lectura; no mueve saldos."""
+    from . import impresion_servidor as imp
+
+    hoy = servicios.ahora_local().date()
+    inicio = _fecha(desde) if desde else hoy
+    fin = _fecha(hasta) if hasta else hoy
+    if fin < inicio:
+        raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+    sucursal = db.get(Sucursal, terminal.sucursal_id)
+    datos = servicios.resumen_dia(db, inicio, fin, operador, sucursal, terminal, alcance)
+    try:
+        png = imp.render_resumen_datos(datos)
+    except Exception as e:
+        raise ErrorServicio(500, f"No se pudo generar la imagen del resumen: {e}")
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store", "X-Ticket-Ancho": "384"},
+    )
 
 
 @app.get("/terminal/reportes/mes")
 def terminal_resumen_mes(anio: int, mes: int, alcance: str = "cajero",
                          db=Depends(get_db), terminal=Depends(terminal_actual),
                          operador=Depends(operador_actual)):
-    if operador.rol == "operador":
-        alcance = "cajero"
+    # Misma regla que resumen_dia: 403 si un operador pide alcance=sucursal.
     sucursal = db.get(Sucursal, terminal.sucursal_id)
     return servicios.resumen_mes(db, anio, mes, operador, sucursal, terminal, alcance)
 
@@ -1860,6 +2040,36 @@ def terminal_reporte_pendientes(desde: str, hasta: str, formato: str = "json",
     return servicios.reporte_pendientes(
         db, _fecha(desde), _fecha(hasta), terminal.sucursal_id, propio,
         detalle_premios=True, es_prueba=ambito_prueba,
+    )
+
+
+# ------------------------------------------------------------------ lab (solo MODO_DESARROLLO)
+@app.get("/lab/recibos/{clave}/imagen")
+def lab_recibo_imagen(
+    clave: str,
+    db=Depends(get_db),
+    terminal=Depends(terminal_actual),
+    operador=Depends(operador_actual),
+):
+    """PNG ficticios de los 6 diseños aprobados. No vende, no paga, no mueve caja."""
+    if not modo_desarrollo():
+        raise ErrorServicio(404, "No disponible fuera de laboratorio")
+    from .recibos_imagen import lab_preview_png
+
+    try:
+        png = lab_preview_png(clave)
+    except ValueError as e:
+        raise ErrorServicio(404, str(e))
+    except Exception as e:
+        raise ErrorServicio(500, f"No se pudo generar la imagen LAB: {e}")
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Ticket-Ancho": "384",
+            "X-Lab-Recibo": clave,
+        },
     )
 
 

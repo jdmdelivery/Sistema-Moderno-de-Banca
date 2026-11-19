@@ -869,15 +869,28 @@ def vender(db, terminal, operador, jugadas_in, ahora=None, operacion_id=None):
 
 
 # ------------------------------------------------------- consulta/pago/anula
+def normalizar_serial_busqueda(serial) -> str:
+    """Normaliza S/N para comparación: mayúsculas en legado; dígitos intactos."""
+    s = str(serial or "").strip()
+    if s.isdigit():
+        # Conserva ceros a la izquierda; no aplicar upper (igual para dígitos).
+        return s
+    return s.upper()
+
+
 def buscar_ticket(db, ticket_id, serial, bloquear=False):
-    serial_norm = str(serial or "").strip().upper()
+    """Busca por id + serial. Acepta S/N numérico nuevo y alfanumérico antiguo."""
+    serial_norm = normalizar_serial_busqueda(serial)
     if not str(ticket_id).isdigit():
         raise ErrorServicio(404, "Ticket no encontrado: verifique el ID y el Serial del ticket")
     consulta = db.query(Ticket).filter(Ticket.id == int(ticket_id))
     if bloquear:
         consulta = consulta.with_for_update()
     ticket = consulta.first()
-    if ticket is None or ticket.serial != serial_norm:
+    if ticket is None:
+        raise ErrorServicio(404, "Ticket no encontrado: verifique el ID y el Serial del ticket")
+    guardado = normalizar_serial_busqueda(ticket.serial)
+    if guardado != serial_norm:
         raise ErrorServicio(404, "Ticket no encontrado: verifique el ID y el Serial del ticket")
     return ticket
 
@@ -940,6 +953,13 @@ def ticket_a_dict(db, ticket, saldo_restante=None):
         "reimpresiones": int(ticket.reimpresiones or 0),
         "cajero": db.get(Usuario, ticket.usuario_id).nombre if ticket.usuario_id and db.get(Usuario, ticket.usuario_id) else "",
     }
+    # Metadatos Opción B (APK nuevas). APK viejas ignoran el campo.
+    try:
+        from .impresion_servidor import meta_impresion
+
+        datos["impresion"] = meta_impresion(ticket.id, ticket.serial)
+    except Exception:
+        pass
     datos.update(_info_anulacion(db, ticket))
     datos["anulacion_admin"] = info_anulacion_admin(db, ticket)
     datos["puede_anular_admin"] = bool(datos["anulacion_admin"].get("puede_anular"))
@@ -1333,6 +1353,20 @@ def consultar_ticket(db, ticket_id, serial, operacion_comprobante=None, exigir_v
     texto = comprobante_premio(db, ticket, operacion_id=operacion_comprobante)
     if texto:
         datos["comprobante"] = texto
+        pago_datos = _datos_comprobante_premio(db, ticket, operacion_id=operacion_comprobante)
+        if pago_datos:
+            datos["comprobante_datos"] = pago_datos
+            datos["impresion_pago"] = {
+                "modo": "imagen_servidor",
+                "ancho_px": 384,
+                "url": (
+                    f"/terminal/tickets/{int(ticket.id)}/pago/imagen"
+                    f"?serial={ticket.serial}"
+                    f"&operacion={pago_datos['operacion_id']}"
+                ),
+                "fallback": "comprobante",
+                "operacion_id": pago_datos["operacion_id"],
+            }
     return datos
 
 
@@ -2900,12 +2934,14 @@ def entrega_a_dict(db, entrega):
     usuario = db.get(Usuario, entrega.usuario_id)
     sucursal = db.get(Sucursal, entrega.sucursal_id)
     terminal = db.get(Terminal, entrega.terminal_id) if entrega.terminal_id else None
-    return {
+    receptor = db.get(Usuario, entrega.recibida_por) if entrega.recibida_por else None
+    datos = {
         "id": entrega.id,
         "numero": entrega.id,
         "operacion_id": entrega.operacion_id,
         "cajera": usuario.nombre if usuario else "?",
         "sucursal": sucursal.nombre if sucursal else "?",
+        "banca": sucursal.nombre if sucursal else "?",
         "sucursal_id": entrega.sucursal_id,
         "terminal": terminal.serial_sunmi if terminal else "?",
         "fecha_hora": entrega.creado_en.strftime("%d-%m-%Y %I:%M %p") if entrega.creado_en else "",
@@ -2915,28 +2951,48 @@ def entrega_a_dict(db, entrega):
         "estado": "CONFIRMADA",
         "recepcion": "RECIBIDA" if entrega.recibida_en else "PENDIENTE",
         "recibida_en": entrega.recibida_en.isoformat(sep=" ") if entrega.recibida_en else None,
+        "recibida_por_nombre": receptor.nombre if receptor else "",
         "es_prueba": bool(entrega.es_prueba),
         "leyenda": "PRUEBA — NO OFICIAL" if entrega.es_prueba else "",
         "texto": entrega.texto or "",
     }
+    # Meta opcional para APK futuras (PNG servidor). Las APK actuales usan "texto".
+    datos["impresion"] = {
+        "modo": "imagen_servidor",
+        "ancho_px": 384,
+        "url": f"/terminal/entregas/{int(entrega.id)}/imagen",
+        "fallback": "texto",
+    }
+    return datos
 
 
-def _texto_entrega(sucursal, terminal, cajero, entrega, cuando, prueba):
-    lineas = []
+def _texto_entrega(sucursal, terminal, cajero, entrega, cuando, prueba, receptor_nombre=""):
+    lineas = [
+        (sucursal.nombre if sucursal else "SUCURSAL").upper(),
+        "ENTREGA DE DINERO",
+    ]
     if prueba:
         lineas.append("PRUEBA — NO OFICIAL")
     lineas += [
-        (sucursal.nombre if sucursal else "SUCURSAL").upper(),
-        "COMPROBANTE DE ENTREGA",
         cuando.strftime("%d-%m-%Y %I:%M %p"),
-        f"Cajera: {cajero}",
+        f"Cajero: {cajero}",
+    ]
+    if receptor_nombre:
+        lineas.append(f"Recibe: {receptor_nombre}")
+    lineas += [
         f"Sucursal: {sucursal.nombre if sucursal else '?'}",
         f"Terminal: {terminal.serial_sunmi if terminal else '?'}",
         f"Número de entrega: {entrega.id}",
-        f"Saldo anterior: RD$ {D(entrega.saldo_anterior)}",
-        f"Monto entregado: RD$ {D(entrega.monto)}",
-        f"Saldo restante: RD$ {D(entrega.saldo_restante)}",
+    ]
+    if getattr(entrega, "operacion_id", None):
+        lineas.append(f"Operación: {entrega.operacion_id}")
+    lineas += [
+        f"Monto entregado: RD${D(entrega.monto)}",
+        f"Saldo anterior: RD${D(entrega.saldo_anterior)}",
+        f"Saldo restante: RD${D(entrega.saldo_restante)}",
         "Estado: CONFIRMADA",
+        # Compatibilidad con pruebas/APK que buscan el título anterior.
+        "COMPROBANTE DE ENTREGA",
     ]
     return "\n".join(lineas)
 
@@ -3583,11 +3639,11 @@ def _jugadas_de_operacion(ticket, operacion_id=None):
     return [j for j in cobradas if j.pago_operacion_id == mejor_op], mejor_op
 
 
-def comprobante_premio(db, ticket, operacion_id=None):
-    """Recibo 58 mm solo de los premios de esa operación. Reimprimir no cobra."""
+def _datos_comprobante_premio(db, ticket, operacion_id=None):
+    """Datos del recibo de una operación de pago. No cobra ni altera premios."""
     ganadoras, op = _jugadas_de_operacion(ticket, operacion_id=operacion_id)
     if not ganadoras:
-        return ""
+        return None
     sucursal = ticket.sucursal_pago or ticket.sucursal_vendedora
     cajero = db.get(Usuario, ticket.pagado_por_usuario_id) if ticket.pagado_por_usuario_id else None
     if cajero is None:
@@ -3595,40 +3651,94 @@ def comprobante_premio(db, ticket, operacion_id=None):
             if jugada.pagado_por_usuario_id:
                 cajero = db.get(Usuario, jugada.pagado_por_usuario_id)
                 break
-    lineas = [
-        "BANCA MODERNA",
-        "RECIBO DE PAGO",
-    ]
-    if ticket.es_prueba:
-        lineas.append("PRUEBA — NO OFICIAL")
-    if sucursal is not None:
-        lineas.append((sucursal.nombre or "").upper())
-    lineas.append(f"Ticket: {ticket.id}")
     total = D(0)
+    filas = []
     for jugada in ganadoras:
         loterias = [jugada.sorteo.nombre] if jugada.sorteo else []
         if jugada.sorteo2 is not None:
             loterias.append(jugada.sorteo2.nombre)
-        lineas.append("Lotería: " + " · ".join(loterias))
-        lineas.append(f"Número ganador: {jugada.numeros}")
-        lineas.append(f"Premio: RD${D(jugada.premio)}")
-        total += D(jugada.premio)
-    if ticket.estado != "pagado":
+        premio = D(jugada.premio)
+        total += premio
+        codigo = (jugada.tipo.codigo if jugada.tipo else "") or ""
+        codigo = str(codigo).upper()
+        filas.append({
+            "tipo": codigo,
+            "tipo_nombre": _NOMBRE_JUGADA.get(codigo, jugada.tipo.nombre if jugada.tipo else ""),
+            "numeros": jugada.numeros,
+            "premio": str(premio),
+            "loterias": loterias,
+        })
+    parcial = ticket.estado != "pagado"
+    if parcial:
         if any(not j.evaluada for j in ticket.jugadas):
-            lineas.append("PAGO PARCIAL — QUEDAN SORTEOS PENDIENTES")
+            nota = "PAGO PARCIAL — QUEDAN SORTEOS PENDIENTES"
         else:
-            lineas.append("PAGO PARCIAL — QUEDA PREMIO PENDIENTE")
+            nota = "PAGO PARCIAL — QUEDA PREMIO PENDIENTE"
+    else:
+        nota = ""
     fecha_hora = ""
     if any(j.pagado_en for j in ganadoras):
-        fecha_hora = max(j.pagado_en for j in ganadoras if j.pagado_en).isoformat(sep=" ")
+        fecha_hora = max(j.pagado_en for j in ganadoras if j.pagado_en).strftime("%d-%m-%Y %I:%M %p")
     elif ticket.pagado_en:
-        fecha_hora = ticket.pagado_en.isoformat(sep=" ")
+        fecha_hora = ticket.pagado_en.strftime("%d-%m-%Y %I:%M %p")
+    op_id = op or ticket.pago_operacion_id or str(ticket.id)
+    return {
+        "banca": (sucursal.nombre if sucursal else "BANCA MODERNA") or "BANCA MODERNA",
+        "ticket_id": ticket.id,
+        "serial": ticket.serial or "",
+        "cajero": cajero.nombre if cajero else "",
+        "operacion_id": op_id,
+        "fecha_hora": fecha_hora,
+        "jugadas": filas,
+        "total": str(total),
+        "parcial": parcial,
+        "nota_parcial": nota,
+        "es_prueba": bool(ticket.es_prueba),
+    }
+
+
+def comprobante_premio(db, ticket, operacion_id=None):
+    """Recibo 58 mm solo de los premios de esa operación. Reimprimir no cobra."""
+    datos = _datos_comprobante_premio(db, ticket, operacion_id=operacion_id)
+    if not datos:
+        return ""
+    lineas = [
+        # Marca de sistema (compatibilidad con comprobantes/APK anteriores).
+        "BANCA MODERNA",
+        str(datos["banca"]).upper(),
+        "PAGO DE PREMIOS",
+        # Compatibilidad con pruebas/APK que buscan el título anterior.
+        "RECIBO DE PAGO",
+    ]
+    if datos["es_prueba"]:
+        lineas.append("PRUEBA — NO OFICIAL")
+    lineas.append(f"Fecha y hora: {datos['fecha_hora']}")
+    lineas.append(f"Ticket: {datos['ticket_id']}")
+    if datos.get("serial"):
+        lineas.append(f"S/N: {datos['serial']}")
+    lineas.append(f"Cajero: {datos['cajero']}")
+    # Agrupar por lotería para lectura clara (solo jugadas de esta operación).
+    por_lot = {}
+    orden = []
+    for fila in datos["jugadas"]:
+        clave = " · ".join(fila["loterias"]) if fila["loterias"] else "LOTERÍA"
+        if clave not in por_lot:
+            por_lot[clave] = []
+            orden.append(clave)
+        por_lot[clave].append(fila)
+    for clave in orden:
+        lineas.append(f"Lotería: {clave}")
+        for fila in por_lot[clave]:
+            tipo = fila.get("tipo") or ""
+            lineas.append(f"Tipo: {tipo}" if tipo else "Tipo: —")
+            lineas.append(f"Número ganador: {fila['numeros']}")
+            lineas.append(f"Premio: RD${D(fila['premio'])}")
+    if datos["parcial"] and datos["nota_parcial"]:
+        lineas.append(datos["nota_parcial"])
     lineas.extend([
-        f"TOTAL PAGADO: RD${total}",
-        f"PREMIO PAGADO: RD${total}",
-        f"Cajero: {cajero.nombre if cajero else ''}",
-        f"Fecha y hora: {fecha_hora}",
-        f"Operación: {op or ticket.pago_operacion_id or ticket.id}",
+        f"TOTAL PAGADO: RD${D(datos['total'])}",
+        f"PREMIO PAGADO: RD${D(datos['total'])}",
+        f"Operación: {datos['operacion_id']}",
         "ESTADO: PAGADO",
         "GRACIAS POR SU VISITA",
     ])
@@ -4000,6 +4110,7 @@ def resumen_dia(db, desde, hasta, operador, sucursal, terminal, alcance="cajero"
         "alcance": "sucursal" if usuario_id is None else "cajera autenticada",
         "puede_sucursal": operador.rol in ("admin", "supervisor"),
         "sucursal": sucursal.nombre if sucursal else "?",
+        "banca": sucursal.nombre if sucursal else "BANCA MODERNA",
         "terminal": terminal.serial_sunmi if terminal else "?",
         "cajero": operador.nombre,
         "desde": desde.strftime("%d-%m-%Y"),
@@ -4010,6 +4121,13 @@ def resumen_dia(db, desde, hasta, operador, sucursal, terminal, alcance="cajero"
         "comision": comision_periodo(db, desde, hasta, sucursal.id, usuario_id),
     }
     datos["texto"] = _texto_resumen(datos)
+    # Meta opcional: APK futuras pueden pedir PNG; las actuales usan "texto".
+    datos["impresion"] = {
+        "modo": "imagen_servidor",
+        "ancho_px": 384,
+        "url": "/terminal/reportes/dia/imagen",
+        "fallback": "texto",
+    }
     return datos
 
 
@@ -4100,8 +4218,10 @@ def _bloque_resumen(db, desde, hasta, sucursal_id, usuario_id, prueba):
 
 def _texto_resumen(datos):
     """Resumen compacto para pantalla e impresión 58 mm (sin tickets ni comisión)."""
+    banca = str(datos.get("banca") or datos.get("sucursal") or "BANCA MODERNA").upper()
     lineas = [
-        "BANCA MODERNA",
+        banca,
+        "RESUMEN DE CAJA",
         f"Cajero: {datos['cajero']}",
     ]
     if datos["desde"] == datos["hasta"]:
@@ -4109,6 +4229,8 @@ def _texto_resumen(datos):
     else:
         lineas.append(f"DESDE: {datos['desde'].replace('-', '/')}")
         lineas.append(f"HASTA: {datos['hasta'].replace('-', '/')}")
+    if datos.get("impreso"):
+        lineas.append(f"Impreso: {datos['impreso']}")
     lineas.append("")
     lineas.extend(_lineas_bloque(datos["real"], modo_desarrollo() and datos.get("prueba") is None))
     if datos.get("prueba") is not None:
@@ -4118,6 +4240,7 @@ def _texto_resumen(datos):
 
 
 def _lineas_bloque(bloque, etiqueta_prueba=False):
+    """Texto compacto histórico (ventas / premios / quedó). Detalle extra va en PNG."""
     pref = "PRUEBA " if etiqueta_prueba else ""
     return [
         f"{pref}VENTAS DEL DÍA: RD${bloque['ventas']}",

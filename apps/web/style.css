@@ -257,6 +257,14 @@ body.usuarios-movil .usu-tabla-escritorio{display:none !important}
   position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
   clip:rect(0,0,0,0);white-space:nowrap;border:0;
 }
+.dt-preview-wrap{
+  margin:16px 0 24px;padding:16px;background:#111;border:1px solid var(--borde);
+  border-radius:14px;display:inline-block;max-width:100%;
+}
+#dt-preview{
+  display:block;width:192px;max-width:100%;height:auto;background:#fff;
+  border-radius:4px;image-rendering:pixelated;
+}
 .vc-filtros{align-items:end}
 .vc-chips{display:flex;flex-wrap:wrap;gap:8px;width:100%}
 .vc-lista{

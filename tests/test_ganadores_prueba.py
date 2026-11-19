@@ -167,7 +167,9 @@ def test_qn_pl_sp_pago_unico_y_correccion(entorno, monkeypatch, fijar_hora):
     ana = entorno.login_terminal("ana", "prueba123")
     entorno.vender_ok(ana, [{"tipo": "QN", "sorteos": [florida], "numeros": "01", "monto": 600}])
     ajena = _pagar(entorno, ana, primero, "pago-ana")
-    assert ajena.status_code == 409
+    # Terminal: solo la cajera vendedora puede pagar (403, no 409).
+    assert ajena.status_code == 403
+    assert "OTRA CAJERA" in ajena.json()["detail"]
     assert entorno.saldo(sucursal_id) == 5764
 
     bloqueo = entorno.c.post(

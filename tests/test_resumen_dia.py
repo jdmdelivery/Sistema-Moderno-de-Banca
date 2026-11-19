@@ -65,10 +65,9 @@ def test_resumen_de_la_cajera_no_mueve_la_caja_ni_mezcla_pruebas(entorno, monkey
     assert ajeno["real"]["ventas"] == "0.00"
     # El pago panel lo registra el admin, no la cajera terminal de PEGUERO.
     assert ajeno["real"]["premios_pagados"] == "0.00"
-    # Spoof alcance=sucursal: el operador queda limitado a su propia caja.
+    # Spoof alcance=sucursal: operador sin privilegio → 403 (no eleva ni filtra en silencio).
     spoof = entorno.c.get("/terminal/reportes/dia?alcance=sucursal", headers=b1["headers"])
-    assert spoof.status_code == 200
-    assert spoof.json()["real"]["ventas"] == "20.00"
+    assert spoof.status_code == 403
 
     monkeypatch.setenv("MODO_DESARROLLO", "true")
     prueba = entorno.vender_ok(b1["headers"], [

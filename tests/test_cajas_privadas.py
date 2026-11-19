@@ -56,11 +56,10 @@ def test_cajero_no_ve_ventas_ni_caja_de_otra_cajera(entorno):
     assert resumen.status_code == 200
     assert resumen.json()["total_tickets"] == 0
     assert ajeno["serial"] not in resumen.text
-    # Spoof alcance=sucursal: se fuerza "cajero" y no revela ventas ajenas.
+    # Spoof alcance=sucursal: operador sin privilegio → 403 (no eleva ni filtra en silencio).
     sucursal = entorno.c.get("/terminal/reportes/dia?alcance=sucursal&usuario_id=99", headers=b["headers"])
-    assert sucursal.status_code == 200
+    assert sucursal.status_code == 403
     assert ajeno["serial"] not in sucursal.text
-    assert float(sucursal.json()["real"]["ventas"]) == 0.00
     dia = entorno.c.get("/terminal/reportes/dia?cajero_id=2", headers=b["headers"])
     assert dia.status_code == 200
     assert ajeno["serial"] not in dia.text
@@ -180,13 +179,12 @@ def test_ventas_y_reportes_no_mezclan_cajeros_ni_sucursales(entorno, monkeypatch
     assert float(ind_b["mi_venta"]) == 0.00 and float(ind_b["mi_caja"]) == 0.00
     assert float(ind_c["mi_venta"]) == 30.00 and float(ind_c["mi_caja"]) == 30.00
 
-    # Spoof alcance=sucursal: el operador sigue limitado a sí mismo.
+    # Spoof alcance=sucursal: operador sin privilegio → 403 (no eleva alcance).
     dia_b = entorno.c.get(
         "/terminal/reportes/dia?alcance=sucursal",
         headers=hb,
     )
-    assert dia_b.status_code == 200
-    assert float(dia_b.json()["real"]["ventas"]) == 0.00
+    assert dia_b.status_code == 403
 
     res_a = entorno.c.get(
         "/terminal/reportes/resumen?desde=2026-11-14&hasta=2026-11-14&vista=final",

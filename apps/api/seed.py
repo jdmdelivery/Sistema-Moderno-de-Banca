@@ -214,9 +214,12 @@ def sembrar_sucursal_prueba(db):
 
     if not modo_desarrollo():
         return
+    # No crea ni renombra si ya hay sucursales (no sobrescribe nombres reales).
     if db.query(Sucursal).first() is not None:
         return
     admin = db.query(Usuario).filter_by(usuario="admin").first()
+    # Sufijo (PRUEBA) identifica la semilla de lab. La impresión PNG puede
+    # omitirlo en papel; aquí no se tocan bancas ya existentes.
     sucursal = Sucursal(
         codigo="1301",
         nombre="BANCA CASTILLO (PRUEBA)",

@@ -4,7 +4,8 @@ import hmac
 import secrets
 
 _ITERACIONES = 260_000
-_ALFABETO_SERIAL = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # sin caracteres confusos (0/O, 1/I/L)
+_ALFABETO_SERIAL = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # legado (tickets antiguos)
+_LARGO_SERIAL_NUMERICO = 12
 
 
 def hash_clave(clave: str) -> str:
@@ -33,6 +34,19 @@ def nuevo_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-def generar_serial(largo: int = 10) -> str:
-    """Serial de ticket no adivinable: no es secuencial ni derivable del ID."""
-    return "".join(secrets.choice(_ALFABETO_SERIAL) for _ in range(largo))
+def generar_serial(largo: int = _LARGO_SERIAL_NUMERICO) -> str:
+    """S/N de ticket: solo dígitos, con ceros a la izquierda.
+
+    No es el ID interno ni secuencial predecible: se elige al azar y la
+    unicidad se garantiza al insertar (reintento si choca con UNIQUE).
+    Los tickets antiguos pueden conservar S/N alfanumérico.
+    """
+    if largo < 6:
+        largo = _LARGO_SERIAL_NUMERICO
+    n = secrets.randbelow(10 ** largo)
+    return f"{n:0{largo}d}"
+
+
+def es_serial_numerico(serial: str | None) -> bool:
+    s = str(serial or "").strip()
+    return len(s) > 0 and s.isdigit()

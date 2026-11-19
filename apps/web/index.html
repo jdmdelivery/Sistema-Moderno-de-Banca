@@ -11,7 +11,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
-<link rel="stylesheet" href="/static/style.css?v=cajeros-elite-1">
+<link rel="stylesheet" href="/static/style.css?v=ticket-img-local-1">
 </head>
 <body class="sin-sesion">
 <div id="login" class="login-overlay" role="dialog" aria-modal="true" aria-labelledby="login-titulo">
@@ -78,6 +78,7 @@
       <button type="button" class="navbtn" data-sec="tabla"><span class="nav-ico">＃</span> Tabla de pagos</button>
       <button type="button" class="navbtn" data-sec="limites"><span class="nav-ico">⚙</span> Límites</button>
       <button type="button" class="navbtn" data-sec="comisiones"><span class="nav-ico">%</span> Comisiones</button>
+      <button type="button" class="navbtn" data-sec="diseno-ticket" data-solo-admin><span class="nav-ico">🖨</span> Diseño de ticket</button>
     </div>
   </div>
 
@@ -102,6 +103,37 @@
 </nav>
 
 <main class="panel-principal">
+<section id="sec-diseno-ticket" class="seccion">
+  <h2>Diseño de ticket (impresión servidor)</h2>
+  <p class="nota">Controla el formato 384 px que imprimirán las APK nuevas. No modifica jugadas, premios ni el QR LOT:id:serial. Las APK antiguas siguen con el formato local de respaldo.</p>
+  <div class="form">
+    <label>Sucursal<select id="dt-sucursal"></select></label>
+    <label>Tamaño nombre banca<input id="dt-tam-nombre" type="number" min="16" max="40" value="26"></label>
+    <label>Tamaño jugadas<input id="dt-tam-jugada" type="number" min="12" max="36" value="22"></label>
+    <label>Tamaño total<input id="dt-tam-total" type="number" min="12" max="36" value="22"></label>
+    <label>Tamaño QR (px)<input id="dt-qr-tam" type="number" min="96" max="220" value="168"></label>
+    <label>Posición QR<select id="dt-qr-pos">
+      <option value="superior">Superior</option>
+      <option value="inferior">Inferior</option>
+      <option value="oculto">Oculto en imagen</option>
+    </select></label>
+    <label>Mensaje inferior<input id="dt-mensaje" placeholder="Opcional"></label>
+    <label class="check"><input id="dt-sec-qn" type="checkbox" checked> Sección QUINIELAS (QN)</label>
+    <label class="check"><input id="dt-sec-pl" type="checkbox" checked> Sección PALÉS (PL)</label>
+    <label class="check"><input id="dt-sec-sp" type="checkbox" checked> Sección SUPER PALÉ (SP)</label>
+    <label class="check"><input id="dt-sec-tr" type="checkbox" checked> Sección TRIPLETAS (TR)</label>
+    <label class="check"><input id="dt-activo" type="checkbox" checked> Diseño activo</label>
+    <button type="button" id="btn-dt-cargar" class="btn">CARGAR</button>
+    <button type="button" id="btn-dt-preview" class="btn">VISTA PREVIA</button>
+    <button type="button" id="btn-dt-guardar" class="btn primario">GUARDAR DISEÑO</button>
+    <p id="dt-msg" class="msg"></p>
+    <p id="dt-tr-nota" class="nota"></p>
+  </div>
+  <div class="dt-preview-wrap">
+    <img id="dt-preview" alt="Vista previa del ticket 384 px" width="192" height="auto">
+  </div>
+</section>
+
 <section id="sec-super" class="seccion">
   <h2>Panel Super Admin — JDMCASHNOW</h2>
   <p class="nota">Cola de aprobación de cajeros, vista de todas las sucursales y permisos de cada administrador de banca. Los tickets, ventas y saldos no se modifican desde aquí.</p>
@@ -650,6 +682,6 @@
 </section>
 </main>
 
-<script src="/static/app.js?v=cajeros-elite-1"></script>
+<script src="/static/app.js?v=ticket-img-local-1"></script>
 </body>
 </html>

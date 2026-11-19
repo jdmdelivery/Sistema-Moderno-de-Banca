@@ -504,6 +504,17 @@ class ComisionCajera(Base):
     creado_en = Column(DateTime, nullable=False, default=ahora_local)
 
 
+class DisenoTicket(Base):
+    """Diseño de impresión por sucursal (empresa). No altera jugadas ni premios."""
+
+    __tablename__ = "disenos_ticket"
+    sucursal_id = Column(Integer, ForeignKey("sucursales.id"), primary_key=True)
+    activo = Column(Boolean, nullable=False, default=True)
+    config_json = Column(Text, nullable=False, default="{}")
+    actualizado_en = Column(DateTime)
+    actualizado_por = Column(Integer, ForeignKey("usuarios.id"))
+
+
 class LiquidacionComision(Base):
     """Cierre de una quincena. Marcarla pagada no mueve ninguna caja."""
 
