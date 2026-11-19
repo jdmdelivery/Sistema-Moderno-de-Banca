@@ -1885,6 +1885,32 @@ function pintarCajerasComision() {
     : '<option value="">No hay cajeras en esta sucursal</option>';
   if (elegido) $("#com-cajera").value = elegido;
 }
+async function previewComisionCiclo() {
+  const cajera = $("#com-cajera").value;
+  const porcentaje = $("#com-porcentaje").value;
+  if (!cajera) throw new Error("Seleccione una cajera");
+  if (porcentaje === "" || Number(porcentaje) < 0 || Number(porcentaje) > 100) {
+    throw new Error("El porcentaje debe estar entre 0 y 100");
+  }
+  const p = await api(
+    `/comisiones/preview-aplicar-ciclo?usuario_id=${Number(cajera)}&porcentaje=${Number(porcentaje)}`,
+  );
+  const box = $("#com-preview");
+  if (box) {
+    box.hidden = false;
+    box.innerHTML =
+      `<b>Vista previa — ${esc(p.cajera)} (${esc(p.usuario)})</b><br>`
+      + `Porcentaje: ${esc(p.porcentaje_propuesto)}% · Desde: ${esc(p.aplicar_desde)}<br>`
+      + `Ventas válidas ciclo: ${fmt(p.ventas_validas)}`
+      + ` · Sin % al vender: ${fmt(p.ventas_sin_porcentaje)}<br>`
+      + `Balance actual: ${fmt(p.balance_actual)}`
+      + ` → Balance proyectado: <b>${fmt(p.balance_proyectado)}</b>`
+      + ` (pagado: ${fmt(p.comision_pagada)})`
+      + (p.ya_aplicado_mismo_pct ? `<br><i>Este % ya cubre el inicio del ciclo (idempotente).</i>` : "");
+  }
+  return p;
+}
+
 async function guardarComision() {
   const cajera = $("#com-cajera").value;
   const porcentaje = $("#com-porcentaje").value;
@@ -1894,10 +1920,15 @@ async function guardarComision() {
     throw new Error("El porcentaje debe estar entre 0 y 100");
   }
   if (aplicarCiclo) {
+    const p = await previewComisionCiclo();
     const ok = confirm(
-      "¿Autoriza aplicar este porcentaje desde el INICIO DEL CICLO ABIERTO?\n\n"
-      + "Solo cubre ventas del ciclo que no tenían otro porcentaje registrado.\n"
-      + "No modifica MI CAJA ni Banco General.",
+      `¿Autoriza aplicar ${p.porcentaje_propuesto}% desde el INICIO DEL CICLO ABIERTO?\n\n`
+      + `Cajera: ${p.cajera} (${p.usuario})\n`
+      + `Ventas válidas: ${fmt(p.ventas_validas)}\n`
+      + `Balance actual: ${fmt(p.balance_actual)}\n`
+      + `Balance proyectado: ${fmt(p.balance_proyectado)}\n`
+      + `Pagos del ciclo: ${fmt(p.comision_pagada)}\n\n`
+      + `No borra ventas ni historiales. No modifica MI CAJA ni Banco General.`,
     );
     if (!ok) return;
   }
@@ -2181,6 +2212,10 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-fondo").addEventListener("click", () => asignarFondo().catch((e) => msg("#fon-msg", e.message, false)));
   $("#com-sucursal").addEventListener("change", pintarCajerasComision);
   $("#btn-comision").addEventListener("click", () => guardarComision().catch((e) => msg("#com-msg", e.message, false)));
+  const btnPrev = $("#btn-com-preview");
+  if (btnPrev) {
+    btnPrev.addEventListener("click", () => previewComisionCiclo().catch((e) => msg("#com-msg", e.message, false)));
+  }
   $("#btn-com-ver").addEventListener("click", () => verComisiones().catch((e) => msg("#com-res-msg", e.message, false)));
   $("#btn-com-liquidar").addEventListener("click", () => liquidarComision().catch((e) => msg("#com-res-msg", e.message, false)));
   $("#caj-sucursal").addEventListener("change", () => { cargarCuadres().catch(() => {}); });

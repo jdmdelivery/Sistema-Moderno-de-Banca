@@ -172,6 +172,70 @@ def test_ventas_sucesivas_15_anulacion_cierre_y_nuevo_ciclo(entorno, monkeypatch
     assert _detalle(entorno, uid)["comision"]["comision_pendiente"] == "30.00"
 
 
+def test_preview_y_aplicar_ciclo_caso_parcial_tipo_isaury(entorno, monkeypatch, fijar_hora):
+    """Ventas sin % + ventas con %: preview y aplicar unifican el ciclo al %.
+
+    Réplica del patrón Isaury/Lizbech (parcial_sin_pct_al_vender).
+    """
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    fijar_hora(datetime(2026, 11, 14, 10, 0, 0))
+    b = entorno.banca(saldo=20000, usuario="isauryx", clave="prueba123")
+    uid = _id(entorno, "isauryx")
+    lot = entorno.sorteo_id("LOTEDOM")
+    # Ventas antes del %
+    entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "60", "monto": 1000}])
+    entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "61", "monto": 500}])
+    fijar_hora(datetime(2026, 11, 14, 10, 30, 0))
+    entorno.c.post("/comisiones", json={"usuario_id": uid, "porcentaje": 15}, headers=entorno.admin)
+    # Venta después del % (200 × 15% = 30) — patrón Isaury
+    entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "62", "monto": 200}])
+    det = _detalle(entorno, uid)
+    assert det["resumen"]["ventas_ciclo"] == "1700.00"
+    assert det["comision"]["comision_pendiente"] == "30.00"
+
+    prev = entorno.c.get(
+        f"/comisiones/preview-aplicar-ciclo?usuario_id={uid}&porcentaje=15",
+        headers=entorno.admin,
+    )
+    assert prev.status_code == 200, prev.text
+    body = prev.json()
+    assert body["ventas_validas"] == "1700.00"
+    assert body["ventas_sin_porcentaje"] == "1500.00"
+    assert body["balance_actual"] == "30.00"
+    assert body["balance_proyectado"] == "255.00"  # 1700 × 15%
+    assert body["descuenta_mi_caja"] is False
+
+    entorno.c.post(
+        "/comisiones",
+        json={"usuario_id": uid, "porcentaje": 15, "aplicar_desde_inicio_ciclo": True},
+        headers=entorno.admin,
+    )
+    assert _detalle(entorno, uid)["comision"]["comision_pendiente"] == "255.00"
+
+
+def test_dos_sucursales_aisladas_y_cambio_porcentaje(entorno, monkeypatch, fijar_hora):
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    fijar_hora(datetime(2026, 11, 14, 10, 0, 0))
+    a = entorno.banca(saldo=10000, usuario="caj_a15", clave="prueba123", codigo="A150", nombre="BANCA A")
+    b = entorno.banca(saldo=10000, usuario="caj_b10", clave="prueba123", codigo="B150", nombre="BANCA B")
+    ua = _id(entorno, "caj_a15")
+    ub = _id(entorno, "caj_b10")
+    lot = entorno.sorteo_id("LOTEDOM")
+    entorno.c.post("/comisiones", json={"usuario_id": ua, "porcentaje": 15}, headers=entorno.admin)
+    entorno.c.post("/comisiones", json={"usuario_id": ub, "porcentaje": 10}, headers=entorno.admin)
+    entorno.vender_ok(a["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "70", "monto": 1000}])
+    entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "71", "monto": 1000}])
+    assert _detalle(entorno, ua)["comision"]["comision_pendiente"] == "150.00"
+    assert _detalle(entorno, ub)["comision"]["comision_pendiente"] == "100.00"
+
+    # Cambio de % a 20% solo afecta ventas posteriores de A.
+    fijar_hora(datetime(2026, 11, 14, 11, 0, 0))
+    entorno.c.post("/comisiones", json={"usuario_id": ua, "porcentaje": 20}, headers=entorno.admin)
+    entorno.vender_ok(a["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "72", "monto": 500}])
+    assert _detalle(entorno, ua)["comision"]["comision_pendiente"] == "250.00"  # 150 + 100
+    assert _detalle(entorno, ub)["comision"]["comision_pendiente"] == "100.00"
+
+
 def test_ui_balance_y_aplicar_ciclo_presentes():
     from pathlib import Path
 
@@ -183,5 +247,8 @@ def test_ui_balance_y_aplicar_ciclo_presentes():
     assert "PAGAR COMISIÓN Y CERRAR CICLO" in js
     assert "nota_balance" in js
     assert "aplicar_desde_inicio_ciclo" in js
+    assert "previewComisionCiclo" in js
+    assert "preview-aplicar-ciclo" in js
     assert "com-aplicar-ciclo" in html
+    assert "btn-com-preview" in html
     assert '[fmt(bloque.comision), "Comisión"]' not in js

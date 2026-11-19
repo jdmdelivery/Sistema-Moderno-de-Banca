@@ -1774,6 +1774,13 @@ def panel_comisiones(sucursal_id: int | None = None, usuario_id: int | None = No
     return servicios.listar_comisiones(db, sid, usuario_id)
 
 
+@app.get("/comisiones/preview-aplicar-ciclo")
+def panel_preview_aplicar_ciclo(usuario_id: int, porcentaje: float,
+                                db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+    """Vista previa del balance si se aplica el % desde el inicio del ciclo (solo lectura)."""
+    return servicios.preview_aplicar_comision_ciclo(db, usuario, usuario_id, porcentaje)
+
+
 @app.post("/comisiones", status_code=201)
 def panel_guardar_comision(datos: ComisionIn, db=Depends(get_db),
                            usuario=Depends(requiere_rol("admin"))):

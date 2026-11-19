@@ -3814,6 +3814,111 @@ def _momento_aplicacion_desde_ciclo(db, cajera, prueba=False):
     return ahora_local()
 
 
+def _pct_si_hubiera_fila(db, usuario_id, momento, pct_prop, vigente_prop):
+    """Simula % vigente si existiera una fila (pct_prop, vigente_prop) sin escribir en BD."""
+    actual = (
+        db.query(ComisionCajera)
+        .filter(ComisionCajera.usuario_id == usuario_id, ComisionCajera.vigente_desde <= momento)
+        .order_by(ComisionCajera.vigente_desde.desc(), ComisionCajera.id.desc())
+        .first()
+    )
+    if vigente_prop <= momento:
+        if actual is None:
+            return D(pct_prop)
+        if vigente_prop > actual.vigente_desde:
+            return D(pct_prop)
+        if vigente_prop == actual.vigente_desde:
+            # La fila nueva tendría id mayor → gana.
+            return D(pct_prop)
+        return D(actual.porcentaje)
+    return D(actual.porcentaje) if actual is not None else D(0)
+
+
+def preview_aplicar_comision_ciclo(db, admin, usuario_id, porcentaje):
+    """Vista previa del balance si se autoriza aplicar % desde inicio del ciclo. Solo lectura."""
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
+        raise ErrorServicio(403, "Solo un administrador puede consultar la vista previa")
+    pct = D(porcentaje)
+    if pct < 0 or pct > 100:
+        raise ErrorServicio(400, "El porcentaje debe estar entre 0 y 100")
+    cajera = db.get(Usuario, usuario_id)
+    if cajera is None or cajera.rol != "operador" or not cajera.activo or not cajera.sucursal_id:
+        raise ErrorServicio(400, "Seleccione una cajera activa")
+    perm.assert_usuario_en_alcance(db, admin, cajera)
+    prueba = bool(modo_desarrollo())
+    actual = saldo_comision_cajera(db, cajera, prueba=prueba)
+    vigente = _momento_aplicacion_desde_ciclo(db, cajera, prueba)
+    inicio = _inicio_ciclo_perfil(db, cajera, prueba)
+    q = db.query(Ticket).filter(
+        Ticket.usuario_id == cajera.id,
+        Ticket.es_prueba.is_(prueba),
+        Ticket.sucursal_vendedora_id == cajera.sucursal_id,
+    )
+    if inicio is not None:
+        q = q.filter(
+            or_(
+                Ticket.vendido_en > inicio,
+                and_(Ticket.vendido_en.is_(None), Ticket.fecha > inicio.date()),
+            )
+        )
+    ventas = D(0)
+    sin_pct = D(0)
+    comision_proj = D(0)
+    tickets_validos = 0
+    tickets_anulados = 0
+    for ticket in q.all():
+        if ticket.estado == "anulado":
+            tickets_anulados += 1
+            continue
+        tickets_validos += 1
+        total = D(ticket.total)
+        ventas += total
+        momento = ticket.vendido_en or datetime.combine(ticket.fecha, datetime.min.time())
+        pct_hoy = _porcentaje_vigente(db, cajera.id, momento)
+        if pct_hoy == 0:
+            sin_pct += total
+        comision_proj += D(total * _pct_si_hubiera_fila(db, cajera.id, momento, pct, vigente) / D(100))
+    pagada = _total_pagos_comision(db, cajera.id, prueba, desde_momento=inicio)
+    pendiente_proj = D(max(D(0), comision_proj - pagada))
+    ya_cubierto = (
+        db.query(ComisionCajera)
+        .filter(
+            ComisionCajera.usuario_id == cajera.id,
+            ComisionCajera.porcentaje == pct,
+            ComisionCajera.vigente_desde <= vigente,
+        )
+        .first()
+        is not None
+    )
+    return {
+        "usuario_id": cajera.id,
+        "cajera": cajera.nombre,
+        "usuario": cajera.usuario,
+        "sucursal_id": cajera.sucursal_id,
+        "porcentaje_propuesto": _pct_texto(pct),
+        "aplicar_desde": vigente.isoformat(sep=" "),
+        "ciclo_desde": inicio.isoformat(sep=" ") if inicio else None,
+        "tickets_validos": tickets_validos,
+        "tickets_anulados": tickets_anulados,
+        "ventas_validas": str(D(ventas)),
+        "ventas_sin_porcentaje": str(D(sin_pct)),
+        "balance_actual": actual["comision_pendiente"],
+        "comision_pagada": str(pagada),
+        "comision_proyectada": str(D(comision_proj)),
+        "balance_proyectado": str(pendiente_proj),
+        "ya_aplicado_mismo_pct": ya_cubierto,
+        "descuenta_mi_caja": False,
+        "descuenta_caja_general": False,
+        "requiere_confirmacion": True,
+        "nota": (
+            "Vista previa. No modifica datos hasta confirmar GUARDAR con "
+            "«Aplicar desde inicio del ciclo abierto»."
+        ),
+    }
+
+
 def guardar_comision(db, admin, usuario_id, porcentaje, aplicar_desde_inicio_ciclo=False):
     from . import permisos as perm
 
