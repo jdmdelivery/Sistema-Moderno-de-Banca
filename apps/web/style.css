@@ -363,6 +363,13 @@ body.usuarios-movil .usu-tabla-escritorio{display:none !important}
   margin:10px 0 0;padding:0 0 0 18px;color:var(--suave);font-size:12.5px;line-height:1.45;
 }
 .vc-comision-desglose li{margin:0 0 4px}
+.vc-comision-pendiente{
+  border-color:rgba(46,204,113,.45)!important;
+  background:linear-gradient(180deg,rgba(46,204,113,.12),var(--panel))!important;
+}
+.vc-comision-periodo-nota{margin:10px 0 0;color:var(--suave);font-size:12px}
+.vc-comision-acciones{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap}
+.vc-btn-pagar-comision{min-height:40px}
 .vc-hist{
   border:1px solid var(--borde);border-radius:14px;padding:12px;margin:0 0 12px;
   background:var(--panel2);min-width:0;

@@ -33,6 +33,8 @@ from .models import (
     LimiteCajera,
     LimiteVenta,
     LiquidacionComision,
+    PagoComision,
+    CierreCicloCajera,
     MovimientoCajera,
     MovimientoSaldo,
     Resultado,
@@ -3841,15 +3843,24 @@ def listar_comisiones(db, sucursal_id=None, usuario_id=None):
     return [comision_a_dict(db, fila) for fila in q.order_by(ComisionCajera.id.desc()).all()]
 
 
-def _comision_tickets(db, desde, hasta, sucursal_id, usuario_id, prueba):
+def _comision_tickets(db, desde, hasta, sucursal_id, usuario_id, prueba, desde_momento=None):
     q = db.query(Ticket).filter(
-        Ticket.fecha >= desde,
-        Ticket.fecha <= hasta,
         Ticket.sucursal_vendedora_id == sucursal_id,
         Ticket.es_prueba.is_(prueba),
     )
+    if desde is not None:
+        q = q.filter(Ticket.fecha >= desde)
+    if hasta is not None:
+        q = q.filter(Ticket.fecha <= hasta)
     if usuario_id is not None:
         q = q.filter(Ticket.usuario_id == usuario_id)
+    if desde_momento is not None:
+        q = q.filter(
+            or_(
+                Ticket.vendido_en > desde_momento,
+                and_(Ticket.vendido_en.is_(None), Ticket.fecha > desde_momento.date()),
+            )
+        )
     tickets = q.order_by(Ticket.id).all()
     grupos = {}
     anulados = 0
@@ -4026,6 +4037,572 @@ def listar_liquidaciones(db, sucursal_id=None, usuario_id=None):
     if usuario_id is not None:
         q = q.filter(LiquidacionComision.usuario_id == usuario_id)
     return [liquidacion_a_dict(db, fila) for fila in q.order_by(LiquidacionComision.id.desc()).all()]
+
+
+def _tiene_porcentaje_registrado(db, usuario_id, momento):
+    return (
+        db.query(ComisionCajera.id)
+        .filter(ComisionCajera.usuario_id == usuario_id, ComisionCajera.vigente_desde <= momento)
+        .first()
+        is not None
+    )
+
+
+def _inicio_ciclo_perfil(db, cajera, prueba=False):
+    """Momento del último cierre de perfil; None = ciclo desde el origen."""
+    if cajera is None:
+        return None
+    cid = cajera.ciclo_perfil_prueba_cierre_id if prueba else cajera.ciclo_perfil_cierre_id
+    if not cid:
+        return None
+    cierre = db.get(CierreCicloCajera, cid)
+    return cierre.cerrado_en if cierre is not None else None
+
+
+def _usar_prueba_comision(db, cajera):
+    if not modo_desarrollo() or cajera is None or not cajera.sucursal_id:
+        return False
+    inicio_real = _inicio_ciclo_perfil(db, cajera, False)
+    inicio_prueba = _inicio_ciclo_perfil(db, cajera, True)
+    real = _comision_tickets(
+        db, None, None, cajera.sucursal_id, cajera.id, False, desde_momento=inicio_real,
+    )
+    prueba_calc = _comision_tickets(
+        db, None, None, cajera.sucursal_id, cajera.id, True, desde_momento=inicio_prueba,
+    )
+    return bool(D(prueba_calc["ventas_validas"]) > 0 and D(real["ventas_validas"]) == 0)
+
+
+def _total_pagos_comision(db, usuario_id, es_prueba, desde_momento=None):
+    q = db.query(func.coalesce(func.sum(PagoComision.monto), 0)).filter(
+        PagoComision.usuario_id == usuario_id,
+        PagoComision.es_prueba.is_(bool(es_prueba)),
+    )
+    if desde_momento is not None:
+        q = q.filter(PagoComision.creado_en > desde_momento)
+    return D(q.scalar() or 0)
+
+
+def pago_comision_a_dict(db, fila):
+    cajera = db.get(Usuario, fila.usuario_id)
+    admin = db.get(Usuario, fila.pagado_por)
+    return {
+        "id": fila.id,
+        "operacion_id": fila.operacion_id,
+        "usuario_id": fila.usuario_id,
+        "cajera": cajera.nombre if cajera else "",
+        "usuario": cajera.usuario if cajera else "",
+        "sucursal_id": fila.sucursal_id,
+        "monto": str(D(fila.monto)),
+        "comision_generada": str(D(fila.comision_acumulada)),
+        "comision_acumulada": str(D(fila.comision_acumulada)),
+        "comision_pagada_antes": str(D(fila.comision_pagada_antes)),
+        "saldo_pendiente_antes": str(D(fila.saldo_pendiente_antes)),
+        "saldo_pendiente": str(D(fila.saldo_pendiente_despues)),
+        "saldo_pendiente_despues": str(D(fila.saldo_pendiente_despues)),
+        "es_prueba": bool(fila.es_prueba),
+        "pagado_por": fila.pagado_por,
+        "administrador": admin.nombre if admin else "",
+        "creado_en": fila.creado_en.isoformat(sep=" ") if fila.creado_en else None,
+        "descuenta_mi_caja": False,
+        "descuenta_caja_general": False,
+    }
+
+
+def cierre_ciclo_a_dict(db, fila):
+    cajera = db.get(Usuario, fila.usuario_id)
+    admin = db.get(Usuario, fila.cerrado_por)
+    suc = db.get(Sucursal, fila.sucursal_id)
+    return {
+        "id": fila.id,
+        "operacion_id": fila.operacion_id,
+        "usuario_id": fila.usuario_id,
+        "cajera": cajera.nombre if cajera else "",
+        "usuario": cajera.usuario if cajera else "",
+        "sucursal_id": fila.sucursal_id,
+        "sucursal": suc.nombre if suc else "",
+        "cerrado_en": fila.cerrado_en.isoformat(sep=" ") if fila.cerrado_en else None,
+        "cerrado_por": fila.cerrado_por,
+        "administrador": admin.nombre if admin else "",
+        "ventas_ciclo": str(D(fila.ventas_ciclo)),
+        "premios_ciclo": str(D(fila.premios_ciclo)),
+        "comision_generada": str(D(fila.comision_generada)),
+        "comision_pagada": str(D(fila.comision_pagada_ciclo)),
+        "comision_pagada_en_cierre": str(D(fila.comision_pagada_en_cierre)),
+        "fondo_asignado": str(D(fila.fondo_asignado)),
+        "entregas_ciclo": str(D(fila.entregas_ciclo)),
+        "recaudacion_ciclo": str(D(fila.recaudacion_ciclo)),
+        "mi_caja_al_cerrar": str(D(fila.mi_caja_al_cerrar)),
+        "tickets_vendidos": int(fila.tickets_vendidos or 0),
+        "tickets_anulados": int(fila.tickets_anulados or 0),
+        "tickets_vigentes": int(fila.tickets_vigentes or 0),
+        "pago_comision_id": fila.pago_comision_id,
+        "porcentaje_vigente": _pct_texto(fila.porcentaje_vigente),
+        "es_prueba": bool(fila.es_prueba),
+        "descuenta_mi_caja": False,
+        "descuenta_caja_general": False,
+    }
+
+
+def metricas_ciclo_perfil(db, cajera, prueba=False):
+    """Ventas/premios/tickets del ciclo abierto (independiente de DESDE/HASTA)."""
+    cero = {
+        "ventas_ciclo": "0.00",
+        "ventas_netas": "0.00",
+        "premios_pagados": "0.00",
+        "premios_ciclo": "0.00",
+        "ventas_brutas": "0.00",
+        "anulaciones": "0.00",
+        "recaudacion": "0.00",
+        "tickets_vendidos": 0,
+        "tickets_anulados": 0,
+        "tickets_vigentes": 0,
+        "ciclo_desde": None,
+    }
+    if cajera is None:
+        return cero
+    inicio = _inicio_ciclo_perfil(db, cajera, prueba)
+    q = db.query(Ticket).filter(Ticket.usuario_id == cajera.id, Ticket.es_prueba.is_(bool(prueba)))
+    if inicio is not None:
+        q = q.filter(
+            or_(
+                Ticket.vendido_en > inicio,
+                and_(Ticket.vendido_en.is_(None), Ticket.fecha > inicio.date()),
+            )
+        )
+    tickets = q.all()
+    brutas = sum((D(t.total) for t in tickets), D(0))
+    anulados = [t for t in tickets if t.estado == "anulado"]
+    anulaciones = sum((D(t.total) for t in anulados), D(0))
+    vigentes = [t for t in tickets if t.estado != "anulado"]
+    netas = sum((D(t.total) for t in vigentes), D(0))
+    # Premios pagados por esta cajera dentro del ciclo.
+    qp = (
+        db.query(Jugada)
+        .join(Ticket, Jugada.ticket_id == Ticket.id)
+        .filter(
+            Ticket.es_prueba.is_(bool(prueba)),
+            Jugada.pagada.is_(True),
+            Jugada.pagado_por_usuario_id == cajera.id,
+        )
+    )
+    if inicio is not None:
+        qp = qp.filter(Jugada.pagado_en > inicio)
+    premios = sum((D(j.premio or 0) for j in qp.all()), D(0))
+    return {
+        "ventas_ciclo": str(D(netas)),
+        "ventas_netas": str(D(netas)),
+        "premios_pagados": str(D(premios)),
+        "premios_ciclo": str(D(premios)),
+        "ventas_brutas": str(D(brutas)),
+        "anulaciones": str(D(anulaciones)),
+        "recaudacion": str(D(netas - premios)),
+        "tickets_vendidos": len(tickets),
+        "tickets_anulados": len(anulados),
+        "tickets_vigentes": len(vigentes),
+        "ciclo_desde": inicio.isoformat(sep=" ") if inicio else None,
+    }
+
+
+def saldo_comision_cajera(db, cajera, prueba=False):
+    """Comisión del ciclo abierto − pagos del ciclo. No toca cajas."""
+    if cajera is None or not cajera.sucursal_id:
+        return {
+            "porcentaje_vigente": "0",
+            "comision_acumulada": "0.00",
+            "comision_pagada": "0.00",
+            "comision_pendiente": "0.00",
+            "pagado_en_exceso": "0.00",
+            "ventas_validas": "0.00",
+            "tickets_vendidos": 0,
+            "tickets_anulados": 0,
+            "desglose": [],
+            "ciclo_desde": None,
+            "descuenta_mi_caja": False,
+            "descuenta_caja_general": False,
+        }
+    inicio = _inicio_ciclo_perfil(db, cajera, bool(prueba))
+    calculo = _comision_tickets(
+        db, None, None, cajera.sucursal_id, cajera.id, bool(prueba), desde_momento=inicio,
+    )
+    acumulada = D(calculo["comision"])
+    pagada = _total_pagos_comision(db, cajera.id, bool(prueba), desde_momento=inicio)
+    crudo = D(acumulada - pagada)
+    pendiente = D(max(D(0), crudo))
+    exceso = D(max(D(0), D(-crudo)))
+    return {
+        "porcentaje_vigente": _pct_texto(_porcentaje_vigente(db, cajera.id, ahora_local())),
+        "comision_acumulada": str(acumulada),
+        "comision_pagada": str(pagada),
+        "comision_pendiente": str(pendiente),
+        "pagado_en_exceso": str(exceso),
+        "ventas_validas": calculo["ventas_validas"],
+        "tickets_vendidos": calculo["tickets_vendidos"],
+        "tickets_anulados": calculo["tickets_anulados"],
+        "desglose": calculo["desglose"],
+        "ciclo_desde": inicio.isoformat(sep=" ") if inicio else None,
+        "descuenta_mi_caja": False,
+        "descuenta_caja_general": False,
+    }
+
+
+def listar_pagos_comision(db, sucursal_id=None, usuario_id=None, es_prueba=None):
+    q = db.query(PagoComision)
+    if sucursal_id is not None:
+        q = q.filter(PagoComision.sucursal_id == sucursal_id)
+    if usuario_id is not None:
+        q = q.filter(PagoComision.usuario_id == usuario_id)
+    if es_prueba is not None:
+        q = q.filter(PagoComision.es_prueba.is_(bool(es_prueba)))
+    return [pago_comision_a_dict(db, fila) for fila in q.order_by(PagoComision.id.desc()).all()]
+
+
+def listar_cierres_ciclo(db, sucursal_id=None, usuario_id=None, es_prueba=None):
+    q = db.query(CierreCicloCajera)
+    if sucursal_id is not None:
+        q = q.filter(CierreCicloCajera.sucursal_id == sucursal_id)
+    if usuario_id is not None:
+        q = q.filter(CierreCicloCajera.usuario_id == usuario_id)
+    if es_prueba is not None:
+        q = q.filter(CierreCicloCajera.es_prueba.is_(bool(es_prueba)))
+    return [cierre_ciclo_a_dict(db, fila) for fila in q.order_by(CierreCicloCajera.id.desc()).all()]
+
+
+def _condiciones_cierre_ciclo(db, cajera, prueba=False):
+    caja = indicadores_caja(db, cajera)
+    mi_caja = D(caja["mi_caja"])
+    premios_pend = D(caja.get("premios_pendientes_mios") or 0)
+    saldo = saldo_comision_cajera(db, cajera, prueba=bool(prueba))
+    pendiente = D(saldo["comision_pendiente"])
+    pct = D(saldo["porcentaje_vigente"] or 0)
+    bloqueos = []
+    if mi_caja != 0:
+        bloqueos.append(
+            f"MI CAJA tiene {mi_caja}. Concíliela con entregas/fondos antes de cerrar el ciclo."
+        )
+    if premios_pend > 0:
+        bloqueos.append(
+            f"Hay premios pendientes por pagar ({premios_pend}). Resuélvalos antes del cierre."
+        )
+    return {
+        "puede_cerrar": len(bloqueos) == 0,
+        "bloqueos": bloqueos,
+        "mi_caja": str(mi_caja),
+        "premios_pendientes": str(premios_pend),
+        "comision_pendiente": str(pendiente),
+        "porcentaje_vigente": saldo["porcentaje_vigente"],
+        "requiere_pago": pendiente > 0,
+        "permite_cierre_sin_comision": pendiente == 0,
+        "caja": caja,
+        "saldo": saldo,
+    }
+
+
+def registrar_pago_comision(db, admin, usuario_id, monto, operacion_id):
+    """Pago parcial/total del ciclo abierto. No cierra el ciclo ni mueve cajas."""
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
+        raise ErrorServicio(403, "Solo un administrador puede pagar comisiones")
+    if not operacion_id or not str(operacion_id).strip():
+        raise ErrorServicio(400, "El pago necesita un identificador de operación")
+    op = str(operacion_id).strip()[:40]
+    previa_op = db.query(PagoComision).filter_by(operacion_id=op).first()
+    if previa_op is not None:
+        if previa_op.usuario_id != int(usuario_id):
+            raise ErrorServicio(409, "Esa operación ya registró otro pago")
+        return pago_comision_a_dict(db, previa_op)
+
+    cajera = (
+        db.query(Usuario)
+        .filter(Usuario.id == int(usuario_id))
+        .with_for_update()
+        .first()
+    )
+    if cajera is None or cajera.rol != "operador" or not cajera.activo or not cajera.sucursal_id:
+        raise ErrorServicio(400, "Seleccione una cajera activa")
+    perm.assert_usuario_en_alcance(db, admin, cajera)
+
+    importe = D(monto)
+    if importe <= 0:
+        raise ErrorServicio(400, "El monto a pagar debe ser mayor que cero")
+
+    usar_prueba = bool(modo_desarrollo())
+    inicio = _inicio_ciclo_perfil(db, cajera, usar_prueba)
+    calculo = _comision_tickets(
+        db, None, None, cajera.sucursal_id, cajera.id, usar_prueba, desde_momento=inicio,
+    )
+    acumulada = D(calculo["comision"])
+    pagada = _total_pagos_comision(db, cajera.id, usar_prueba, desde_momento=inicio)
+    pendiente = D(max(D(0), D(acumulada - pagada)))
+    if importe > pendiente:
+        raise ErrorServicio(400, f"El pago no puede superar la comisión pendiente ({pendiente})")
+
+    sucursal = db.get(Sucursal, cajera.sucursal_id)
+    general_antes = D(sucursal.saldo_actual) if sucursal is not None else D(0)
+    caja_antes = D(cajera.saldo_caja or 0)
+    caja_prueba_antes = D(cajera.saldo_caja_prueba or 0)
+
+    fila = PagoComision(
+        operacion_id=op,
+        usuario_id=cajera.id,
+        sucursal_id=cajera.sucursal_id,
+        monto=importe,
+        comision_acumulada=acumulada,
+        comision_pagada_antes=pagada,
+        saldo_pendiente_antes=pendiente,
+        saldo_pendiente_despues=D(pendiente - importe),
+        es_prueba=usar_prueba,
+        pagado_por=admin.id,
+        creado_en=ahora_local(),
+    )
+    db.add(fila)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        previa = db.query(PagoComision).filter_by(operacion_id=op).first()
+        if previa is not None and previa.usuario_id == cajera.id:
+            return pago_comision_a_dict(db, previa)
+        raise ErrorServicio(409, "Ese pago ya fue registrado")
+
+    if _total_pagos_comision(db, cajera.id, usar_prueba, desde_momento=inicio) > acumulada:
+        db.rollback()
+        raise ErrorServicio(409, "Otro pago concurrente consumió el saldo pendiente")
+
+    if sucursal is not None and D(sucursal.saldo_actual) != general_antes:
+        db.rollback()
+        raise ErrorServicio(500, "Pagar la comisión no puede cambiar la caja general")
+    if D(cajera.saldo_caja or 0) != caja_antes or D(cajera.saldo_caja_prueba or 0) != caja_prueba_antes:
+        db.rollback()
+        raise ErrorServicio(500, "Pagar la comisión no puede cambiar MI CAJA")
+
+    auditar(
+        db, "pago_comision", fila.id, "comision_pago", usuario_id=admin.id,
+        detalle={
+            "cajera_id": cajera.id,
+            "monto": str(importe),
+            "pendiente_antes": str(pendiente),
+            "pendiente_despues": str(D(pendiente - importe)),
+            "operacion_id": op,
+            "cierra_ciclo": False,
+        },
+    )
+    db.commit()
+    db.refresh(fila)
+    return pago_comision_a_dict(db, fila)
+
+
+def cerrar_ciclo_cajera(db, admin, usuario_id, operacion_id, monto=None):
+    """Paga el pendiente (si hay) y cierra el ciclo. Exige MI CAJA conciliada (=0)."""
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
+        raise ErrorServicio(403, "Solo un administrador puede cerrar el ciclo de una cajera")
+    if not operacion_id or not str(operacion_id).strip():
+        raise ErrorServicio(400, "El cierre necesita un identificador de operación")
+    op = str(operacion_id).strip()[:40]
+    previa = db.query(CierreCicloCajera).filter_by(operacion_id=op).first()
+    if previa is not None:
+        if previa.usuario_id != int(usuario_id):
+            raise ErrorServicio(409, "Esa operación ya cerró el ciclo de otra cajera")
+        return {
+            "cierre": cierre_ciclo_a_dict(db, previa),
+            "pago": None if not previa.pago_comision_id else pago_comision_a_dict(
+                db, db.get(PagoComision, previa.pago_comision_id)
+            ),
+            "ciclo_nuevo": metricas_ciclo_perfil(db, db.get(Usuario, previa.usuario_id), previa.es_prueba),
+        }
+
+    cajera = (
+        db.query(Usuario)
+        .filter(Usuario.id == int(usuario_id))
+        .with_for_update()
+        .first()
+    )
+    if cajera is None or cajera.rol != "operador" or not cajera.activo or not cajera.sucursal_id:
+        raise ErrorServicio(400, "Seleccione una cajera activa")
+    perm.assert_usuario_en_alcance(db, admin, cajera)
+
+    usar_prueba = bool(modo_desarrollo())
+    cond = _condiciones_cierre_ciclo(db, cajera, prueba=usar_prueba)
+    if not cond["puede_cerrar"]:
+        raise ErrorServicio(409, " · ".join(cond["bloqueos"]))
+
+    pendiente = D(cond["comision_pendiente"])
+    if pendiente > 0:
+        importe = D(pendiente if monto is None else monto)
+        if importe != pendiente:
+            raise ErrorServicio(
+                400,
+                f"Para cerrar el ciclo debe pagar el pendiente completo ({pendiente}). "
+                "Use pago parcial sin cierre si no va a liquidar todo.",
+            )
+    else:
+        importe = D(0)
+        if monto is not None and D(monto) > 0:
+            raise ErrorServicio(400, "No hay comisión pendiente; el cierre no admite un pago adicional")
+
+    sucursal = db.get(Sucursal, cajera.sucursal_id)
+    general_antes = D(sucursal.saldo_actual) if sucursal is not None else D(0)
+    caja_antes = D(cajera.saldo_caja or 0)
+    caja_prueba_antes = D(cajera.saldo_caja_prueba or 0)
+    if (usar_prueba and caja_prueba_antes != 0) or ((not usar_prueba) and caja_antes != 0):
+        raise ErrorServicio(409, "MI CAJA no está conciliada. No se puede cerrar el ciclo.")
+
+    metricas = metricas_ciclo_perfil(db, cajera, prueba=usar_prueba)
+    saldo = saldo_comision_cajera(db, cajera, prueba=usar_prueba)
+    caja = cond["caja"]
+    ahora = ahora_local()
+    pago_fila = None
+
+    if importe > 0:
+        pago_op = (op + "-pago")[:40]
+        previa_pago = db.query(PagoComision).filter_by(operacion_id=pago_op).first()
+        if previa_pago is not None:
+            pago_fila = previa_pago
+        else:
+            pago_fila = PagoComision(
+                operacion_id=pago_op,
+                usuario_id=cajera.id,
+                sucursal_id=cajera.sucursal_id,
+                monto=importe,
+                comision_acumulada=D(saldo["comision_acumulada"]),
+                comision_pagada_antes=D(saldo["comision_pagada"]),
+                saldo_pendiente_antes=pendiente,
+                saldo_pendiente_despues=D(0),
+                es_prueba=usar_prueba,
+                pagado_por=admin.id,
+                creado_en=ahora,
+            )
+            db.add(pago_fila)
+            db.flush()
+
+    # Marca de caja del ciclo: último movimiento (MI CAJA ya es 0).
+    ultimo_mov = (
+        db.query(MovimientoCajera)
+        .filter(MovimientoCajera.usuario_id == cajera.id)
+        .order_by(MovimientoCajera.id.desc())
+        .first()
+    )
+    marca_id = ultimo_mov.id if ultimo_mov is not None else None
+
+    cierre = CierreCicloCajera(
+        operacion_id=op,
+        usuario_id=cajera.id,
+        sucursal_id=cajera.sucursal_id,
+        cerrado_en=ahora,
+        cerrado_por=admin.id,
+        ventas_ciclo=D(metricas["ventas_ciclo"]),
+        premios_ciclo=D(metricas["premios_ciclo"]),
+        comision_generada=D(saldo["comision_acumulada"]),
+        comision_pagada_ciclo=D(saldo["comision_pagada"]) + importe,
+        comision_pagada_en_cierre=importe,
+        fondo_asignado=D(caja["fondo_asignado"]),
+        entregas_ciclo=D(caja["entregas_ciclo"]),
+        recaudacion_ciclo=D(caja["recaudacion_ciclo"]),
+        mi_caja_al_cerrar=D(0),
+        tickets_vendidos=int(metricas["tickets_vendidos"]),
+        tickets_anulados=int(metricas["tickets_anulados"]),
+        tickets_vigentes=int(metricas["tickets_vigentes"]),
+        pago_comision_id=pago_fila.id if pago_fila is not None else None,
+        marca_movimiento_id=marca_id,
+        porcentaje_vigente=D(saldo["porcentaje_vigente"] or 0),
+        es_prueba=usar_prueba,
+        detalle=json.dumps({
+            "bloqueos": [],
+            "ciclo_desde": saldo.get("ciclo_desde"),
+            "desglose_comision": saldo.get("desglose") or [],
+        }, ensure_ascii=False),
+        creado_en=ahora,
+    )
+    db.add(cierre)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        previa = db.query(CierreCicloCajera).filter_by(operacion_id=op).first()
+        if previa is not None and previa.usuario_id == cajera.id:
+            return {
+                "cierre": cierre_ciclo_a_dict(db, previa),
+                "pago": None,
+                "ciclo_nuevo": metricas_ciclo_perfil(db, db.get(Usuario, previa.usuario_id), previa.es_prueba),
+            }
+        raise ErrorServicio(409, "Ese cierre ya fue registrado")
+
+    if usar_prueba:
+        cajera.ciclo_perfil_prueba_cierre_id = cierre.id
+        if marca_id is not None:
+            cajera.ciclo_caja_prueba_movimiento_id = marca_id
+    else:
+        cajera.ciclo_perfil_cierre_id = cierre.id
+        if marca_id is not None:
+            cajera.ciclo_caja_movimiento_id = marca_id
+
+    if sucursal is not None and D(sucursal.saldo_actual) != general_antes:
+        db.rollback()
+        raise ErrorServicio(500, "Cerrar el ciclo no puede cambiar la caja general")
+    if D(cajera.saldo_caja or 0) != caja_antes or D(cajera.saldo_caja_prueba or 0) != caja_prueba_antes:
+        db.rollback()
+        raise ErrorServicio(500, "Cerrar el ciclo no puede cambiar MI CAJA")
+
+    auditar(
+        db, "cierre_ciclo", cierre.id, "ciclo_cajera_cerrado", usuario_id=admin.id,
+        detalle={
+            "cajera_id": cajera.id,
+            "operacion_id": op,
+            "ventas_ciclo": str(D(metricas["ventas_ciclo"])),
+            "comision_pagada_en_cierre": str(importe),
+            "mi_caja": "0.00",
+        },
+    )
+    db.commit()
+    db.refresh(cierre)
+    db.refresh(cajera)
+    return {
+        "cierre": cierre_ciclo_a_dict(db, cierre),
+        "pago": pago_comision_a_dict(db, pago_fila) if pago_fila is not None else None,
+        "ciclo_nuevo": metricas_ciclo_perfil(db, cajera, usar_prueba),
+        "comision_nueva": saldo_comision_cajera(db, cajera, prueba=usar_prueba),
+        "descuenta_mi_caja": False,
+        "descuenta_caja_general": False,
+    }
+
+
+def auditar_ventas_sin_porcentaje_comision(db, sucursal_id=None, usuario_id=None, limite=500):
+    """Lista ventas válidas sin fila de % vigente al momento de la venta. Sin ajustes."""
+    q = db.query(Ticket).filter(Ticket.estado != "anulado")
+    if sucursal_id is not None:
+        q = q.filter(Ticket.sucursal_vendedora_id == sucursal_id)
+    if usuario_id is not None:
+        q = q.filter(Ticket.usuario_id == usuario_id)
+    filas = []
+    for ticket in q.order_by(Ticket.id.desc()).limit(int(limite) * 5).all():
+        momento = ticket.vendido_en or datetime.combine(ticket.fecha, datetime.min.time())
+        if _tiene_porcentaje_registrado(db, ticket.usuario_id, momento):
+            continue
+        cajera = db.get(Usuario, ticket.usuario_id)
+        filas.append({
+            "ticket_id": ticket.id,
+            "serial": ticket.serial,
+            "usuario_id": ticket.usuario_id,
+            "cajera": cajera.nombre if cajera else "",
+            "usuario": cajera.usuario if cajera else "",
+            "sucursal_id": ticket.sucursal_vendedora_id,
+            "total": str(D(ticket.total)),
+            "vendido_en": momento.isoformat(sep=" "),
+            "estado": ticket.estado,
+            "es_prueba": bool(ticket.es_prueba),
+        })
+        if len(filas) >= int(limite):
+            break
+    return {
+        "total": len(filas),
+        "limite": int(limite),
+        "ajuste_automatico": False,
+        "nota": "Ventas sin porcentaje registrado al momento de la venta. No se aplicó el % actual.",
+        "tickets": filas,
+    }
 
 
 def resumen_comisiones(db, desde, hasta, sucursal_id=None, usuario_id=None):
@@ -5011,6 +5588,7 @@ def resumen_ventas_cajeros(db, admin, desde, hasta, sucursal_id=None, usuario_id
         else:
             periodo = _periodo_ventas_cajero(db, cajero, desde, hasta, prueba)
         caja = indicadores_caja(db, cajero)
+        ciclo = metricas_ciclo_perfil(db, cajero, prueba=prueba)
         suc = db.get(Sucursal, cajero.sucursal_id) if cajero.sucursal_id else None
         filas.append({
             "usuario_id": cajero.id,
@@ -5022,6 +5600,14 @@ def resumen_ventas_cajeros(db, admin, desde, hasta, sucursal_id=None, usuario_id
             "activo": bool(cajero.activo),
             "eliminado": bool(getattr(cajero, "eliminado", False)),
             **periodo,
+            # Acumulado del ciclo abierto (no depende del filtro DESDE/HASTA).
+            "ventas_ciclo": ciclo["ventas_ciclo"],
+            "ventas_netas": ciclo["ventas_ciclo"],
+            "premios_pagados": ciclo["premios_ciclo"],
+            "tickets_vendidos": ciclo["tickets_vendidos"],
+            "tickets_anulados": ciclo["tickets_anulados"],
+            "tickets_vigentes": ciclo["tickets_vigentes"],
+            "ciclo_desde": ciclo["ciclo_desde"],
             "fondo_asignado": caja["fondo_asignado"],
             "entregas": caja["entregas_ciclo"],
             "mi_caja": caja["mi_caja"],
@@ -5054,9 +5640,9 @@ def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
     prueba = modo_desarrollo()
     resumen = resumen_ventas_cajeros(db, admin, desde, hasta, None, usuario_id)
     fila = next((f for f in resumen["cajeros"] if f["usuario_id"] == usuario_id), None)
+    ciclo = metricas_ciclo_perfil(db, cajero, prueba=prueba)
+    caja = indicadores_caja(db, cajero)
     if fila is None:
-        # Cajero eliminado sin movimiento en el rango: igual devolver estructura.
-        caja = indicadores_caja(db, cajero)
         suc = db.get(Sucursal, cajero.sucursal_id) if cajero.sucursal_id else None
         periodo = _periodo_ventas_cajero(db, cajero, desde, hasta, prueba)
         fila = {
@@ -5067,44 +5653,49 @@ def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
             "mi_caja": caja["mi_caja"], "recaudacion_ciclo": caja["recaudacion_ciclo"],
             "ultima_operacion": _ultima_operacion_cajero(db, cajero.id), "es_prueba": prueba,
         }
-    tickets = (
-        db.query(Ticket)
-        .filter(
-            Ticket.usuario_id == cajero.id,
-            Ticket.fecha >= desde, Ticket.fecha <= hasta,
-            Ticket.es_prueba.is_(prueba),
-        )
-        .order_by(Ticket.id.desc())
-        .limit(200)
-        .all()
+    # Perfil: cifras principales del ciclo abierto (no del filtro de fechas).
+    fila = dict(fila)
+    fila["ventas_ciclo"] = ciclo["ventas_ciclo"]
+    fila["ventas_netas"] = ciclo["ventas_ciclo"]
+    fila["premios_pagados"] = ciclo["premios_ciclo"]
+    fila["tickets_vendidos"] = ciclo["tickets_vendidos"]
+    fila["tickets_anulados"] = ciclo["tickets_anulados"]
+    fila["tickets_vigentes"] = ciclo["tickets_vigentes"]
+    fila["ciclo_desde"] = ciclo["ciclo_desde"]
+    fila["fondo_asignado"] = caja["fondo_asignado"]
+    fila["entregas"] = caja["entregas_ciclo"]
+    fila["mi_caja"] = caja["mi_caja"]
+    fila["recaudacion_ciclo"] = caja["recaudacion_ciclo"]
+
+    inicio_ciclo = _inicio_ciclo_perfil(db, cajero, prueba)
+    q_tickets = db.query(Ticket).filter(
+        Ticket.usuario_id == cajero.id, Ticket.es_prueba.is_(prueba),
     )
-    inicio = datetime.combine(desde, time.min)
-    fin = datetime.combine(hasta, time.min) + timedelta(days=1)
-    pagos = (
+    if inicio_ciclo is not None:
+        q_tickets = q_tickets.filter(
+            or_(
+                Ticket.vendido_en > inicio_ciclo,
+                and_(Ticket.vendido_en.is_(None), Ticket.fecha > inicio_ciclo.date()),
+            )
+        )
+    tickets = q_tickets.order_by(Ticket.id.desc()).limit(200).all()
+    q_pagos = (
         db.query(Jugada)
         .join(Ticket, Jugada.ticket_id == Ticket.id)
         .filter(
             Ticket.es_prueba.is_(prueba),
             Jugada.pagada.is_(True),
             Jugada.pagado_por_usuario_id == cajero.id,
-            Jugada.pagado_en >= inicio,
-            Jugada.pagado_en < fin,
         )
-        .order_by(Jugada.pagado_en.desc())
-        .limit(200)
-        .all()
     )
-    movs = (
-        db.query(MovimientoCajera)
-        .filter(
-            MovimientoCajera.usuario_id == cajero.id,
-            MovimientoCajera.creado_en >= inicio,
-            MovimientoCajera.creado_en < fin,
-        )
-        .order_by(MovimientoCajera.id.desc())
-        .limit(300)
-        .all()
-    )
+    if inicio_ciclo is not None:
+        q_pagos = q_pagos.filter(Jugada.pagado_en > inicio_ciclo)
+    pagos = q_pagos.order_by(Jugada.pagado_en.desc()).limit(200).all()
+    q_movs = db.query(MovimientoCajera).filter(MovimientoCajera.usuario_id == cajero.id)
+    marca = cajero.ciclo_caja_prueba_movimiento_id if prueba else cajero.ciclo_caja_movimiento_id
+    if marca:
+        q_movs = q_movs.filter(MovimientoCajera.id > marca)
+    movs = q_movs.order_by(MovimientoCajera.id.desc()).limit(300).all()
     fondos = (
         db.query(FondoAsignado)
         .filter(FondoAsignado.usuario_id == cajero.id)
@@ -5142,25 +5733,33 @@ def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
         "creado_en": m.creado_en.isoformat(sep=" ") if m.creado_en else None,
         "saldo_resultante": str(D(m.saldo_resultante)) if m.saldo_resultante is not None else None,
     } for m in movs]
-    # Comisión informativa del período: mismo motor que /comisiones/resumen.
-    # No toca MI CAJA, Banco General ni liquidaciones.
-    if cajero.sucursal_id:
-        calculo = comision_periodo(db, desde, hasta, cajero.sucursal_id, cajero.id)
-        bloque = calculo["prueba"] if prueba and calculo.get("prueba") else calculo["real"]
-    else:
-        bloque = {
-            "ventas_validas": "0.00", "tickets_vendidos": 0, "tickets_anulados": 0,
-            "premios_pagados": "0.00", "porcentaje": None, "comision": "0.00",
-            "desglose": [], "descuenta_mi_caja": False, "descuenta_caja_general": False,
-        }
+    saldo = saldo_comision_cajera(db, cajero, prueba=bool(prueba))
+    cond_cierre = _condiciones_cierre_ciclo(db, cajero, prueba=bool(prueba))
+    historial_pagos_comision = listar_pagos_comision(
+        db, sucursal_id=cajero.sucursal_id, usuario_id=cajero.id, es_prueba=bool(prueba),
+    )
+    historial_cierres = listar_cierres_ciclo(
+        db, sucursal_id=cajero.sucursal_id, usuario_id=cajero.id, es_prueba=bool(prueba),
+    )
     comision = {
-        "porcentaje_vigente": _pct_texto(_porcentaje_vigente(db, cajero.id, ahora_local())),
-        "porcentaje_periodo": bloque.get("porcentaje"),
-        "comision": str(D(bloque.get("comision") or 0)),
-        "ventas_validas": str(D(bloque.get("ventas_validas") or 0)),
-        "tickets_vendidos": int(bloque.get("tickets_vendidos") or 0),
-        "tickets_anulados": int(bloque.get("tickets_anulados") or 0),
-        "desglose": bloque.get("desglose") or [],
+        "porcentaje_vigente": saldo["porcentaje_vigente"],
+        "porcentaje_periodo": None,
+        "comision": saldo["comision_acumulada"],
+        "comision_periodo": saldo["comision_acumulada"],
+        "comision_acumulada": saldo["comision_acumulada"],
+        "comision_pagada": saldo["comision_pagada"],
+        "comision_pendiente": saldo["comision_pendiente"],
+        "pagado_en_exceso": saldo["pagado_en_exceso"],
+        "ventas_validas": saldo["ventas_validas"],
+        "tickets_vendidos": int(saldo["tickets_vendidos"] or 0),
+        "tickets_anulados": int(saldo["tickets_anulados"] or 0),
+        "desglose": saldo.get("desglose") or [],
+        "ciclo_desde": saldo.get("ciclo_desde"),
+        "historial_pagos": historial_pagos_comision,
+        "historial_cierres": historial_cierres,
+        "puede_cerrar_ciclo": cond_cierre["puede_cerrar"],
+        "bloqueos_cierre": cond_cierre["bloqueos"],
+        "requiere_pago_para_cerrar": cond_cierre["requiere_pago"],
         "descuenta_mi_caja": False,
         "descuenta_caja_general": False,
         "informativa": True,

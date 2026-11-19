@@ -68,6 +68,9 @@ class Usuario(Base):
     saldo_caja_prueba = Column(DINERO, nullable=False, default=0)
     ciclo_caja_movimiento_id = Column(Integer)
     ciclo_caja_prueba_movimiento_id = Column(Integer)
+    # Último cierre de perfil/comisión (ventas del ciclo). No borra historial.
+    ciclo_perfil_cierre_id = Column(Integer)
+    ciclo_perfil_prueba_cierre_id = Column(Integer)
     creado_en = Column(DateTime, nullable=False, default=ahora_local)
 
     sucursal = relationship("Sucursal", foreign_keys=[sucursal_id])
@@ -538,4 +541,60 @@ class LiquidacionComision(Base):
     detalle = Column(Text, nullable=False, default="")
     pagada_en = Column(DateTime)
     pagada_por = Column(Integer, ForeignKey("usuarios.id"))
+    creado_en = Column(DateTime, nullable=False, default=ahora_local)
+
+
+class PagoComision(Base):
+    """Pago (total o parcial) de comisión pendiente. No mueve MI CAJA ni Banco General.
+
+    La comisión ganada se calcula desde tickets válidos del ciclo abierto; este
+    historial solo registra desembolsos. Nunca se borran filas.
+    """
+
+    __tablename__ = "pagos_comision"
+    id = Column(Integer, primary_key=True)
+    operacion_id = Column(String(40), nullable=False, unique=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    sucursal_id = Column(Integer, ForeignKey("sucursales.id"), nullable=False, index=True)
+    monto = Column(DINERO, nullable=False)
+    comision_acumulada = Column(DINERO, nullable=False)
+    comision_pagada_antes = Column(DINERO, nullable=False)
+    saldo_pendiente_antes = Column(DINERO, nullable=False)
+    saldo_pendiente_despues = Column(DINERO, nullable=False)
+    es_prueba = Column(Boolean, nullable=False, default=False)
+    pagado_por = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    creado_en = Column(DateTime, nullable=False, default=ahora_local, index=True)
+
+
+class CierreCicloCajera(Base):
+    """Corte administrativo del ciclo de perfil/comisión de una cajera.
+
+    No borra tickets ni movimientos. No inventa ni elimina saldos de MI CAJA:
+    exige caja conciliada (MI CAJA = 0) antes de cerrar.
+    """
+
+    __tablename__ = "cierres_ciclo_cajera"
+    id = Column(Integer, primary_key=True)
+    operacion_id = Column(String(40), nullable=False, unique=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    sucursal_id = Column(Integer, ForeignKey("sucursales.id"), nullable=False, index=True)
+    cerrado_en = Column(DateTime, nullable=False, default=ahora_local, index=True)
+    cerrado_por = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    ventas_ciclo = Column(DINERO, nullable=False, default=0)
+    premios_ciclo = Column(DINERO, nullable=False, default=0)
+    comision_generada = Column(DINERO, nullable=False, default=0)
+    comision_pagada_ciclo = Column(DINERO, nullable=False, default=0)
+    comision_pagada_en_cierre = Column(DINERO, nullable=False, default=0)
+    fondo_asignado = Column(DINERO, nullable=False, default=0)
+    entregas_ciclo = Column(DINERO, nullable=False, default=0)
+    recaudacion_ciclo = Column(DINERO, nullable=False, default=0)
+    mi_caja_al_cerrar = Column(DINERO, nullable=False, default=0)
+    tickets_vendidos = Column(Integer, nullable=False, default=0)
+    tickets_anulados = Column(Integer, nullable=False, default=0)
+    tickets_vigentes = Column(Integer, nullable=False, default=0)
+    pago_comision_id = Column(Integer)
+    marca_movimiento_id = Column(Integer)
+    porcentaje_vigente = Column(Numeric(6, 2), nullable=False, default=0)
+    es_prueba = Column(Boolean, nullable=False, default=False)
+    detalle = Column(Text, nullable=False, default="")
     creado_en = Column(DateTime, nullable=False, default=ahora_local)

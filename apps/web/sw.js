@@ -1,12 +1,12 @@
 /* Service worker del Panel. Solo cachea la cáscara estática.
    Nunca guarda tokens, tickets, saldos ni respuestas de la API. */
-const CACHE = "banca-admin-shell-v6-perfil-comision";
+const CACHE = "banca-admin-shell-v8-perfil-ciclo";
 const SHELL = [
   "/",
   "/static/style.css",
-  "/static/style.css?v=perfil-comision-1",
+  "/static/style.css?v=perfil-ciclo-1",
   "/static/app.js",
-  "/static/app.js?v=perfil-comision-1",
+  "/static/app.js?v=perfil-ciclo-1",
   "/static/icons/icon-192.png",
   "/static/icons/icon-512.png",
   "/manifest.webmanifest",

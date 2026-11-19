@@ -1,0 +1,13 @@
+{
+  "hora": "2026-11-19T17:54:03",
+  "health_ok_before": true,
+  "pagos_comision": true,
+  "cierres_ciclo_cajera": true,
+  "ciclo_perfil_cierre_id": true,
+  "ciclo_perfil_prueba_cierre_id": true,
+  "pagos_count": 0,
+  "cierres_count": 0,
+  "tickets_count": 147,
+  "siguiente_ticket": 184,
+  "suma_saldo": "0.00"
+}

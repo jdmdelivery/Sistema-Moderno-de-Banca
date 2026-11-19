@@ -1,0 +1,14 @@
+{
+  "fecha": "2026-11-19",
+  "rollback_commit": "8778096eb2d6090f4d46b7bea867cb6560773c18",
+  "servicio": "srv-dbsfbem7bikc73feg280",
+  "backup": "banca_moderna_pre_publish_comision_ciclo_20261119-175152.dump",
+  "backup_verify": "backup_verify_comision_ciclo_criticas_20261119.json",
+  "accion": "Redeploy commit 8778096 en Render SIN restaurar PostgreSQL.",
+  "proteger_datos_nuevos": [
+    "NO ejecutar DROP TABLE pagos_comision",
+    "NO ejecutar DROP TABLE cierres_ciclo_cajera",
+    "NO eliminar columnas ciclo_perfil_* de usuarios"
+  ],
+  "nota": "Las tablas/columnas nuevas son aditivas. Un rollback de código deja de usarlas pero conserva historial."
+}

@@ -89,14 +89,22 @@ def test_panel_tiene_seccion_ventas_cajeros(entorno):
     assert "vc-card" in js
     assert "vc-hist" in js
     assert "COMISIÓN GANADA" in js
+    assert "COMISIÓN PENDIENTE" in js
+    assert "PAGAR COMISIÓN" in js
+    assert "PAGAR COMISIÓN Y CERRAR CICLO" in js
+    assert "pagarComisionCajeraPerfil" in js
+    assert "cerrarCicloCajeraPerfil" in js
+    assert "/comisiones/pagos" in js
+    assert "/comisiones/cierres" in js
     assert "vc-comision-card" in js
     assert "porcentaje_vigente" in js
-    assert "Ventas netas" in js
-    assert "Premios pagados" in js
+    assert "Ventas del ciclo" in js
+    assert "Premios del ciclo" in js
     assert "MI CAJA" in js
-    # Perfil simplificado: brutas/anulaciones siguen en API, no en tarjetas del detalle.
+    # Perfil simplificado: brutas/anulaciones/recaudación siguen en API, no en tarjetas.
     assert "Ventas brutas" not in js
     assert ">Anulaciones<" not in js and "Anulaciones</span>" not in js
+    assert "Recaudación del período" not in js
     css = entorno.c.get("/static/style.css").text
     assert ".vc-card" in css
     assert ".vc-lista" in css
@@ -105,6 +113,7 @@ def test_panel_tiene_seccion_ventas_cajeros(entorno):
     assert ".vc-hist" in css
     assert ".vc-comision-card" in css
     assert ".vc-comision-grid" in css
+    assert ".vc-comision-pendiente" in css
     assert ".vc-monto-dest" in css
 
 
@@ -189,11 +198,16 @@ def test_detalle_muestra_comision_ganada_por_periodo(entorno, monkeypatch, fijar
     com = det.json()["comision"]
     # 100×0% + 1000×15% + 500×10% = 200; anulado fuera; venta ajena fuera.
     assert com["comision"] == "200.00"
+    assert com["comision_periodo"] == "200.00"
+    assert com["comision_acumulada"] == "200.00"
+    assert com["comision_pagada"] == "0.00"
+    assert com["comision_pendiente"] == "200.00"
     assert com["porcentaje_vigente"] == "10"
     assert com["tickets_anulados"] == 1
     assert len(com["desglose"]) >= 2
     assert com["descuenta_mi_caja"] is False
     assert com["informativa"] is True
+    assert isinstance(com.get("historial_pagos"), list)
     assert entorno.c.get("/terminal/sorteos", headers=a["headers"]).json()["mi_caja"] == caja_antes
     assert entorno.saldo(a["sucursal"]["id"]) == general_antes
 
@@ -205,8 +219,11 @@ def test_detalle_muestra_comision_ganada_por_periodo(entorno, monkeypatch, fijar
     assert ajena.json()["comision"]["comision"] == "80.00"  # 800 × 10%
     assert "800.00" not in det.json()["comision"]["ventas_validas"]
 
+    # El filtro DESDE/HASTA ya no reinicia la comisión del ciclo abierto.
     vacio = entorno.c.get(
         f"/reportes/ventas-cajeros/{u1['id']}?desde=2026-11-13&hasta=2026-11-13",
         headers=entorno.admin,
     )
-    assert vacio.json()["comision"]["comision"] == "0.00"
+    assert vacio.json()["comision"]["comision_pendiente"] == "200.00"
+    # 100 (sin %) + 1000 + 500; anulado fuera del neto del ciclo.
+    assert vacio.json()["resumen"]["ventas_ciclo"] == "1600.00"

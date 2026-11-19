@@ -1753,6 +1753,18 @@ class LiquidacionIn(BaseModel):
     operacion_id: str
 
 
+class PagoComisionIn(BaseModel):
+    usuario_id: int
+    monto: float
+    operacion_id: str
+
+
+class CierreCicloIn(BaseModel):
+    usuario_id: int
+    operacion_id: str
+    monto: float | None = None
+
+
 @app.get("/comisiones")
 def panel_comisiones(sucursal_id: int | None = None, usuario_id: int | None = None,
                      db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
@@ -1772,6 +1784,44 @@ def panel_resumen_comisiones(desde: str, hasta: str, sucursal_id: int | None = N
                              usuario=Depends(requiere_rol("admin"))):
     sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
     return servicios.resumen_comisiones(db, _fecha(desde), _fecha(hasta), sid, usuario_id)
+
+
+@app.get("/comisiones/pagos")
+def panel_pagos_comision(sucursal_id: int | None = None, usuario_id: int | None = None,
+                         db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
+    return servicios.listar_pagos_comision(db, sid, usuario_id)
+
+
+@app.post("/comisiones/pagos", status_code=201)
+def panel_registrar_pago_comision(datos: PagoComisionIn, db=Depends(get_db),
+                                  usuario=Depends(requiere_rol("admin"))):
+    return servicios.registrar_pago_comision(
+        db, usuario, datos.usuario_id, datos.monto, datos.operacion_id,
+    )
+
+
+@app.get("/comisiones/cierres")
+def panel_cierres_ciclo(sucursal_id: int | None = None, usuario_id: int | None = None,
+                        db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
+    return servicios.listar_cierres_ciclo(db, sid, usuario_id)
+
+
+@app.post("/comisiones/cierres", status_code=201)
+def panel_cerrar_ciclo(datos: CierreCicloIn, db=Depends(get_db),
+                       usuario=Depends(requiere_rol("admin"))):
+    return servicios.cerrar_ciclo_cajera(
+        db, usuario, datos.usuario_id, datos.operacion_id, datos.monto,
+    )
+
+
+@app.get("/comisiones/auditoria-sin-porcentaje")
+def panel_auditoria_sin_porcentaje(sucursal_id: int | None = None, usuario_id: int | None = None,
+                                   limite: int = 500, db=Depends(get_db),
+                                   usuario=Depends(requiere_rol("admin"))):
+    sid = permisos.resolver_filtro_sucursal(db, usuario, sucursal_id)
+    return servicios.auditar_ventas_sin_porcentaje_comision(db, sid, usuario_id, limite)
 
 
 @app.get("/comisiones/liquidaciones")

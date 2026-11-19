@@ -135,7 +135,12 @@ def _columnas_faltantes():
             for columna in ("saldo_caja", "saldo_caja_prueba"):
                 if columna not in cols:
                     conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} {columna} {tipo}"))
-            for columna in ("ciclo_caja_movimiento_id", "ciclo_caja_prueba_movimiento_id"):
+            for columna in (
+                "ciclo_caja_movimiento_id",
+                "ciclo_caja_prueba_movimiento_id",
+                "ciclo_perfil_cierre_id",
+                "ciclo_perfil_prueba_cierre_id",
+            ):
                 if columna not in cols:
                     conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} {columna} INTEGER"))
             if "eliminado" not in cols:
