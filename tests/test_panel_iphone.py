@@ -86,7 +86,7 @@ def test_usuarios_tarjetas_movil_y_tabla_escritorio(entorno):
     sw = entorno.c.get("/sw.js").text
     assert 'id="sec-usuarios"' in html
     assert "usu-hero" in html
-    assert "perfil-ciclo-1" in html  # cache-bust CSS/JS
+    assert "perfil-ciclo-balance-2" in html  # cache-bust CSS/JS
     assert "tarjetaUsuarioHtml" in js
     assert "pintarUsuarios" in js and "esUsuariosMovil" in js
     assert "usu-lista-movil" in js and "usu-tabla-escritorio" in js
@@ -104,7 +104,7 @@ def test_usuarios_tarjetas_movil_y_tabla_escritorio(entorno):
     assert ".usu-lista-movil{display:flex" in compact
     assert ".usu-tabla-escritorio{display:none!important}" in compact
     assert "@media(min-width:901px)" in compact
-    assert "banca-admin-shell-v8-perfil-ciclo" in sw
+    assert "banca-admin-shell-v10-perfil-ciclo-balance" in sw
 
 
 def test_fuente_resultados_es_conectate(entorno):

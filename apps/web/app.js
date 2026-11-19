@@ -501,13 +501,13 @@ function tarjetasInicio(bloque) {
   const etiquetaPendientes = esSuperAdmin()
     ? "Premios pendientes (alcance)"
     : (esAdminPanel() ? "Premios pendientes sucursal" : "Premios por pagar (míos)");
+  // Dashboard RESUMEN: sin tarjeta Comisión (el cálculo sigue en API/perfil).
   const filas = [
     [fmt(bloque.ventas), "Ventas"],
     [bloque.tickets, "Tickets vendidos"],
     [fmt(bloque.premios_pagados), "Premios pagados"],
     [fmt(bloque.premios_pendientes), etiquetaPendientes],
     [fmt(bloque.neto), "Neto"],
-    [fmt(bloque.comision), "Comisión"],
   ];
   return filas.map(([n, l]) => `<div class="card"><div class="num">${esc(n)}</div><div class="lbl">${esc(l)}</div></div>`).join("");
 }
@@ -1028,35 +1028,28 @@ async function verDetalleCajero(id) {
     const com = d.comision || {};
     const pctVigente = (com.porcentaje_vigente == null || com.porcentaje_vigente === "")
       ? "0" : String(com.porcentaje_vigente);
-    const pendiente = Number(com.comision_pendiente || 0);
+    const balance = com.comision_pendiente || "0.00";
+    const pendiente = Number(balance);
     const puedeCerrar = !!com.puede_cerrar_ciclo;
-    const desgloseCom = (com.desglose || []).length > 1
-      ? `<ul class="vc-comision-desglose">${(com.desglose || []).map((fila) =>
-          `<li>${esc(fila.porcentaje)}% sobre ${fmt(fila.ventas)} = ${fmt(fila.comision)}</li>`
-        ).join("")}</ul>`
-      : "";
     const histPagos = (com.historial_pagos || []).length
       ? htmlItemHistorialVc((com.historial_pagos || []).map((p) => ({
-          top: `<b>${fmt(p.monto)}</b><span class="vc-hist-estado">PAGO</span><span class="vc-hist-monto">Pend. ${fmt(p.saldo_pendiente)}</span>`,
-          meta: `${esc(p.creado_en || "—")} · gen. ${fmt(p.comision_generada)} · admin: ${esc(p.administrador || "—")}`,
+          top: `<b>${fmt(p.monto)}</b><span class="vc-hist-estado">PAGO</span><span class="vc-hist-monto">Bal. ${fmt(p.saldo_pendiente)}</span>`,
+          meta: `${esc(p.creado_en || "—")} · admin: ${esc(p.administrador || "—")}`,
         })))
       : '<p class="nota">Sin pagos de comisión en este ciclo.</p>';
     const histCierres = (com.historial_cierres || []).length
       ? htmlItemHistorialVc((com.historial_cierres || []).map((cierre) => ({
           top: `<b>CIERRE #${esc(cierre.id)}</b><span class="vc-hist-monto">${fmt(cierre.ventas_ciclo)}</span>`,
-          meta: `${esc(cierre.cerrado_en || "—")} · com. ${fmt(cierre.comision_pagada)} · admin: ${esc(cierre.administrador || "—")} · ${esc(cierre.operacion_id || "")}`,
+          meta: `${esc(cierre.cerrado_en || "—")} · admin: ${esc(cierre.administrador || "—")} · ${esc(cierre.operacion_id || "")}`,
         })))
       : '<p class="nota">Sin cierres de ciclo registrados.</p>';
-    const btnPagar = pendiente > 0
-      ? `<button type="button" class="btn vc-btn-pagar-comision" data-pagar-comision-cajera="${esc(r.usuario_id)}" data-cajera-nombre="${esc(r.nombre || "")}" data-pendiente="${esc(com.comision_pendiente)}">PAGAR COMISIÓN</button>`
-      : `<button type="button" class="btn vc-btn-pagar-comision" disabled title="Sin comisión pendiente">PAGAR COMISIÓN</button>`;
     const tituloCierre = pendiente > 0 ? "PAGAR COMISIÓN Y CERRAR CICLO" : "CERRAR CICLO";
     const btnCerrar = puedeCerrar
-      ? `<button type="button" class="btn vc-btn-cerrar-ciclo" data-cerrar-ciclo-cajera="${esc(r.usuario_id)}" data-cajera-nombre="${esc(r.nombre || "")}" data-pendiente="${esc(com.comision_pendiente)}" data-mi-caja="${esc(r.mi_caja)}">${tituloCierre}</button>`
+      ? `<button type="button" class="btn vc-btn-cerrar-ciclo" data-cerrar-ciclo-cajera="${esc(r.usuario_id)}" data-cajera-nombre="${esc(r.nombre || "")}" data-pendiente="${esc(balance)}" data-mi-caja="${esc(r.mi_caja)}">${tituloCierre}</button>`
       : `<button type="button" class="btn vc-btn-cerrar-ciclo" disabled title="${esc((com.bloqueos_cierre || []).join(' · ') || 'No se puede cerrar')}">${tituloCierre}</button>`;
     const notaCierre = (com.bloqueos_cierre || []).length
       ? `<p class="vc-comision-periodo-nota">${esc((com.bloqueos_cierre || []).join(" · "))}</p>`
-      : (r.ciclo_desde ? `<p class="vc-comision-periodo-nota">Ciclo abierto desde ${esc(r.ciclo_desde)}</p>` : "");
+      : "";
     cuerpo.innerHTML = `
       <div class="vc-detalle-hero">
         <div class="vc-detalle-hero-ico" aria-hidden="true">👤</div>
@@ -1077,15 +1070,12 @@ async function verDetalleCajero(id) {
       </div>
       <section class="vc-comision-card" aria-label="Comisión ganada">
         <h5>COMISIÓN GANADA</h5>
-        <div class="vc-comision-grid">
-          <div><span class="k">Porcentaje vigente</span><b>${esc(pctVigente)}%</b></div>
-          <div><span class="k">Comisión acumulada</span><b>${fmt(com.comision_acumulada || 0)}</b></div>
-          <div><span class="k">Comisión pagada</span><b>${fmt(com.comision_pagada || 0)}</b></div>
-          <div class="vc-comision-pendiente"><span class="k">COMISIÓN PENDIENTE</span><b class="vc-card-monto">${fmt(com.comision_pendiente || 0)}</b></div>
+        <div class="vc-comision-grid vc-comision-grid-simple">
+          <div><span class="k">PORCENTAJE VIGENTE</span><b>${esc(pctVigente)}%</b></div>
+          <div class="vc-comision-pendiente"><span class="k">BALANCE DE COMISIÓN</span><b class="vc-card-monto">${fmt(balance)}</b></div>
         </div>
         ${notaCierre}
-        ${desgloseCom}
-        <div class="vc-comision-acciones">${btnPagar}${btnCerrar}</div>
+        <div class="vc-comision-acciones">${btnCerrar}</div>
       </section>
       <p class="vc-detalle-tickets-meta">Tickets del ciclo: ${esc(r.tickets_vendidos)}</p>
       <section class="vc-hist">
@@ -1108,12 +1098,6 @@ async function verDetalleCajero(id) {
         <h5>Movimientos de caja</h5>
         <div class="vc-hist-lista">${movs}</div>
       </section>`;
-    const botonPagar = cuerpo.querySelector("[data-pagar-comision-cajera]");
-    if (botonPagar && !botonPagar.disabled) {
-      botonPagar.addEventListener("click", () => pagarComisionCajeraPerfil(botonPagar).catch((e) => {
-        alert(e.message || String(e));
-      }));
-    }
     const botonCerrar = cuerpo.querySelector("[data-cerrar-ciclo-cajera]");
     if (botonCerrar && !botonCerrar.disabled) {
       botonCerrar.addEventListener("click", () => cerrarCicloCajeraPerfil(botonCerrar).catch((e) => {
@@ -1124,39 +1108,12 @@ async function verDetalleCajero(id) {
     cuerpo.innerHTML = `<p class="msg error">${esc(e.message)}</p>`;
   }
 }
-async function pagarComisionCajeraPerfil(boton) {
-  if (!boton || boton.disabled) return;
-  const usuarioId = Number(boton.getAttribute("data-pagar-comision-cajera"));
-  const nombre = boton.getAttribute("data-cajera-nombre") || "cajera";
-  const pendienteTxt = boton.getAttribute("data-pendiente") || "0";
-  const pendiente = Number(pendienteTxt);
-  if (!usuarioId || !(pendiente > 0)) throw new Error("No hay comisión pendiente");
-  const ingresado = prompt(
-    `Pagar comisión de ${nombre}\nPendiente: ${fmt(pendienteTxt)}\n\nMonto a pagar (vacío = todo).\nUn pago parcial NO cierra el ciclo.`,
-    pendienteTxt,
-  );
-  if (ingresado === null) return;
-  const monto = ingresado.trim() === "" ? pendiente : Number(ingresado);
-  if (!(monto > 0)) throw new Error("El monto debe ser mayor que cero");
-  if (monto > pendiente + 1e-9) throw new Error("El pago no puede superar la comisión pendiente");
-  const ok = confirm(
-    `¿Confirmar pago de comisión?\n\nCajera: ${nombre}\nMonto: ${fmt(monto)}\nPendiente actual: ${fmt(pendienteTxt)}\n\nNo cierra el ciclo. No modifica MI CAJA ni el Banco General.`,
-  );
-  if (!ok) return;
-  boton.disabled = true;
-  const operacionId = ("pago-com-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)).slice(0, 40);
-  try {
-    const r = await post("/comisiones/pagos", {
-      usuario_id: usuarioId,
-      monto,
-      operacion_id: operacionId,
-    });
-    alert(`Pago registrado: ${fmt(r.monto)}. Pendiente: ${fmt(r.saldo_pendiente)}.`);
-    await verDetalleCajero(usuarioId);
-  } catch (e) {
-    boton.disabled = false;
-    throw e;
+async function refrescarDashboardCajeroTrasCierre(usuarioId) {
+  // Actualiza lista + detalle sin recargar la página ni alterar MI CAJA.
+  if (typeof refrescarVentasCajeros === "function") {
+    await refrescarVentasCajeros();
   }
+  await verDetalleCajero(usuarioId);
 }
 async function cerrarCicloCajeraPerfil(boton) {
   if (!boton || boton.disabled) return;
@@ -1168,9 +1125,9 @@ async function cerrarCicloCajeraPerfil(boton) {
   if (!usuarioId) throw new Error("Cajera no válida");
   const ok = confirm(
     `¿Pagar comisión y cerrar ciclo de ${nombre}?\n\n` +
-    `Comisión pendiente: ${fmt(pendienteTxt)}\nMI CAJA: ${fmt(miCaja)}\n\n` +
-    `Se registrará el pago completo (si aplica), se cerrará el ciclo y el nuevo ciclo iniciará en RD$0.00.\n` +
-    `No modifica MI CAJA ni el Banco General.`,
+    `Balance de comisión: ${fmt(pendienteTxt)}\nMI CAJA (no se modifica): ${fmt(miCaja)}\n\n` +
+    `Se registrará el pago administrativo, se cerrará el ciclo y el dashboard reiniciará contadores a RD$0.00.\n` +
+    `No descuenta MI CAJA, Banco General, fondos ni entregas.`,
   );
   if (!ok) return;
   boton.disabled = true;
@@ -1180,11 +1137,15 @@ async function cerrarCicloCajeraPerfil(boton) {
     if (pendiente > 0) body.monto = pendiente;
     const r = await post("/comisiones/cierres", body);
     const nuevo = r.ciclo_nuevo || {};
+    const comNueva = r.comision_nueva || {};
+    await refrescarDashboardCajeroTrasCierre(usuarioId);
     alert(
-      `Ciclo cerrado.\nVentas del nuevo ciclo: ${fmt(nuevo.ventas_ciclo || 0)}\n` +
-      `Comisión pendiente: ${fmt((r.comision_nueva || {}).comision_pendiente || 0)}`,
+      `Ciclo cerrado.\n` +
+      `Ventas del ciclo: ${fmt(nuevo.ventas_ciclo || 0)}\n` +
+      `Premios del ciclo: ${fmt(nuevo.premios_ciclo || 0)}\n` +
+      `Balance de comisión: ${fmt(comNueva.comision_pendiente || 0)}\n` +
+      `MI CAJA se mantiene en ${fmt(miCaja)} (sin descuento).`,
     );
-    await verDetalleCajero(usuarioId);
   } catch (e) {
     boton.disabled = false;
     throw e;

@@ -116,7 +116,8 @@ body.con-sesion header{padding-left:12px}
 .seccion{display:none}.seccion.activo{display:block}
 h2{margin:8px 0 12px;font-size:20px}h3{margin:22px 0 8px;font-size:16px;color:var(--suave)}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
-.cards.cards-inicio{grid-template-columns:repeat(3,minmax(0,1fr))}
+/* 5 tarjetas (sin Comisión): auto-fit evita hueco vacío en la última fila. */
+.cards.cards-inicio{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 .card{background:var(--panel);border:1px solid var(--borde);border-radius:12px;padding:14px;min-width:0}
 .card .num{font-size:clamp(16px,4.2vw,24px);font-weight:700;color:var(--verde);overflow-wrap:anywhere;word-break:break-word;line-height:1.15}
 .card .lbl{color:var(--suave);font-size:13px;margin-top:2px;line-height:1.35}
@@ -367,9 +368,10 @@ body.usuarios-movil .usu-tabla-escritorio{display:none !important}
   border-color:rgba(46,204,113,.45)!important;
   background:linear-gradient(180deg,rgba(46,204,113,.12),var(--panel))!important;
 }
+.vc-comision-grid-simple{grid-template-columns:minmax(0,1fr) minmax(0,1.2fr)}
 .vc-comision-periodo-nota{margin:10px 0 0;color:var(--suave);font-size:12px}
 .vc-comision-acciones{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap}
-.vc-btn-pagar-comision{min-height:40px}
+.vc-btn-cerrar-ciclo{min-height:40px;width:100%}
 .vc-hist{
   border:1px solid var(--borde);border-radius:14px;padding:12px;margin:0 0 12px;
   background:var(--panel2);min-width:0;
@@ -469,6 +471,8 @@ body.usuarios-movil .usu-tabla-escritorio{display:none !important}
   #sec-inicio .cards,#sec-inicio .cards-inicio{
     gap:8px;margin:0;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
   }
+  /* 5 tarjetas en 2 columnas: la última (impar) ocupa el ancho completo. */
+  #sec-inicio .cards-inicio .card:last-child:nth-child(odd){grid-column:1 / -1}
   #sec-inicio .card{padding:10px}
   #sec-inicio .card .lbl{font-size:12px}
   .cards{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}

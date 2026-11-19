@@ -89,18 +89,28 @@ def test_panel_tiene_seccion_ventas_cajeros(entorno):
     assert "vc-card" in js
     assert "vc-hist" in js
     assert "COMISIÓN GANADA" in js
-    assert "COMISIÓN PENDIENTE" in js
-    assert "PAGAR COMISIÓN" in js
+    assert "BALANCE DE COMISIÓN" in js
+    assert "PORCENTAJE VIGENTE" in js
     assert "PAGAR COMISIÓN Y CERRAR CICLO" in js
-    assert "pagarComisionCajeraPerfil" in js
     assert "cerrarCicloCajeraPerfil" in js
-    assert "/comisiones/pagos" in js
+    assert "refrescarDashboardCajeroTrasCierre" in js
     assert "/comisiones/cierres" in js
     assert "vc-comision-card" in js
     assert "porcentaje_vigente" in js
     assert "Ventas del ciclo" in js
     assert "Premios del ciclo" in js
     assert "MI CAJA" in js
+    # Dashboard RESUMEN: sin tarjeta Comisión; el cálculo/API y el perfil siguen.
+    assert "function tarjetasInicio" in js
+    assert '[fmt(bloque.comision), "Comisión"]' not in js
+    assert 'fmt(bloque.ventas), "Ventas"' in js
+    assert 'fmt(bloque.neto), "Neto"' in js
+    # Panel reducido: sin acumulada/pagada ni pago parcial en UI.
+    assert "Comisión acumulada" not in js
+    assert "Comisión pagada" not in js
+    assert "COMISIÓN PENDIENTE" not in js
+    assert "data-pagar-comision-cajera" not in js
+    assert "pagarComisionCajeraPerfil" not in js
     # Perfil simplificado: brutas/anulaciones/recaudación siguen en API, no en tarjetas.
     assert "Ventas brutas" not in js
     assert ">Anulaciones<" not in js and "Anulaciones</span>" not in js
@@ -113,8 +123,10 @@ def test_panel_tiene_seccion_ventas_cajeros(entorno):
     assert ".vc-hist" in css
     assert ".vc-comision-card" in css
     assert ".vc-comision-grid" in css
+    assert ".vc-comision-grid-simple" in css
     assert ".vc-comision-pendiente" in css
     assert ".vc-monto-dest" in css
+    assert "auto-fit" in css and "cards-inicio" in css
 
 
 def test_lista_compacta_coincide_con_detalle(entorno, monkeypatch, fijar_hora):
