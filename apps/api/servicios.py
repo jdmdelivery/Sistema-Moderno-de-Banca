@@ -6195,6 +6195,8 @@ def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
     fila["entregas"] = caja["entregas_ciclo"]
     fila["mi_caja"] = caja["mi_caja"]
     fila["recaudacion_ciclo"] = caja["recaudacion_ciclo"]
+    # Misma fuente que el bloqueo de cierre de ciclo (premios_pendientes_mios).
+    fila["premios_pendientes"] = caja.get("premios_pendientes_mios") or "0.00"
 
     inicio_ciclo = _inicio_ciclo_perfil(db, cajero, prueba)
     q_tickets = db.query(Ticket).filter(
@@ -6292,6 +6294,7 @@ def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
         "puede_cerrar_ciclo": cond_cierre["puede_cerrar"],
         "bloqueos_cierre": cond_cierre["bloqueos"],
         "requiere_pago_para_cerrar": cond_cierre["requiere_pago"],
+        "premios_pendientes": cond_cierre["premios_pendientes"],
         "descuenta_mi_caja": False,
         "descuenta_caja_general": False,
         "informativa": True,

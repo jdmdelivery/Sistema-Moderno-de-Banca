@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Preview — PREMIOS PENDIENTES (8 tarjetas)</title>
+<style>
+:root{
+  --fondo:#0e1512; --panel:#16211b; --panel2:#1d2c23; --borde:#2c4234;
+  --texto:#e8f2ea; --suave:#9db8a6; --amarillo:#e8b93e; --azul:#3e9be8;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--fondo);color:var(--texto)}
+.wrap{max-width:720px;margin:0 auto;padding:16px}
+h1{font-size:18px;margin:0 0 4px}
+.sub{color:var(--suave);font-size:13px;margin:0 0 16px}
+.vc-detalle-hero{
+  display:flex;gap:12px;align-items:center;padding:14px;margin:0 0 12px;
+  background:var(--panel);border:1px solid var(--borde);border-radius:14px;
+}
+.vc-detalle-hero-ico{font-size:28px}
+.vc-detalle-hero-txt h4{margin:0 0 4px;font-size:18px}
+.vc-detalle-hero-txt p{margin:0;color:var(--suave);font-size:13px}
+.vc-detalle-montos{
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:10px;margin:0 0 10px;font-size:12.5px;color:var(--suave);
+}
+.vc-detalle-montos > div{
+  background:var(--panel2);border:1px solid var(--borde);border-radius:12px;padding:10px 12px;min-width:0;
+}
+.vc-detalle-montos .vc-monto-dest{
+  border-color:rgba(30,111,217,.45);
+  background:linear-gradient(180deg,rgba(30,111,217,.12),var(--panel2));
+}
+.vc-detalle-montos .k{display:block;color:var(--suave);font-size:11.5px;margin-bottom:3px;line-height:1.3}
+.vc-detalle-montos b{display:block;color:var(--texto);font-size:15px;margin-top:0;overflow-wrap:anywhere;line-height:1.25}
+.vc-detalle-montos .vc-monto-pendiente{
+  border-color:rgba(232,185,62,.5);
+  background:linear-gradient(180deg,rgba(232,185,62,.14),var(--panel2));
+}
+.vc-detalle-montos .vc-pendiente-monto{color:var(--amarillo) !important}
+.nota{color:var(--suave);font-size:12px;margin-top:16px}
+@media (max-width:720px){
+  .wrap{padding:12px}
+  .vc-detalle-montos{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .vc-detalle-montos b{font-size:14px}
+  .vc-detalle-montos .k{font-size:11px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Detalle del cajero — 8 tarjetas</h1>
+  <p class="sub">Orden: Ventas / Premios → MI CAJA / Fondo → Entregas / Tickets vigentes → Tickets anulados / PREMIOS PENDIENTES</p>
+  <div class="vc-detalle-hero">
+    <div class="vc-detalle-hero-ico" aria-hidden="true">👤</div>
+    <div class="vc-detalle-hero-txt">
+      <h4>Lizbech</h4>
+      <p>BANCA CASTILLO · lizbech</p>
+    </div>
+  </div>
+  <div class="vc-detalle-montos">
+    <div class="vc-monto-dest"><span class="k">Ventas del ciclo</span><b>RD$12,450.00</b></div>
+    <div class="vc-monto-dest"><span class="k">Premios del ciclo</span><b>RD$3,200.00</b></div>
+    <div class="vc-monto-dest"><span class="k">MI CAJA</span><b>RD$8,150.00</b></div>
+    <div><span class="k">Fondo asignado</span><b>RD$5,000.00</b></div>
+    <div><span class="k">Entregas</span><b>RD$1,000.00</b></div>
+    <div><span class="k">Tickets vigentes</span><b>14</b></div>
+    <div><span class="k">Tickets anulados</span><b>1</b></div>
+    <div class="vc-monto-pendiente"><span class="k">PREMIOS PENDIENTES</span><b class="vc-pendiente-monto">RD$7,400.00</b></div>
+  </div>
+  <p class="nota">Preview local (mismo CSS de perfil). Importe de ejemplo RD$7,400.00 — el sistema usa el valor real de premios_pendientes_mios.</p>
+</div>
+</body>
+</html>

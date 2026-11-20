@@ -1075,6 +1075,7 @@ async function verDetalleCajero(id) {
         <div><span class="k">Entregas</span><b>${fmt(r.entregas)}</b></div>
         <div><span class="k">Tickets vigentes</span><b>${esc(r.tickets_vigentes)}</b></div>
         <div><span class="k">Tickets anulados</span><b>${esc(r.tickets_anulados)}</b></div>
+        <div class="vc-monto-pendiente"><span class="k">PREMIOS PENDIENTES</span><b class="vc-pendiente-monto">${fmt(r.premios_pendientes != null ? r.premios_pendientes : (com.premios_pendientes || 0))}</b></div>
       </div>
       <section class="vc-comision-card" aria-label="Comisión ganada">
         <h5>COMISIÓN GANADA</h5>
