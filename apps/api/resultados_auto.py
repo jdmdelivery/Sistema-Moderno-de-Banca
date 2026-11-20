@@ -322,7 +322,9 @@ def ciclo(forzar=False, payload=None, firmado=None, operador=None,
         if discrepancias:
             detalle += f"; discrepancias {len(discrepancias)}"
         if aviso_firma:
-            detalle += "; firma pendiente"
+            # Conservar el motivo real (p. ej. operador anguila sin respuesta /
+            # certificado no reconocido). "firma pendiente" era demasiado genérico.
+            detalle += "; " + str(aviso_firma)[:100]
         if aviso_king:
             detalle += "; king " + str(aviso_king)[:80]
         if error:

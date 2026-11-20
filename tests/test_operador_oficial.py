@@ -265,10 +265,129 @@ def test_la_caida_del_operador_no_detiene_las_demas_loterias(entorno, fijar_hora
         raise urllib.error.URLError("caido")
 
     monkeypatch.setattr(urllib.request, "urlopen", falla)
+    monkeypatch.setattr(
+        operador_oficial, "_abrir_anguila_ca",
+        lambda *a, **k: (None, "sin respuesta"),
+    )
+    monkeypatch.setattr(
+        operador_oficial, "_abrir_anguila_pin",
+        lambda *a, **k: (None, "sin respuesta"),
+    )
     html, error = operador_oficial.descargar_anguila()
     mapa, error_haiti = operador_oficial.descargar_haiti(FECHA)
     assert html == "" and "sin respuesta" in error
     assert mapa == {} and "sin respuesta" in error_haiti
+
+
+def test_descarga_anguila_acepta_certificado_con_pin(monkeypatch):
+    """Si la verificación CA falla, el pin SHA-256 conocido permite leer el HTML."""
+    monkeypatch.setattr(
+        operador_oficial, "_abrir_anguila_ca",
+        lambda *a, **k: (None, "sin respuesta"),
+    )
+    monkeypatch.setattr(
+        operador_oficial, "_abrir_anguila_pin",
+        lambda *a, **k: (_html_anguila([("6:00 PM", (1, 2, 3))], FECHA).encode("utf-8"), None),
+    )
+    html, error = operador_oficial.descargar_anguila()
+    assert error is None
+    assert "6:00PM" in html.replace(" ", "")
+
+
+def test_descarga_anguila_rechaza_pin_incorrecto(monkeypatch):
+    monkeypatch.setattr(
+        operador_oficial, "_abrir_anguila_ca",
+        lambda *a, **k: (None, "sin respuesta"),
+    )
+    monkeypatch.setattr(
+        operador_oficial, "_abrir_anguila_pin",
+        lambda *a, **k: (None, "certificado no reconocido"),
+    )
+    html, error = operador_oficial.descargar_anguila()
+    assert html == ""
+    assert "certificado no reconocido" in error
+
+
+def test_pin_rechaza_dominio_no_autorizado(monkeypatch):
+    cuerpo, error = operador_oficial._abrir_anguila_pin(
+        "https://evil.example/", {"User-Agent": "x"},
+    )
+    assert cuerpo is None and error == "dominio no autorizado"
+
+
+def test_pin_rechaza_http():
+    cuerpo, error = operador_oficial._abrir_anguila_pin(
+        "http://anguillalottery.ai/", {"User-Agent": "x"},
+    )
+    assert cuerpo is None and error == "dominio no autorizado"
+
+
+def test_certificado_renovado_distinto_se_rechaza(monkeypatch):
+    """Huella distinta (renovación autofirmada) → rechazo seguro, sin liquidar."""
+    monkeypatch.setenv("ANGUILA_CERT_SHA256", "0" * 64)
+    monkeypatch.setattr(
+        operador_oficial, "_abrir_anguila_ca",
+        lambda *a, **k: (None, "sin respuesta"),
+    )
+    # Forzar pin path real contra red quedaría frágil; simulamos leaf distinto.
+    monkeypatch.setattr(
+        operador_oficial, "_https_get_anguila",
+        lambda *a, **k: (None, "certificado no reconocido"),
+    )
+    html, error = operador_oficial.descargar_anguila()
+    assert html == ""
+    assert "certificado no reconocido" in error
+
+
+def test_cruzar_nocturnos_cuando_operador_responde(monkeypatch):
+    """6–9 PM entran al cruce si Conéctate y el operador publican el mismo triple."""
+    hoy = FECHA
+    firmado = _doc(
+        [
+            _juego("Anguila 6:00 PM", "g6", (62, 94, 33)),
+            _juego("Anguila 7:00 PM", "g7", (80, 62, 91)),
+            _juego("Anguila 8:00 PM", "g8", (97, 94, 68)),
+            _juego("Anguila 9:00 PM", "g9", (43, 87, 56)),
+            _juego("Anguila 10:00 PM", "g10", (21, 66, 98)),
+        ],
+        [],
+        [
+            _juego("Anguila 6:00 PM", "s6", (1, 1, 1)),
+            _juego("Anguila 7:00 PM", "s7", (1, 1, 1)),
+            _juego("Anguila 8:00 PM", "s8", (1, 1, 1)),
+            _juego("Anguila 9:00 PM", "s9", (1, 1, 1)),
+            _juego("Anguila 10:00 PM", "s10", (1, 1, 1)),
+        ],
+        [],
+    )
+    candidatos = conectate_firmado.propuestos(firmado, hoy)
+    operador = {
+        ("La Anguila 6:00 PM", hoy): {"fecha": hoy, "numeros": (62, 94, 33)},
+        ("La Anguila 7:00 PM", hoy): {"fecha": hoy, "numeros": (80, 62, 91)},
+        ("La Anguila 8:00 PM", hoy): {"fecha": hoy, "numeros": (97, 94, 68)},
+        ("La Anguila 9:00 PM", hoy): {"fecha": hoy, "numeros": (43, 87, 56)},
+        # 10 PM ausente en operador → no entra
+    }
+    ok, difs = operador_oficial.cruzar(candidatos, operador, hoy)
+    assert difs == []
+    assert ok["La Anguila 6:00 PM"]["numeros"] == (62, 94, 33)
+    assert ok["La Anguila 7:00 PM"]["numeros"] == (80, 62, 91)
+    assert ok["La Anguila 8:00 PM"]["numeros"] == (97, 94, 68)
+    assert ok["La Anguila 9:00 PM"]["numeros"] == (43, 87, 56)
+    assert "La Anguila 10:00 PM" not in ok
+
+
+def test_cruzar_no_usa_resultado_de_ayer_para_hoy():
+    hoy = FECHA
+    ayer = FECHA - timedelta(days=1)
+    candidatos = {
+        "La Anguila 6:00 PM": {"fecha": hoy, "numeros": (1, 2, 3)},
+    }
+    operador = {
+        ("La Anguila 6:00 PM", ayer): {"fecha": ayer, "numeros": (1, 2, 3)},
+    }
+    ok, difs = operador_oficial.cruzar(candidatos, operador, hoy)
+    assert ok == {} and difs == []
 
 
 def test_el_manual_confirmado_no_se_reemplaza(entorno, fijar_hora):

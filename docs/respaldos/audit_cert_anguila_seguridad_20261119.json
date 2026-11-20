@@ -1,0 +1,165 @@
+{
+  "host": "anguillalottery.ai",
+  "pin_codigo": "9857ff64fd6d20a8b0acea2a8a745868747dd48effc10863a0e2a1d5934f0525",
+  "checks": {
+    "dns_system": [
+      "148.113.189.226"
+    ],
+    "dns_google": [
+      "148.113.189.226"
+    ],
+    "dns_cloudflare": [
+      "148.113.189.226"
+    ],
+    "certs_by_ip": [
+      {
+        "ip": "148.113.189.226",
+        "sha256": "9857ff64fd6d20a8b0acea2a8a745868747dd48effc10863a0e2a1d5934f0525",
+        "subject": "1.2.840.113549.1.9.1=webmaster@anguillalottery.ai,CN=anguillalottery.ai,OU=Organization,O=Company,L=City,ST=Region,C=US",
+        "issuer": "1.2.840.113549.1.9.1=webmaster@anguillalottery.ai,CN=anguillalottery.ai,OU=Organization,O=Company,L=City,ST=Region,C=US",
+        "self_signed": true,
+        "not_before": "2026-11-14T21:10:14+00:00",
+        "not_after": "2036-11-11T21:10:14+00:00",
+        "matches_pin": true,
+        "cn_host_match": true
+      }
+    ],
+    "crt_sh_count": 109,
+    "crt_sh_sample": [
+      {
+        "id": 29593421840,
+        "issuer": "C=US, O=Let's Encrypt, CN=YR2",
+        "not_before": "2026-09-26T00:36:14",
+        "not_after": "2026-12-25T00:36:13",
+        "common_name": "anguillalottery.ai"
+      },
+      {
+        "id": 28363553293,
+        "issuer": "C=US, O=Let's Encrypt, CN=YR1",
+        "not_before": "2026-07-29T22:48:06",
+        "not_after": "2026-10-27T22:48:05",
+        "common_name": "anguillalottery.ai"
+      },
+      {
+        "id": 28363548768,
+        "issuer": "C=US, O=Let's Encrypt, CN=YR1",
+        "not_before": "2026-07-29T22:48:06",
+        "not_after": "2026-10-27T22:48:05",
+        "common_name": "anguillalottery.ai"
+      },
+      {
+        "id": 26805026139,
+        "issuer": "C=US, O=Let's Encrypt, CN=YR2",
+        "not_before": "2026-06-01T15:32:58",
+        "not_after": "2026-08-30T15:32:57",
+        "common_name": "anguillalottery.ai"
+      },
+      {
+        "id": 26805018067,
+        "issuer": "C=US, O=Let's Encrypt, CN=YR2",
+        "not_before": "2026-06-01T15:32:58",
+        "not_after": "2026-08-30T15:32:57",
+        "common_name": "anguillalottery.ai"
+      },
+      {
+        "id": 25368776567,
+        "issuer": "C=US, O=Let's Encrypt, CN=R12",
+        "not_before": "2026-04-04T12:04:04",
+        "not_after": "2026-07-03T12:04:03",
+        "common_name": "anguillalottery.ai"
+      },
+      {
+        "id": 25465877731,
+        "issuer": "C=US, O=Let's Encrypt, CN=R12",
+        "not_before": "2026-04-04T12:04:04",
+        "not_after": "2026-07-03T12:04:03",
+        "common_name": "anguillalottery.ai"
+      },
+      {
+        "id": 24193659041,
+        "issuer": "C=US, O=Let's Encrypt, CN=R13",
+        "not_before": "2026-02-05T02:41:53",
+        "not_after": "2026-05-06T02:41:52",
+        "common_name": "anguillalottery.ai"
+      }
+    ],
+    "crt_sh_contains_pin": false,
+    "descarga_pin": {
+      "error": null,
+      "html_len": 33416
+    },
+    "corroboracion_conectate": [
+      {
+        "hora": "6:00 PM",
+        "conectate": [
+          62,
+          94,
+          33
+        ],
+        "operador": [
+          62,
+          94,
+          33
+        ],
+        "igual": true
+      },
+      {
+        "hora": "7:00 PM",
+        "conectate": [
+          80,
+          62,
+          91
+        ],
+        "operador": [
+          80,
+          62,
+          91
+        ],
+        "igual": true
+      },
+      {
+        "hora": "8:00 PM",
+        "conectate": [
+          97,
+          94,
+          68
+        ],
+        "operador": [
+          97,
+          94,
+          68
+        ],
+        "igual": true
+      },
+      {
+        "hora": "9:00 PM",
+        "conectate": [
+          43,
+          87,
+          56
+        ],
+        "operador": [
+          43,
+          87,
+          56
+        ],
+        "igual": true
+      },
+      {
+        "hora": "10:00 PM",
+        "conectate": [
+          21,
+          66,
+          98
+        ],
+        "operador": null,
+        "igual": false
+      }
+    ],
+    "corroboracion_ok": true,
+    "pin_solo_descargar_anguila": true,
+    "haiti_no_usa_pin": true,
+    "url_oficial_codigo": true,
+    "cert_emitido_despues_url_conocida": true
+  }
+}

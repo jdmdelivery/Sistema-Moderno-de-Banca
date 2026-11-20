@@ -5,18 +5,33 @@ api-prod.haitibolet.net. Un horario entra solo si esa publicación trae
 la misma fecha, la misma hora y los mismos tres números que Conéctate.
 Si el operador no responde, el sorteo sigue pendiente. Si los números
 difieren, no se guarda y queda una auditoría.
+
+anguillalottery.ai publica un certificado TLS autofirmado. El cliente
+primero intenta la verificación normal; si falla, reintenta solo si el
+SHA-256 del certificado coincide con el pin conocido (o ANGUILA_CERT_SHA256).
+No se acepta un certificado distinto ni se desactiva SSL de forma global.
 """
+import hashlib
+import http.client
 import json
 import os
 import re
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, timedelta
+from urllib.parse import urlparse
 
 from . import conectate_firmado
 
 ANGUILA_URL = "https://anguillalottery.ai/"
+# Pin del certificado autofirmado actual (CN=anguillalottery.ai, emitido 2026-11-14).
+# El dominio tiene historial Let's Encrypt en crt.sh; desde 2026-11-14 el leaf
+# servido es autofirmado. Al renovar: si vuelve CA pública, gana _abrir_anguila_ca;
+# si cambia el autofirmado, hay que actualizar ANGUILA_CERT_SHA256 (rechazo seguro).
+ANGUILA_CERT_SHA256 = "9857ff64fd6d20a8b0acea2a8a745868747dd48effc10863a0e2a1d5934f0525"
+_ANGUILA_HOSTS = frozenset({"anguillalottery.ai", "www.anguillalottery.ai"})
 HAITI_API = "https://api-prod.haitibolet.net"
 _NAVEGADOR = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -232,12 +247,87 @@ def _abrir(url, headers, timeout=15):
         return None, "sin respuesta"
 
 
+def _pin_anguila() -> str:
+    return str(os.environ.get("ANGUILA_CERT_SHA256") or ANGUILA_CERT_SHA256).strip().lower()
+
+
+def _url_anguila_permitida(url: str):
+    """Solo HTTPS hacia anguillalottery.ai / www. Sin otros hosts."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or host not in _ANGUILA_HOSTS:
+        return None, "dominio no autorizado"
+    port = parsed.port or 443
+    path = parsed.path or "/"
+    if parsed.query:
+        path = path + "?" + parsed.query
+    return (host, port, path), None
+
+
+def _https_get_anguila(host, port, path, headers, timeout, ctx, pin=None):
+    """GET sin seguir redirecciones. Opcionalmente exige pin SHA-256 del leaf."""
+    try:
+        conn = http.client.HTTPSConnection(host, port=port, context=ctx, timeout=timeout)
+        try:
+            conn.connect()
+            sock = conn.sock
+            if sock is None:
+                return None, "sin respuesta"
+            if pin is not None:
+                der = sock.getpeercert(binary_form=True)
+                if not der or hashlib.sha256(der).hexdigest().lower() != pin:
+                    return None, "certificado no reconocido"
+            conn.request("GET", path, headers=headers)
+            resp = conn.getresponse()
+            cuerpo = resp.read()
+            if resp.status in (301, 302, 303, 307, 308):
+                return None, "redireccion no permitida"
+            if resp.status != 200:
+                return None, f"HTTP {resp.status}"
+            return cuerpo, None
+        finally:
+            conn.close()
+    except (OSError, ssl.SSLError, http.client.HTTPException, TimeoutError):
+        return None, "sin respuesta"
+
+
+def _abrir_anguila_ca(url, headers, timeout=15):
+    """Intento con verificación CA pública (hostname + cadena)."""
+    destino, error = _url_anguila_permitida(url)
+    if error:
+        return None, error
+    host, port, path = destino
+    ctx = ssl.create_default_context()
+    return _https_get_anguila(host, port, path, headers, timeout, ctx, pin=None)
+
+
+def _abrir_anguila_pin(url, headers, timeout=15):
+    """GET HTTPS al operador validando el pin SHA-256 del certificado."""
+    destino, error = _url_anguila_permitida(url)
+    if error:
+        return None, error
+    host, port, path = destino
+    pin = _pin_anguila()
+    if len(pin) != 64 or any(c not in "0123456789abcdef" for c in pin):
+        return None, "certificado no reconocido"
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return _https_get_anguila(host, port, path, headers, timeout, ctx, pin=pin)
+
+
 def descargar_anguila():
     url = str(os.environ.get("ANGUILA_OPERADOR_URL") or ANGUILA_URL).strip()
-    cuerpo, error = _abrir(url, {"User-Agent": _NAVEGADOR, "Accept": "text/html"})
-    if error:
-        return "", "operador anguila " + error
-    return cuerpo.decode("utf-8", "replace"), None
+    headers = {"User-Agent": _NAVEGADOR, "Accept": "text/html"}
+    # 1) CA pública (cuando el operador restaure Let's Encrypt).
+    cuerpo, error = _abrir_anguila_ca(url, headers)
+    if error is None:
+        return cuerpo.decode("utf-8", "replace"), None
+    # 2) Autofirmado: solo host allowlist + pin SHA-256 exacto.
+    cuerpo, error_pin = _abrir_anguila_pin(url, headers)
+    if error_pin is None:
+        return cuerpo.decode("utf-8", "replace"), None
+    return "", "operador anguila " + (error_pin or error)
 
 
 def _pedir_haiti(slug, fecha):
