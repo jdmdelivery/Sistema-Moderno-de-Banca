@@ -598,3 +598,25 @@ class CierreCicloCajera(Base):
     es_prueba = Column(Boolean, nullable=False, default=False)
     detalle = Column(Text, nullable=False, default="")
     creado_en = Column(DateTime, nullable=False, default=ahora_local)
+
+
+class AjusteCajaCajera(Base):
+    """Ajuste contable de banca negativa. Cubre deuda del cajón hasta RD$0.
+
+    No es venta, premio ni fondo. No toca Banco General ni inventa efectivo físico.
+    Solo acredita MI CAJA (o saldo_caja_prueba en desarrollo) con historial auditable.
+    """
+
+    __tablename__ = "ajustes_caja_cajera"
+    id = Column(Integer, primary_key=True)
+    operacion_id = Column(String(40), nullable=False, unique=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    sucursal_id = Column(Integer, ForeignKey("sucursales.id"), nullable=False, index=True)
+    autorizado_por = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    monto = Column(DINERO, nullable=False)
+    balance_anterior = Column(DINERO, nullable=False)
+    balance_posterior = Column(DINERO, nullable=False)
+    motivo = Column(String(200), nullable=False, default="")
+    movimiento_id = Column(Integer)
+    es_prueba = Column(Boolean, nullable=False, default=False)
+    creado_en = Column(DateTime, nullable=False, default=ahora_local, index=True)

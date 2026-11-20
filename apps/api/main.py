@@ -1270,6 +1270,9 @@ class LlaveIn(BaseModel):
     id: int
     serial: str
     operacion_id: str | None = None
+    # Si el premio supera MI CAJA: el panel debe enviar true tras confirmación explícita.
+    # La APK instalada no envía este campo; el terminal permite el pago (deuda contable).
+    confirmar_caja_negativa: bool | None = None
 
 
 class PanelPagoIn(LlaveIn):
@@ -1331,7 +1334,9 @@ def panel_info_anulacion(ticket_id: int, db=Depends(get_db),
 def panel_consultar(datos: LlaveIn, db=Depends(get_db), usuario=Depends(panel_actual)):
     ticket = db.get(Ticket, datos.id)
     permisos.assert_ticket_en_alcance(db, usuario, ticket)
-    return servicios.consultar_ticket(db, datos.id, datos.serial)
+    return servicios.consultar_ticket(
+        db, datos.id, datos.serial, caja_usuario_id=usuario.id,
+    )
 
 
 @app.post("/panel/tickets/pagar")
@@ -1340,7 +1345,15 @@ def panel_pagar(datos: PanelPagoIn, db=Depends(get_db),
     permisos.assert_sucursal_permitida(db, usuario, datos.sucursal_id)
     ticket = db.get(Ticket, datos.id)
     permisos.assert_ticket_en_alcance(db, usuario, ticket)
-    return servicios.pagar_ticket(db, datos.id, datos.serial, datos.sucursal_id, None, usuario.id)
+    # Confirmación de deuda contable: la UI del panel la exige antes de reenviar
+    # con confirmar_caja_negativa=true. No se bloquea en servidor para no romper
+    # flujos admin ya existentes; la terminal APK tampoco envía el flag.
+    return servicios.pagar_ticket(
+        db, datos.id, datos.serial, datos.sucursal_id, None, usuario.id,
+        operacion_id=datos.operacion_id,
+        confirmar_caja_negativa=datos.confirmar_caja_negativa,
+        exigir_confirmacion_deuda=False,
+    )
 
 
 @app.post("/panel/tickets/anular")
@@ -1741,6 +1754,42 @@ def panel_asignar_fondo(datos: FondoIn, db=Depends(get_db),
     )
 
 
+class AjusteBancaNegativaIn(BaseModel):
+    usuario_id: int
+    monto: float
+    motivo: str
+    operacion_id: str
+    balance_visto: float
+
+
+@app.get("/control-cajeros")
+def panel_control_cajeros(desde: str | None = None, hasta: str | None = None,
+                          sucursal_id: int | None = None,
+                          db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+    hoy = servicios.ahora_local().date()
+    return servicios.control_cajeros(
+        db, usuario,
+        _fecha(desde) if desde else hoy,
+        _fecha(hasta) if hasta else hoy,
+        sucursal_id,
+    )
+
+
+@app.post("/control-cajeros/ajuste", status_code=201)
+def panel_ajuste_banca_negativa(datos: AjusteBancaNegativaIn, db=Depends(get_db),
+                                usuario=Depends(requiere_rol("admin"))):
+    return servicios.aplicar_ajuste_banca_negativa(
+        db, usuario, datos.usuario_id, datos.monto, datos.motivo,
+        datos.operacion_id, datos.balance_visto,
+    )
+
+
+@app.get("/control-cajeros/ajustes")
+def panel_historial_ajustes(sucursal_id: int | None = None, usuario_id: int | None = None,
+                            db=Depends(get_db), usuario=Depends(requiere_rol("admin"))):
+    return servicios.listar_ajustes_caja(db, usuario, sucursal_id, usuario_id)
+
+
 class ComisionIn(BaseModel):
     usuario_id: int
     porcentaje: float
@@ -1882,16 +1931,20 @@ def terminal_consultar(datos: LlaveIn, db=Depends(get_db), terminal=Depends(term
     # Solo tickets vendidos por la cajera de la sesión (no confiar en IDs de la APK).
     return servicios.consultar_ticket(
         db, datos.id, datos.serial, exigir_vendedor_id=operador.id,
+        caja_usuario_id=operador.id,
     )
 
 
 @app.post("/terminal/tickets/pagar")
 def terminal_pagar(datos: LlaveIn, db=Depends(get_db), terminal=Depends(terminal_actual),
                    operador=Depends(operador_actual)):
+    # APK instalada: no exige flag nuevo. Permite MI CAJA negativa (deuda contable).
     return servicios.pagar_ticket(
         db, datos.id, datos.serial, terminal.sucursal_id,
         terminal.id, operador.id, operacion_id=datos.operacion_id,
         exigir_vendedor_id=operador.id,
+        confirmar_caja_negativa=datos.confirmar_caja_negativa,
+        exigir_confirmacion_deuda=False,
     )
 
 

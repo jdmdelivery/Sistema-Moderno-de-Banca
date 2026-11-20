@@ -11,7 +11,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
-<link rel="stylesheet" href="/static/style.css?v=perfil-ciclo-balance-4">
+<link rel="stylesheet" href="/static/style.css?v=control-cajeros-1">
 </head>
 <body class="sin-sesion">
 <div id="login" class="login-overlay" role="dialog" aria-modal="true" aria-labelledby="login-titulo">
@@ -58,6 +58,7 @@
     <div class="nav-grupo-items">
       <button type="button" class="navbtn" data-sec="usuarios"><span class="nav-ico">👤</span> Usuarios</button>
       <button type="button" class="navbtn" data-sec="ventas-cajeros"><span class="nav-ico">📊</span> Ventas por cajero</button>
+      <button type="button" class="navbtn" data-sec="control-cajeros"><span class="nav-ico">⚖</span> CONTROL DE CAJEROS</button>
     </div>
   </div>
 
@@ -280,6 +281,72 @@
   <p id="vc-periodo" class="nota"></p>
   <div id="vc-lista" class="vc-lista"></div>
 </section>
+
+<section id="sec-control-cajeros" class="seccion">
+  <div class="cc-hero">
+    <h2>CONTROL DE CAJEROS</h2>
+    <p id="cc-subtitulo" class="nota">Balances reales (MI CAJA) y métricas del período seleccionado.</p>
+  </div>
+  <div class="form cc-filtros">
+    <div class="chips cc-chips" id="cc-chips">
+      <button type="button" class="btn" data-rango="hoy">HOY</button>
+      <button type="button" class="btn" data-rango="ayer">AYER</button>
+      <button type="button" class="btn" data-rango="15d">15 DÍAS</button>
+    </div>
+    <label>DESDE<input id="cc-desde" type="date"></label>
+    <label>HASTA<input id="cc-hasta" type="date"></label>
+    <button type="button" id="btn-cc-actualizar" class="btn primario">ACTUALIZAR</button>
+    <p id="cc-msg" class="msg"></p>
+  </div>
+  <div id="cc-tarjetas" class="cc-tarjetas" aria-live="polite"></div>
+  <p id="cc-nota-balance" class="nota"></p>
+  <div class="cc-tabla-wrap">
+    <table class="tabla cc-tabla" id="cc-tabla">
+      <thead>
+        <tr>
+          <th>CAJERO</th>
+          <th>VENTAS</th>
+          <th>PREMIOS PAGADOS</th>
+          <th>ENTREGADO AL ADMIN</th>
+          <th>NETO A ENTREGAR</th>
+          <th>AJUSTES</th>
+          <th>BALANCE REAL</th>
+          <th>ACCIÓN</th>
+        </tr>
+      </thead>
+      <tbody id="cc-tbody"></tbody>
+    </table>
+  </div>
+  <div id="cc-cards-movil" class="cc-cards-movil" hidden></div>
+  <h3 class="cc-hist-titulo">Historial de ajustes</h3>
+  <div id="cc-historial" class="cc-historial"></div>
+</section>
+
+<div id="cc-modal" class="modal" hidden>
+  <div class="modal-caja cc-modal-caja">
+    <div class="modal-cab">
+      <h3 id="cc-modal-titulo">AJUSTAR BALANCE DEL CAJERO</h3>
+      <button type="button" id="cc-modal-cerrar" class="btn chico" aria-label="Cerrar">Cerrar</button>
+    </div>
+    <div class="modal-cuerpo cc-modal-cuerpo">
+      <p id="cc-aj-info" class="nota"></p>
+      <div class="form">
+        <label>Balance negativo actual<input id="cc-aj-balance" type="text" readonly></label>
+        <label>MONTO DEL AJUSTE<input id="cc-aj-monto" type="number" min="0.01" step="0.01"></label>
+        <label>MOTIVO DEL AJUSTE<input id="cc-aj-motivo" maxlength="200" placeholder="Ajuste de banca negativa"></label>
+        <label>NUEVO BALANCE (vista previa)<input id="cc-aj-nuevo" type="text" readonly></label>
+        <input type="hidden" id="cc-aj-usuario-id">
+        <input type="hidden" id="cc-aj-balance-visto">
+        <input type="hidden" id="cc-aj-operacion">
+        <p id="cc-aj-msg" class="msg"></p>
+        <div class="cc-modal-acciones">
+          <button type="button" id="cc-aj-cancelar" class="btn">CANCELAR</button>
+          <button type="button" id="cc-aj-aplicar" class="btn primario">APLICAR AJUSTE</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div id="vc-modal" class="modal" hidden>
   <div class="modal-caja vc-modal-caja">
@@ -685,6 +752,6 @@
 </section>
 </main>
 
-<script src="/static/app.js?v=perfil-ciclo-balance-4"></script>
+<script src="/static/app.js?v=control-cajeros-1"></script>
 </body>
 </html>

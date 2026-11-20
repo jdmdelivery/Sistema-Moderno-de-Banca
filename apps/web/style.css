@@ -561,3 +561,58 @@ body.usuarios-movil .usu-tabla-escritorio{display:none !important}
   .modal{align-items:center}
   .modal-caja{border-radius:16px}
 }
+
+/* ---------- CONTROL DE CAJEROS ---------- */
+.cc-hero h2{margin:0 0 4px;letter-spacing:.04em}
+.cc-filtros{align-items:end;margin-bottom:12px}
+.cc-chips{display:flex;flex-wrap:wrap;gap:8px;width:100%}
+.cc-tarjetas{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+  gap:10px;margin:8px 0 14px;
+}
+.cc-tabla-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:8px 0 18px;border:1px solid var(--borde);border-radius:12px}
+.cc-tabla{width:100%;border-collapse:collapse;min-width:920px;background:var(--panel)}
+.cc-tabla th{
+  background:linear-gradient(180deg,#102744 0%,#0b1c33 100%);
+  color:var(--sidebar-texto);font-size:12px;letter-spacing:.03em;
+  padding:10px 8px;text-align:left;white-space:nowrap;border-bottom:1px solid #1a3a5c;
+}
+.cc-tabla td{padding:10px 8px;border-bottom:1px solid var(--borde);font-size:13px;vertical-align:middle}
+.cc-fila-deuda{background:rgba(229,83,75,.12)}
+.cc-fila-deuda:hover{background:rgba(229,83,75,.18)}
+.cc-pos{color:var(--verde) !important}
+.cc-neg{color:var(--rojo) !important}
+.cc-cero{color:var(--texto)}
+.cc-meta{color:var(--suave);font-size:11.5px}
+.cc-tag{
+  display:inline-block;margin-top:4px;padding:2px 8px;border-radius:6px;
+  font-size:11px;font-weight:700;letter-spacing:.04em;
+}
+.cc-tag.deuda{background:rgba(229,83,75,.22);color:#ffb4af}
+.cc-tag.positivo{background:rgba(47,191,113,.18);color:#9af0c0}
+.cc-tag.cuadrado{background:rgba(158,184,166,.16);color:#cfe0d5}
+.cc-acciones{display:flex;flex-wrap:wrap;gap:6px}
+.cc-cards-movil{display:none;flex-direction:column;gap:12px;margin:8px 0 18px}
+.cc-card{
+  background:linear-gradient(180deg,#1a2820 0%,#142019 100%);
+  border:1px solid #2c4234;border-radius:14px;padding:12px 14px;
+}
+.cc-card.deuda{border-color:rgba(229,83,75,.45);background:linear-gradient(180deg,#2a1818 0%,#1a1414 100%)}
+.cc-card-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+.cc-card-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.cc-card-grid .k{display:block;color:var(--suave);font-size:11px}
+.cc-card-grid b{font-size:14px}
+.cc-hist-titulo{margin:18px 0 8px;font-size:15px}
+.cc-historial{margin-bottom:24px}
+.cc-modal-caja{width:min(520px,100%)}
+.cc-modal-acciones{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.cc-modal-acciones .btn{flex:1;min-height:44px}
+@media(max-width:720px){
+  .cc-tabla-wrap{display:none}
+  .cc-cards-movil{display:flex}
+  .cc-tarjetas{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .cc-acciones .btn{flex:1;min-height:44px}
+}
+@media(min-width:721px){
+  .cc-cards-movil{display:none !important}
+}

@@ -334,6 +334,7 @@ function ir(sec) {
   const cargar = {
     inicio: cargarInicio, super: cargarSuperAdmin, sucursales: cargarSucursales, terminales: cargarTerminales,
     usuarios: cargarUsuarios, "ventas-cajeros": cargarVentasCajeros,
+    "control-cajeros": cargarControlCajeros,
     sorteos: cargarSorteos, tabla: cargarTabla,
     limites: cargarLimites, resultados: cargarResultados, tickets: cargarTicketsLista,
     fuente: cargarFuente, ganadores: cargarGanadores,
@@ -979,7 +980,9 @@ function seccionActivaId() {
   const sec = document.querySelector("main .seccion.activo");
   return sec ? sec.id.replace(/^sec-/, "") : "ventas-cajeros";
 }
-function textoVolverDetalleCajero(_origen) {
+function textoVolverDetalleCajero(origen) {
+  if (origen === "control-cajeros") return "← VOLVER A CONTROL DE CAJEROS";
+  if (origen === "usuarios") return "← VOLVER A USUARIOS";
   return "← VOLVER A USUARIOS";
 }
 function htmlItemHistorialVc(filas) {
@@ -1002,8 +1005,10 @@ async function verDetalleCajero(id) {
   modal.hidden = false;
   try {
     const q = new URLSearchParams();
-    if ($("#vc-desde").value) q.set("desde", $("#vc-desde").value);
-    if ($("#vc-hasta").value) q.set("hasta", $("#vc-hasta").value);
+    const desdeDet = (SECCION_ACTIVA === "control-cajeros" ? $("#cc-desde") : $("#vc-desde"))?.value;
+    const hastaDet = (SECCION_ACTIVA === "control-cajeros" ? $("#cc-hasta") : $("#vc-hasta"))?.value;
+    if (desdeDet) q.set("desde", desdeDet);
+    if (hastaDet) q.set("hasta", hastaDet);
     const d = await api(`/reportes/ventas-cajeros/${id}?` + q.toString());
     const r = d.resumen || {};
     $("#vc-modal-titulo").textContent = `${r.nombre || "Cajero"} (${r.usuario || ""})`;
@@ -1065,7 +1070,7 @@ async function verDetalleCajero(id) {
       <div class="vc-detalle-montos">
         <div class="vc-monto-dest"><span class="k">Ventas del ciclo</span><b class="vc-card-monto">${fmt(r.ventas_ciclo != null ? r.ventas_ciclo : r.ventas_netas)}</b></div>
         <div class="vc-monto-dest"><span class="k">Premios del ciclo</span><b>${fmt(r.premios_pagados)}</b></div>
-        <div class="vc-monto-dest"><span class="k">MI CAJA</span><b>${fmt(r.mi_caja)}</b></div>
+        <div class="vc-monto-dest"><span class="k">MI CAJA</span><b class="${Number(r.mi_caja) < 0 ? "cc-neg" : "vc-card-monto"}">${fmt(r.mi_caja)}</b></div>
         <div><span class="k">Fondo asignado</span><b>${fmt(r.fondo_asignado)}</b></div>
         <div><span class="k">Entregas</span><b>${fmt(r.entregas)}</b></div>
         <div><span class="k">Tickets vigentes</span><b>${esc(r.tickets_vigentes)}</b></div>
@@ -1168,6 +1173,207 @@ function cerrarDetalleCajero() {
 window.verDetalleCajero = verDetalleCajero;
 window.cerrarDetalleCajero = cerrarDetalleCajero;
 window.eliminarUsuario = eliminarUsuario;
+
+/* ---------------------------------------------------------- control cajeros */
+let CC_AJUSTE_EN_CURSO = false;
+let CC_DATOS = null;
+
+function rangoControlCajeros(tipo) {
+  const hoy = hoyISO();
+  if (tipo === "ayer") return [sumarDias(hoy, -1), sumarDias(hoy, -1)];
+  if (tipo === "15d") return [sumarDias(hoy, -14), hoy];
+  return [hoy, hoy];
+}
+function fmtRd(n) {
+  const v = Number(n || 0);
+  const abs = Math.abs(v).toLocaleString("es-DO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (v < 0 ? "-RD$" : "RD$") + abs;
+}
+function etiquetaEstadoCc(estado) {
+  if (estado === "deuda") return '<span class="cc-tag deuda">DEUDA</span>';
+  if (estado === "positivo") return '<span class="cc-tag positivo">POSITIVO</span>';
+  return '<span class="cc-tag cuadrado">CUADRADO</span>';
+}
+function filaControlCajero(c) {
+  const bal = Number(c.balance_real || 0);
+  const clsBal = bal < 0 ? "cc-neg" : (bal > 0 ? "cc-pos" : "cc-cero");
+  const filaCls = bal < 0 ? "cc-fila-deuda" : "";
+  const accion = bal < 0
+    ? `<button type="button" class="btn primario cc-btn-ajustar" data-ajustar="${c.usuario_id}">AJUSTAR</button>
+       <button type="button" class="btn cc-btn-ver" data-ver="${c.usuario_id}">VER</button>`
+    : `<button type="button" class="btn cc-btn-ver" data-ver="${c.usuario_id}">VER</button>`;
+  return `<tr class="${filaCls}">
+    <td><b>${esc(c.nombre)}</b><br><span class="cc-meta">${esc(c.usuario)} · ${esc(c.sucursal)}</span><br>${etiquetaEstadoCc(c.estado)}</td>
+    <td>${fmtRd(c.ventas)}</td>
+    <td>${fmtRd(c.premios_pagados)}</td>
+    <td>${fmtRd(c.entregado_admin)}</td>
+    <td>${fmtRd(c.neto_periodo)}</td>
+    <td>${fmtRd(c.ajustes)}</td>
+    <td class="${clsBal}"><b>${fmtRd(c.balance_real)}</b></td>
+    <td class="cc-acciones">${accion}</td>
+  </tr>`;
+}
+function tarjetaMovilControl(c) {
+  const bal = Number(c.balance_real || 0);
+  const clsBal = bal < 0 ? "cc-neg" : (bal > 0 ? "cc-pos" : "cc-cero");
+  const accion = bal < 0
+    ? `<button type="button" class="btn primario cc-btn-ajustar" data-ajustar="${c.usuario_id}">AJUSTAR</button>
+       <button type="button" class="btn cc-btn-ver" data-ver="${c.usuario_id}">VER</button>`
+    : `<button type="button" class="btn cc-btn-ver" data-ver="${c.usuario_id}">VER</button>`;
+  return `<article class="cc-card${bal < 0 ? " deuda" : ""}">
+    <div class="cc-card-head"><b>${esc(c.nombre)}</b>${etiquetaEstadoCc(c.estado)}</div>
+    <div class="cc-card-grid">
+      <div><span class="k">Ventas</span><b>${fmtRd(c.ventas)}</b></div>
+      <div><span class="k">Premios</span><b>${fmtRd(c.premios_pagados)}</b></div>
+      <div><span class="k">Entregado</span><b>${fmtRd(c.entregado_admin)}</b></div>
+      <div><span class="k">Neto período</span><b>${fmtRd(c.neto_periodo)}</b></div>
+      <div><span class="k">Ajustes</span><b>${fmtRd(c.ajustes)}</b></div>
+      <div><span class="k">Balance real</span><b class="${clsBal}">${fmtRd(c.balance_real)}</b></div>
+    </div>
+    <div class="cc-acciones">${accion}</div>
+  </article>`;
+}
+async function cargarControlCajeros() {
+  if (!$("#cc-desde").value || !$("#cc-hasta").value) {
+    const [d, h] = rangoControlCajeros("hoy");
+    $("#cc-desde").value = d;
+    $("#cc-hasta").value = h;
+  }
+  await refrescarControlCajeros();
+}
+async function refrescarControlCajeros() {
+  const q = new URLSearchParams();
+  if ($("#cc-desde").value) q.set("desde", $("#cc-desde").value);
+  if ($("#cc-hasta").value) q.set("hasta", $("#cc-hasta").value);
+  try {
+    const datos = await api("/control-cajeros?" + q.toString());
+    CC_DATOS = datos;
+    const r = datos.resumen || {};
+    $("#cc-subtitulo").textContent =
+      `${datos.sucursal || "Sucursal"} · ${r.total_cajeros || 0} cajero(s) · ` +
+      `Balance total ${fmtRd(r.balance_total)}` +
+      (datos.es_prueba ? " · PRUEBA" : "");
+    $("#cc-tarjetas").innerHTML = `
+      <div class="card"><div class="num">${esc(r.total_cajeros)}</div><div class="lbl">Total cajeros</div></div>
+      <div class="card"><div class="num cc-pos">${esc(r.cajeros_positivos)}</div><div class="lbl">Positivos</div></div>
+      <div class="card"><div class="num cc-neg">${esc(r.cajeros_negativos)}</div><div class="lbl">Negativos</div></div>
+      <div class="card"><div class="num">${fmtRd(r.ventas_totales)}</div><div class="lbl">Ventas del período</div></div>
+      <div class="card"><div class="num">${fmtRd(r.premios_pagados)}</div><div class="lbl">Premios del período</div></div>
+      <div class="card"><div class="num ${Number(r.balance_total) < 0 ? "cc-neg" : "cc-pos"}">${fmtRd(r.balance_total)}</div><div class="lbl">Balance total (MI CAJA)</div></div>`;
+    $("#cc-nota-balance").textContent = datos.nota_balance || "";
+    const filas = datos.cajeros || [];
+    $("#cc-tbody").innerHTML = filas.length
+      ? filas.map(filaControlCajero).join("")
+      : '<tr><td colspan="8">Sin cajeros en el alcance.</td></tr>';
+    $("#cc-cards-movil").innerHTML = filas.length
+      ? filas.map(tarjetaMovilControl).join("")
+      : '<p class="nota">Sin cajeros en el alcance.</p>';
+    $$(".cc-btn-ver").forEach((b) => b.addEventListener("click", () => verDetalleCajero(Number(b.dataset.ver))));
+    $$(".cc-btn-ajustar").forEach((b) => b.addEventListener("click", () => abrirModalAjusteCc(Number(b.dataset.ajustar))));
+    const hist = await api("/control-cajeros/ajustes");
+    $("#cc-historial").innerHTML = (hist || []).length
+      ? `<div class="cc-tabla-wrap"><table class="tabla"><thead><tr>
+          <th>Fecha</th><th>Cajero</th><th>Admin</th><th>Anterior</th><th>Ajuste</th><th>Posterior</th><th>Motivo</th><th>Op.</th>
+        </tr></thead><tbody>${hist.map((h) => `<tr>
+          <td>${esc(h.creado_en || "")}</td>
+          <td>${esc(h.cajera)}</td>
+          <td>${esc(h.administrador)}</td>
+          <td class="cc-neg">${fmtRd(h.balance_anterior)}</td>
+          <td>${fmtRd(h.monto)}</td>
+          <td>${fmtRd(h.balance_posterior)}</td>
+          <td>${esc(h.motivo)}</td>
+          <td class="cc-meta">${esc(h.operacion_id)}</td>
+        </tr>`).join("")}</tbody></table></div>`
+      : '<p class="nota">Sin ajustes registrados.</p>';
+    msg("#cc-msg", "");
+  } catch (e) {
+    msg("#cc-msg", e.message, false);
+  }
+}
+function abrirModalAjusteCc(usuarioId) {
+  const c = (CC_DATOS && CC_DATOS.cajeros || []).find((x) => Number(x.usuario_id) === Number(usuarioId));
+  if (!c || Number(c.balance_real) >= 0) {
+    alert("Solo se ajustan cajeros con balance negativo.");
+    return;
+  }
+  const deuda = Math.abs(Number(c.balance_real));
+  $("#cc-modal-titulo").textContent = "AJUSTAR BALANCE DEL CAJERO";
+  $("#cc-aj-info").textContent = `Cajero: ${c.nombre} · Sucursal: ${c.sucursal}`;
+  $("#cc-aj-balance").value = fmtRd(c.balance_real);
+  $("#cc-aj-monto").value = deuda.toFixed(2);
+  $("#cc-aj-motivo").value = "Ajuste de banca negativa.";
+  $("#cc-aj-usuario-id").value = String(c.usuario_id);
+  $("#cc-aj-balance-visto").value = String(c.balance_real);
+  $("#cc-aj-operacion").value = ("aj-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)).slice(0, 40);
+  $("#cc-aj-msg").textContent = "";
+  actualizarPreviewAjusteCc();
+  $("#cc-modal").hidden = false;
+  CC_AJUSTE_EN_CURSO = false;
+  const btn = $("#cc-aj-aplicar");
+  if (btn) btn.disabled = false;
+}
+function actualizarPreviewAjusteCc() {
+  const bal = Number($("#cc-aj-balance-visto").value || 0);
+  const monto = Number($("#cc-aj-monto").value || 0);
+  const nuevo = bal + monto;
+  $("#cc-aj-nuevo").value = fmtRd(nuevo);
+  const deuda = Math.abs(Math.min(bal, 0));
+  if (!(monto > 0) || monto > deuda + 0.009) {
+    msg("#cc-aj-msg", monto > deuda ? "El ajuste no puede superar la deuda vigente." : "Indique un monto mayor que cero.", false);
+  } else {
+    msg("#cc-aj-msg", "");
+  }
+}
+function cerrarModalAjusteCc() {
+  const modal = $("#cc-modal");
+  if (modal) modal.hidden = true;
+}
+async function aplicarAjusteCc() {
+  if (CC_AJUSTE_EN_CURSO) return;
+  const usuarioId = Number($("#cc-aj-usuario-id").value);
+  const monto = Number($("#cc-aj-monto").value);
+  const motivo = ($("#cc-aj-motivo").value || "").trim();
+  const balanceVisto = Number($("#cc-aj-balance-visto").value);
+  const operacionId = $("#cc-aj-operacion").value;
+  const deuda = Math.abs(Math.min(balanceVisto, 0));
+  if (!(monto > 0) || monto > deuda + 0.009) {
+    msg("#cc-aj-msg", "Monto inválido para la deuda vigente.", false);
+    return;
+  }
+  if (motivo.length < 3) {
+    msg("#cc-aj-msg", "Indique el motivo del ajuste.", false);
+    return;
+  }
+  const ok = confirm(
+    `¿Confirmar ajuste contable?\n\n` +
+    `Balance actual: ${fmtRd(balanceVisto)}\n` +
+    `Monto del ajuste: ${fmtRd(monto)}\n` +
+    `Nuevo balance: ${fmtRd(balanceVisto + monto)}\n\n` +
+    `No entrega efectivo físico ni toca el Banco General.`,
+  );
+  if (!ok) return;
+  CC_AJUSTE_EN_CURSO = true;
+  const btn = $("#cc-aj-aplicar");
+  if (btn) btn.disabled = true;
+  try {
+    await post("/control-cajeros/ajuste", {
+      usuario_id: usuarioId,
+      monto,
+      motivo,
+      operacion_id: operacionId,
+      balance_visto: balanceVisto,
+    });
+    cerrarModalAjusteCc();
+    await refrescarControlCajeros();
+    msg("#cc-msg", "Ajuste aplicado. Tabla y tarjetas actualizadas.");
+  } catch (e) {
+    msg("#cc-aj-msg", e.message, false);
+    CC_AJUSTE_EN_CURSO = false;
+    if (btn) btn.disabled = false;
+  }
+}
+window.abrirModalAjusteCc = abrirModalAjusteCc;
+window.cerrarModalAjusteCc = cerrarModalAjusteCc;
 
 /* ------------------------------------------------------------------ sorteos */
 async function cargarSorteos() {
@@ -1473,8 +1679,34 @@ async function consultarTicket() {
 }
 async function pagarTicketPanel() {
   try {
-    const d = await post("/panel/tickets/pagar", { ...llaveTicket(), sucursal_id: parseInt($("#tic-sucursal").value) });
-    pintarTicket(d); msg("#tic-msg", `Ticket PAGADO ✔ ${fmt(d.premio_total)}`);
+    const consulta = await post("/panel/tickets/consultar", llaveTicket());
+    const premio = Number(consulta.premio_pendiente || consulta.importe_a_cobrar || 0);
+    const miCaja = Number(consulta.mi_caja || 0);
+    const excede = !!consulta.premio_excede_mi_caja || (premio > miCaja);
+    const despues = consulta.mi_caja_despues_si_paga != null
+      ? Number(consulta.mi_caja_despues_si_paga)
+      : (miCaja - premio);
+    let texto =
+      `¿Confirmar pago de ${fmt(premio)}?\n` +
+      `MI CAJA actual: ${fmt(miCaja)}\n`;
+    if (excede) {
+      texto +=
+        `\nEl premio supera MI CAJA.\n` +
+        `Si continúa, MI CAJA quedará en ${fmt(despues)} (deuda contable).\n` +
+        `No inventa efectivo físico ni genera ajuste automático.\n\n` +
+        `¿Confirma el pago de todas formas?`;
+    } else {
+      texto += `\n¿Registrar el pago?`;
+    }
+    if (!confirm(texto)) return;
+    const d = await post("/panel/tickets/pagar", {
+      ...llaveTicket(),
+      sucursal_id: parseInt($("#tic-sucursal").value),
+      confirmar_caja_negativa: excede ? true : false,
+    });
+    const cajaTxt = d.mi_caja != null ? ` · MI CAJA ${fmt(d.mi_caja)}` : "";
+    pintarTicket(d);
+    msg("#tic-msg", `Ticket PAGADO ✔ ${fmt(d.premio_total || premio)}${cajaTxt}`);
   } catch (e) { msg("#tic-msg", e.message, false); }
 }
 async function anularTicketPanel() {
@@ -2149,6 +2381,20 @@ document.addEventListener("DOMContentLoaded", () => {
       refrescarVentasCajeros();
     }));
   }
+  if ($("#btn-cc-actualizar")) $("#btn-cc-actualizar").addEventListener("click", () => refrescarControlCajeros());
+  if ($("#cc-chips")) {
+    $$("#cc-chips .btn").forEach((b) => b.addEventListener("click", () => {
+      const [d, h] = rangoControlCajeros(b.dataset.rango);
+      $("#cc-desde").value = d; $("#cc-hasta").value = h;
+      $$("#cc-chips .btn").forEach((x) => x.classList.toggle("activo", x === b));
+      refrescarControlCajeros();
+    }));
+  }
+  if ($("#cc-aj-monto")) $("#cc-aj-monto").addEventListener("input", actualizarPreviewAjusteCc);
+  if ($("#cc-aj-aplicar")) $("#cc-aj-aplicar").addEventListener("click", () => aplicarAjusteCc().catch((e) => msg("#cc-aj-msg", e.message, false)));
+  if ($("#cc-aj-cancelar")) $("#cc-aj-cancelar").addEventListener("click", cerrarModalAjusteCc);
+  if ($("#cc-modal-cerrar")) $("#cc-modal-cerrar").addEventListener("click", cerrarModalAjusteCc);
+  if ($("#cc-modal")) $("#cc-modal").addEventListener("click", (e) => { if (e.target === $("#cc-modal")) cerrarModalAjusteCc(); });
   if ($("#vc-modal-cerrar")) $("#vc-modal-cerrar").addEventListener("click", cerrarDetalleCajero);
   if ($("#vc-modal-volver")) $("#vc-modal-volver").addEventListener("click", cerrarDetalleCajero);
   if ($("#vc-modal")) $("#vc-modal").addEventListener("click", (e) => { if (e.target === $("#vc-modal")) cerrarDetalleCajero(); });

@@ -205,7 +205,8 @@ def test_qn_pl_sp_pago_unico_y_correccion(entorno, monkeypatch, fijar_hora):
     assert entorno.saldo(sucursal_id) == 5764
 
 
-def test_premio_mayor_que_mi_caja_no_cobra_ni_toca_la_general(entorno, monkeypatch):
+def test_premio_mayor_que_mi_caja_paga_y_deja_deuda_sin_tocar_general(entorno, monkeypatch):
+    """MI CAJA puede quedar negativa; Banco General de prueba no se toca; sin ajuste auto."""
     monkeypatch.setenv("MODO_DESARROLLO", "true")
     b = entorno.banca(saldo=5764, nombre="BANCA CASTILLO (PRUEBA)", usuario="jose", clave="prueba123")
     headers = b["headers"]
@@ -217,13 +218,25 @@ def test_premio_mayor_que_mi_caja_no_cobra_ni_toca_la_general(entorno, monkeypat
     assert consulta["puede_pagar"] is True
     assert consulta["veredicto"] == "TICKET GANADOR — PENDIENTE DE PAGO — NO OFICIAL"
     assert float(consulta["premio_total"]) == 600
+    assert consulta["premio_excede_mi_caja"] is True
+    assert float(consulta["mi_caja"]) == 10
+    assert float(consulta["mi_caja_despues_si_paga"]) == -590
     assert "saldo" not in consulta and "saldo_restante" not in consulta
-    pago = _pagar(entorno, headers, ticket, "pago-insuficiente")
-    assert pago.status_code == 409
-    assert "No se pagó" in pago.json()["detail"]
-    assert entorno.saldo(b["sucursal"]["id"]) == 5764
-    assert float(entorno.c.get("/terminal/sorteos", headers=headers).json()["mi_caja"]) == 10
-    otra = _pagar(entorno, headers, ticket, "pago-insuficiente-2")
+    general_antes = entorno.saldo(b["sucursal"]["id"])
+    pago = _pagar(entorno, headers, ticket, "pago-deuda-contable")
+    assert pago.status_code == 200, pago.text
+    cuerpo = pago.json()
+    assert cuerpo["estado"] == "pagado"
+    assert cuerpo["deuda_contable"] is True
+    assert float(cuerpo["mi_caja"]) == -590
+    assert entorno.saldo(b["sucursal"]["id"]) == general_antes
+    assert float(entorno.c.get("/terminal/sorteos", headers=headers).json()["mi_caja"]) == -590
+    # Duplicado: no cobra otra vez.
+    otra = _pagar(entorno, headers, ticket, "pago-deuda-contable-2")
     assert otra.status_code == 409
-    assert _consultar(entorno, headers, ticket)["estado"] == "ganador"
-    assert entorno.saldo(b["sucursal"]["id"]) == 5764
+    assert float(entorno.c.get("/terminal/sorteos", headers=headers).json()["mi_caja"]) == -590
+    assert entorno.saldo(b["sucursal"]["id"]) == general_antes
+    # Sin ajuste automático.
+    hist = entorno.c.get("/control-cajeros/ajustes", headers=entorno.admin)
+    assert hist.status_code == 200
+    assert all(h.get("usuario") != "jose" or "pago-deuda" not in (h.get("motivo") or "") for h in hist.json())

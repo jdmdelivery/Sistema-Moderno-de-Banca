@@ -35,6 +35,7 @@ from .models import (
     LiquidacionComision,
     PagoComision,
     CierreCicloCajera,
+    AjusteCajaCajera,
     MovimientoCajera,
     MovimientoSaldo,
     Resultado,
@@ -1275,7 +1276,10 @@ def _exigir_vendedor_ticket(ticket, exigir_vendedor_id):
         raise ErrorServicio(403, MSG_TICKET_OTRA_CAJERA)
 
 
-def consultar_ticket(db, ticket_id, serial, operacion_comprobante=None, exigir_vendedor_id=None):
+def consultar_ticket(
+    db, ticket_id, serial, operacion_comprobante=None, exigir_vendedor_id=None,
+    caja_usuario_id=None,
+):
     ticket = buscar_ticket(db, ticket_id, serial)
     _exigir_vendedor_ticket(ticket, exigir_vendedor_id)
     datos = ticket_a_dict(db, ticket)
@@ -1369,6 +1373,12 @@ def consultar_ticket(db, ticket_id, serial, operacion_comprobante=None, exigir_v
                 "fallback": "comprobante",
                 "operacion_id": pago_datos["operacion_id"],
             }
+    # Aviso de deuda contable (MI CAJA) — no bloquea; la UI confirma el pago.
+    uid_caja = caja_usuario_id or exigir_vendedor_id or ticket.usuario_id
+    cajero_caja = db.get(Usuario, uid_caja) if uid_caja else None
+    if cajero_caja is not None and D(datos.get("premio_pendiente") or 0) > 0:
+        datos.update(_aviso_caja_negativa(mi_caja_de(cajero_caja), datos["premio_pendiente"]))
+        datos.update(indicadores_caja(db, cajero_caja))
     return datos
 
 
@@ -1437,11 +1447,39 @@ def _premios_sin_cobrar(ticket):
     ]
 
 
-def _cobrar_premios(db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, operacion_id, prueba):
+def _aviso_caja_negativa(mi_caja, premio):
+    """Metadatos de deuda contable si el premio supera MI CAJA (sin inventar efectivo)."""
+    mi = D(mi_caja)
+    pr = D(premio)
+    despues = mi - pr
+    excede = pr > mi
+    return {
+        "mi_caja": str(mi),
+        "premio_a_pagar": str(pr),
+        "mi_caja_despues_si_paga": str(despues),
+        "premio_excede_mi_caja": excede,
+        "deuda_contable_si_paga": str(D(abs(despues))) if despues < 0 else "0.00",
+        "aviso_caja_negativa": (
+            f"MI CAJA tiene ${mi} y el premio es ${pr}. "
+            f"Si confirma el pago, MI CAJA quedará en ${despues} (deuda contable). "
+            "No inventa efectivo físico ni descuenta dos veces el Banco General."
+            if excede else None
+        ),
+    }
+
+
+def _cobrar_premios(
+    db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, operacion_id, prueba,
+    confirmar_caja_negativa=None, exigir_confirmacion_deuda=False,
+):
     """Cobra, una sola vez, los premios ya comparados con un resultado.
 
     Los sorteos sin resultado se quedan fuera. Dos cajeros que escanean el
     mismo ticket reservan las jugadas con una sola actualización.
+
+    MI CAJA puede quedar negativa tras un premio válido (deuda contable).
+    No se genera ajuste automático. El Banco General real sigue requiriendo
+    fondos suficientes; en modo prueba no se toca.
     """
     if ticket.estado in ("anulado", "vencido", "pagado"):
         _error_no_pagable(db, ticket)
@@ -1474,20 +1512,24 @@ def _cobrar_premios(db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, o
             )
     premio = sum((D(j.premio) for j in pendientes), D(0))
     caja_real = D(sucursal.saldo_actual) if sucursal is not None else D(0)
-    if prueba:
-        caja_prueba = D(cajero.saldo_caja_prueba or 0) if cajero is not None else D(0)
-        if cajero is None or caja_prueba < premio:
-            auditar(db, "ticket", ticket.id, "pago_bloqueado", usuario_id=usuario_id,
-                    terminal_id=terminal_id,
-                    detalle={"motivo": "caja_prueba_insuficiente", "premio": str(premio),
-                             "caja_prueba": str(caja_prueba), "es_prueba": True})
-            db.commit()
-            raise ErrorServicio(
-                409,
-                f"La caja de prueba tiene ${caja_prueba} y el premio simulado es ${premio}. "
-                "No se pagó y la caja real no se tocó.",
-            )
-    else:
+    if cajero is None:
+        raise ErrorServicio(400, "No hay cajero autenticado para registrar el pago")
+    mi_caja = mi_caja_de(cajero)
+    aviso = _aviso_caja_negativa(mi_caja, premio)
+    if aviso["premio_excede_mi_caja"] and exigir_confirmacion_deuda and not confirmar_caja_negativa:
+        auditar(
+            db, "ticket", ticket.id, "pago_requiere_confirmacion_deuda",
+            usuario_id=usuario_id, terminal_id=terminal_id,
+            detalle={**aviso, "es_prueba": bool(prueba)},
+        )
+        db.commit()
+        raise ErrorServicio(
+            409,
+            (aviso["aviso_caja_negativa"] or "")
+            + " Confirme el pago con confirmar_caja_negativa=true.",
+        )
+    if not prueba:
+        # Consorcio: sin efectivo en Banco General el premio queda pendiente.
         if sucursal is None or caja_real < premio:
             auditar(db, "ticket", ticket.id, "pago_bloqueado", usuario_id=usuario_id,
                     terminal_id=terminal_id,
@@ -1561,6 +1603,8 @@ def _cobrar_premios(db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, o
         ticket.pagado_por_usuario_id = usuario_id
         ticket.pagado_en = ahora
         ticket.pago_operacion_id = op
+    cajero_despues = db.get(Usuario, usuario_id)
+    mi_despues = mi_caja_de(cajero_despues)
     auditar(
         db, "ticket", ticket.id, accion, usuario_id=usuario_id, terminal_id=terminal_id,
         detalle={
@@ -1568,6 +1612,11 @@ def _cobrar_premios(db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, o
             "empresa": sucursal.nombre if sucursal else "",
             "sucursal_pagadora": sucursal_pagadora_id,
             "no_oficial": prueba,
+            "mi_caja_antes": str(mi_caja),
+            "mi_caja_despues": str(mi_despues),
+            "deuda_contable": mi_despues < 0,
+            "ajuste_automatico": False,
+            "descuenta_caja_general": not prueba,
             "jugadas": [
                 {
                     "loteria": " · ".join(
@@ -1587,12 +1636,21 @@ def _cobrar_premios(db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, o
     )
     db.commit()
     db.expire_all()
-    return _respuesta_pago(db, ticket.id, ticket.serial, usuario_id, operacion_id=op)
+    resp = _respuesta_pago(db, ticket.id, ticket.serial, usuario_id, operacion_id=op)
+    resp["deuda_contable"] = mi_despues < 0
+    resp["mi_caja_antes_pago"] = str(mi_caja)
+    return resp
 
 
-def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuario_id,
-                 operacion_id=None, exigir_vendedor_id=None):
-    """Cobra los premios disponibles de un ticket. Un segundo intento no los cobra otra vez."""
+def pagar_ticket(
+    db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuario_id,
+    operacion_id=None, exigir_vendedor_id=None,
+    confirmar_caja_negativa=None, exigir_confirmacion_deuda=False,
+):
+    """Cobra los premios disponibles de un ticket. Un segundo intento no los cobra otra vez.
+
+    Permite que MI CAJA quede negativa (deuda contable). No crea ajuste automático.
+    """
     ticket = buscar_ticket(db, ticket_id, serial)
     _exigir_vendedor_ticket(ticket, exigir_vendedor_id)
     if operacion_id:
@@ -1607,9 +1665,13 @@ def pagar_ticket(db, ticket_id, serial, sucursal_pagadora_id, terminal_id, usuar
             raise ErrorServicio(409, "Ticket de prueba: no se paga y no afecta la caja")
         return _cobrar_premios(
             db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, operacion_id, True,
+            confirmar_caja_negativa=confirmar_caja_negativa,
+            exigir_confirmacion_deuda=exigir_confirmacion_deuda,
         )
     return _cobrar_premios(
         db, ticket, sucursal_pagadora_id, terminal_id, usuario_id, operacion_id, False,
+        confirmar_caja_negativa=confirmar_caja_negativa,
+        exigir_confirmacion_deuda=exigir_confirmacion_deuda,
     )
 
 
@@ -2658,6 +2720,7 @@ def indicadores_caja(db, usuario):
             "fondo_inicial": None,
             "fondo_asignado": cero,
             "entregas_ciclo": cero,
+            "ajustes_ciclo": cero,
             "cuadre": cero,
             "diferencia": cero,
             "es_prueba": modo_desarrollo(),
@@ -2671,13 +2734,18 @@ def indicadores_caja(db, usuario):
         restas = ("anulacion_prueba", "pago_premio_prueba")
         fondos = ("fondo_prueba",)
         entregas_tipos = ("entrega_prueba",)
-        otra = ("venta", "anulacion", "pago_premio", "fondo_general", "entrega")
+        ajustes_tipos = ("ajuste_banca_negativa_prueba",)
+        otra = ("venta", "anulacion", "pago_premio", "fondo_general", "entrega", "ajuste_banca_negativa")
     else:
         ventas = ("venta",)
         restas = ("anulacion", "pago_premio")
         fondos = ("fondo_general",)
         entregas_tipos = ("entrega",)
-        otra = ("venta_prueba", "anulacion_prueba", "pago_premio_prueba", "fondo_prueba", "entrega_prueba")
+        ajustes_tipos = ("ajuste_banca_negativa",)
+        otra = (
+            "venta_prueba", "anulacion_prueba", "pago_premio_prueba", "fondo_prueba",
+            "entrega_prueba", "ajuste_banca_negativa_prueba",
+        )
     marca = usuario.ciclo_caja_prueba_movimiento_id if prueba else usuario.ciclo_caja_movimiento_id
     q = db.query(MovimientoCajera).filter(MovimientoCajera.usuario_id == usuario.id)
     if marca:
@@ -2685,6 +2753,7 @@ def indicadores_caja(db, usuario):
     recaudacion = D(0)
     fondo = D(0)
     entregas = D(0)
+    ajustes = D(0)
     for mov in q.all():
         tipo = str(mov.tipo)
         monto = D(mov.monto)
@@ -2698,7 +2767,10 @@ def indicadores_caja(db, usuario):
             fondo += monto
         elif tipo in entregas_tipos:
             entregas += monto
-    cuadre = fondo + recaudacion - entregas
+        elif tipo in ajustes_tipos:
+            ajustes += monto
+    # MI CAJA = fondo + recaudación − entregas + ajustes de banca negativa (sin Banco General).
+    cuadre = fondo + recaudacion - entregas + ajustes
     # PAGAR en terminal = solo premios del usuario autenticado (no hereda la sucursal).
     mios = _premios_pendientes_filtro(db, sucursal_id=usuario.sucursal_id, usuario_id=usuario.id)
     sucursal_pend = None
@@ -2725,10 +2797,293 @@ def indicadores_caja(db, usuario):
         "fondo_inicial": None,
         "fondo_asignado": str(fondo),
         "entregas_ciclo": str(entregas),
+        "ajustes_ciclo": str(ajustes),
         "cuadre": str(cuadre),
         "diferencia": str(saldo - cuadre),
         "es_prueba": prueba,
     }
+
+
+def ajuste_caja_a_dict(db, fila):
+    cajera = db.get(Usuario, fila.usuario_id)
+    admin = db.get(Usuario, fila.autorizado_por)
+    suc = db.get(Sucursal, fila.sucursal_id)
+    return {
+        "id": fila.id,
+        "operacion_id": fila.operacion_id,
+        "usuario_id": fila.usuario_id,
+        "cajera": cajera.nombre if cajera else "",
+        "usuario": cajera.usuario if cajera else "",
+        "sucursal_id": fila.sucursal_id,
+        "sucursal": suc.nombre if suc else "",
+        "autorizado_por": fila.autorizado_por,
+        "administrador": admin.nombre if admin else "",
+        "monto": str(D(fila.monto)),
+        "balance_anterior": str(D(fila.balance_anterior)),
+        "balance_posterior": str(D(fila.balance_posterior)),
+        "motivo": fila.motivo or "",
+        "movimiento_id": fila.movimiento_id,
+        "es_prueba": bool(fila.es_prueba),
+        "creado_en": fila.creado_en.isoformat(sep=" ") if fila.creado_en else None,
+        "descuenta_caja_general": False,
+        "es_venta": False,
+        "es_premio": False,
+        "es_fondo": False,
+    }
+
+
+def _entregas_periodo_cajero(db, cajero_id, desde, hasta, prueba):
+    ini = datetime.combine(desde, time.min)
+    fin = datetime.combine(hasta, time.max)
+    q = db.query(Entrega).filter(
+        Entrega.usuario_id == cajero_id,
+        Entrega.es_prueba.is_(bool(prueba)),
+        Entrega.creado_en >= ini,
+        Entrega.creado_en <= fin,
+    )
+    return D(sum((D(e.monto) for e in q.all()), D(0)))
+
+
+def control_cajeros(db, admin, desde, hasta, sucursal_id=None):
+    """Panel CONTROL DE CAJEROS: métricas de período + BALANCE REAL = MI CAJA."""
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
+        raise ErrorServicio(403, "Solo un administrador puede ver el control de cajeros")
+    if hasta < desde:
+        raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+    sid = perm.resolver_filtro_sucursal(db, admin, sucursal_id)
+    prueba = modo_desarrollo()
+    q = db.query(Usuario).filter(Usuario.rol == "operador", Usuario.activo.is_(True))
+    if sid is not None:
+        q = q.filter(Usuario.sucursal_id == sid)
+    filas = []
+    tot_ventas = D(0)
+    tot_premios = D(0)
+    tot_balance = D(0)
+    n_pos = n_neg = n_cero = 0
+    for cajero in q.order_by(Usuario.nombre).all():
+        if cajero.sucursal_id is None:
+            continue
+        perm.assert_usuario_en_alcance(db, admin, cajero)
+        periodo = _periodo_ventas_cajero(db, cajero, desde, hasta, prueba)
+        caja = indicadores_caja(db, cajero)
+        balance = D(caja["mi_caja"])
+        entregado = _entregas_periodo_cajero(db, cajero.id, desde, hasta, prueba)
+        ventas = D(periodo["ventas_netas"])
+        premios = D(periodo["premios_pagados"])
+        neto = D(ventas - premios)
+        ajustes = D(caja.get("ajustes_ciclo") or 0)
+        if balance < 0:
+            estado = "deuda"
+            n_neg += 1
+        elif balance > 0:
+            estado = "positivo"
+            n_pos += 1
+        else:
+            estado = "cuadrado"
+            n_cero += 1
+        suc = db.get(Sucursal, cajero.sucursal_id)
+        filas.append({
+            "usuario_id": cajero.id,
+            "nombre": cajero.nombre,
+            "usuario": cajero.usuario,
+            "sucursal_id": cajero.sucursal_id,
+            "sucursal": suc.nombre if suc else "",
+            "ventas": str(ventas),
+            "premios_pagados": str(premios),
+            "entregado_admin": str(D(entregado)),
+            "neto_periodo": str(neto),
+            "ajustes": str(ajustes),
+            "balance_real": str(balance),
+            "fondo_asignado": caja["fondo_asignado"],
+            "estado": estado,
+            "puede_ajustar": balance < 0,
+            "mi_caja": str(balance),
+        })
+        tot_ventas += ventas
+        tot_premios += premios
+        tot_balance += balance
+    # Negativos primero, luego nombre.
+    filas.sort(key=lambda f: (0 if f["estado"] == "deuda" else 1 if f["estado"] == "positivo" else 2, f["nombre"]))
+    suc_nombre = ""
+    if sid is not None:
+        s = db.get(Sucursal, sid)
+        suc_nombre = s.nombre if s else ""
+    elif admin.sucursal_id:
+        s = db.get(Sucursal, admin.sucursal_id)
+        suc_nombre = s.nombre if s else ""
+    else:
+        suc_nombre = "Todas las sucursales"
+    return {
+        "desde": desde.isoformat(),
+        "hasta": hasta.isoformat(),
+        "zona": "America/Santo_Domingo",
+        "sucursal_id": sid,
+        "sucursal": suc_nombre,
+        "es_prueba": prueba,
+        "resumen": {
+            "total_cajeros": len(filas),
+            "cajeros_positivos": n_pos,
+            "cajeros_negativos": n_neg,
+            "cajeros_cuadrados": n_cero,
+            "ventas_totales": str(D(tot_ventas)),
+            "premios_pagados": str(D(tot_premios)),
+            "balance_total": str(D(tot_balance)),
+        },
+        "cajeros": filas,
+        "nota_balance": (
+            "BALANCE REAL = MI CAJA actual (acumulado). "
+            "Ventas/premios/entregas/neto son del período filtrado."
+        ),
+    }
+
+
+def aplicar_ajuste_banca_negativa(db, admin, usuario_id, monto, motivo, operacion_id, balance_visto):
+    """Ajuste contable hasta cubrir deuda (máx. a RD$0). No toca Banco General."""
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
+        raise ErrorServicio(403, "Solo un administrador puede ajustar banca negativa")
+    op = (operacion_id or "").strip()
+    if not op or len(op) > 40:
+        raise ErrorServicio(400, "operacion_id inválido")
+    previa = db.query(AjusteCajaCajera).filter_by(operacion_id=op).first()
+    if previa is not None:
+        return ajuste_caja_a_dict(db, previa)
+
+    importe = D(monto)
+    if importe <= 0:
+        raise ErrorServicio(400, "El monto del ajuste debe ser mayor que cero")
+    motivo_txt = (motivo or "").strip()
+    if len(motivo_txt) < 3:
+        raise ErrorServicio(400, "Indique el motivo del ajuste")
+    if len(motivo_txt) > 200:
+        raise ErrorServicio(400, "Motivo demasiado largo")
+
+    # Bloqueo de fila: dos admins no pueden ajustar el mismo cajero a la vez.
+    cajero = (
+        db.query(Usuario)
+        .filter(Usuario.id == usuario_id)
+        .with_for_update()
+        .first()
+    )
+    if cajero is None or cajero.rol != "operador" or not cajero.activo or not cajero.sucursal_id:
+        raise ErrorServicio(400, "Seleccione un cajero activo")
+    perm.assert_usuario_en_alcance(db, admin, cajero)
+
+    sucursal = db.get(Sucursal, cajero.sucursal_id)
+    general_antes = D(sucursal.saldo_actual) if sucursal is not None else None
+    real_antes = D(cajero.saldo_caja or 0)
+    prueba_antes = D(cajero.saldo_caja_prueba or 0)
+
+    prueba = modo_desarrollo()
+    balance = mi_caja_de(cajero)
+    visto = D(balance_visto)
+    if D(abs(balance - visto)) > D("0.009"):
+        raise ErrorServicio(
+            409,
+            f"El balance cambió (actual {balance}). Cierre y vuelva a confirmar el ajuste.",
+        )
+    if balance >= 0:
+        raise ErrorServicio(400, "Solo se puede ajustar cajeros con balance negativo")
+    deuda = D(abs(balance))
+    if importe > deuda:
+        raise ErrorServicio(400, f"El ajuste no puede superar la deuda vigente ({deuda})")
+
+    tipo_mov = "ajuste_banca_negativa_prueba" if prueba else "ajuste_banca_negativa"
+    bolsa = "prueba" if prueba else "real"
+    mov = mover_caja_cajera(
+        db, cajero.id, cajero.sucursal_id, tipo_mov, importe, op, 1,
+        motivo=motivo_txt, bolsa=bolsa,
+    )
+    if mov is None:
+        db.rollback()
+        raise ErrorServicio(409, "No se pudo registrar el ajuste en el cajón")
+    mov.creado_en = ahora_local()
+    db.flush()
+    db.expire(cajero)
+    cajero = db.get(Usuario, usuario_id)
+    nuevo = mi_caja_de(cajero)
+    if nuevo > 0:
+        db.rollback()
+        raise ErrorServicio(400, "El ajuste no puede dejar el balance positivo")
+    if prueba:
+        if D(cajero.saldo_caja or 0) != real_antes:
+            db.rollback()
+            raise ErrorServicio(500, "Un ajuste de prueba no puede mover la caja real")
+        if D(cajero.saldo_caja_prueba or 0) != prueba_antes + importe:
+            db.rollback()
+            raise ErrorServicio(409, "El cajón de prueba cambió. No se aplicó el ajuste.")
+    else:
+        if D(cajero.saldo_caja or 0) != real_antes + importe:
+            db.rollback()
+            raise ErrorServicio(409, "El cajón real cambió. No se aplicó el ajuste.")
+        if D(cajero.saldo_caja_prueba or 0) != prueba_antes:
+            db.rollback()
+            raise ErrorServicio(500, "Un ajuste real no puede mover la caja de prueba")
+    if sucursal is not None:
+        db.expire(sucursal)
+        sucursal = db.get(Sucursal, cajero.sucursal_id)
+        if D(sucursal.saldo_actual) != general_antes:
+            db.rollback()
+            raise ErrorServicio(500, "El ajuste no puede tocar el Banco General")
+
+    fila = AjusteCajaCajera(
+        operacion_id=op,
+        usuario_id=cajero.id,
+        sucursal_id=cajero.sucursal_id,
+        autorizado_por=admin.id,
+        monto=importe,
+        balance_anterior=balance,
+        balance_posterior=nuevo,
+        motivo=motivo_txt,
+        movimiento_id=mov.id if mov is not None else None,
+        es_prueba=prueba,
+        creado_en=ahora_local(),
+    )
+    db.add(fila)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        previa = db.query(AjusteCajaCajera).filter_by(operacion_id=op).first()
+        if previa is not None:
+            return ajuste_caja_a_dict(db, previa)
+        raise ErrorServicio(409, "Esa operación ya se registró. No se ajustó de nuevo.")
+    auditar(
+        db, "ajuste_caja", fila.id, "ajuste_banca_negativa", usuario_id=admin.id,
+        detalle={
+            "cajera_id": cajero.id,
+            "monto": str(importe),
+            "anterior": str(balance),
+            "posterior": str(nuevo),
+            "operacion_id": op,
+            "descuenta_caja_general": False,
+        },
+    )
+    db.commit()
+    db.refresh(fila)
+    return ajuste_caja_a_dict(db, fila)
+
+
+def listar_ajustes_caja(db, admin, sucursal_id=None, usuario_id=None):
+    from . import permisos as perm
+
+    if admin is None or not perm.es_admin_panel(admin):
+        raise ErrorServicio(403, "Solo un administrador puede ver el historial de ajustes")
+    sid = perm.resolver_filtro_sucursal(db, admin, sucursal_id)
+    prueba = modo_desarrollo()
+    q = db.query(AjusteCajaCajera).filter(AjusteCajaCajera.es_prueba.is_(bool(prueba)))
+    if sid is not None:
+        q = q.filter(AjusteCajaCajera.sucursal_id == sid)
+    if usuario_id is not None:
+        cajero = db.get(Usuario, usuario_id)
+        if cajero is None:
+            raise ErrorServicio(404, "Cajero no encontrado")
+        perm.assert_usuario_en_alcance(db, admin, cajero)
+        q = q.filter(AjusteCajaCajera.usuario_id == usuario_id)
+    return [ajuste_caja_a_dict(db, f) for f in q.order_by(AjusteCajaCajera.id.desc()).limit(200).all()]
 
 
 def _premios_pendientes_filtro(db, sucursal_id=None, usuario_id=None):
