@@ -6950,17 +6950,82 @@ def filtros_ventas_resumido(db, admin):
     }
 
 
+def _jugada_premio_completo_valido(db, ticket, jugada):
+    """Premio ganador válido para Ventas Resumido: importe completo, una sola vez.
+
+    Entra pagado, parcial o pendiente. El pendiente exige resultado que lo respalde.
+    """
+    if ticket.estado == "anulado":
+        return False
+    if not jugada.evaluada or jugada.premio is None or D(jugada.premio) <= 0:
+        return False
+    if jugada.pagada:
+        return True
+    sorteos = [jugada.sorteo_id]
+    if jugada.sorteo2_id:
+        sorteos.append(jugada.sorteo2_id)
+    for sorteo_id in sorteos:
+        if not sorteo_id:
+            continue
+        fila = db.query(Resultado).filter_by(sorteo_id=sorteo_id, fecha=jugada.fecha).first()
+        if fila is None or fila.estado == "error_fuente":
+            return False
+        if fila.fuente == "simulado":
+            if not ticket.es_prueba or fila.estado not in (
+                "propuesto", "en_verificacion", "confirmado", "liquidado",
+            ):
+                return False
+        elif not ticket.es_prueba and fila.estado not in ("confirmado", "liquidado"):
+            return False
+    return True
+
+
+def _premios_ganadores_resumido(db, desde, hasta, prueba, sucursal_id=None, usuario_id=None):
+    """Suma el premio completo de cada jugada ganadora válida de tickets del rango.
+
+    Fecha = venta del ticket (no la de pago). Cada jugada cuenta una sola vez,
+    esté pagada, parcial o pendiente. No escribe datos.
+    """
+    q = (
+        db.query(Ticket)
+        .filter(
+            Ticket.fecha >= desde,
+            Ticket.fecha <= hasta,
+            Ticket.es_prueba.is_(prueba),
+            Ticket.estado != "anulado",
+        )
+        .order_by(Ticket.id)
+    )
+    if sucursal_id is not None:
+        q = q.filter(Ticket.sucursal_vendedora_id == sucursal_id)
+    if usuario_id is not None:
+        q = q.filter(Ticket.usuario_id == usuario_id)
+    total = D(0)
+    for ticket in q.all():
+        hubo = False
+        for jugada in ticket.jugadas:
+            if not _jugada_premio_completo_valido(db, ticket, jugada):
+                continue
+            total += D(jugada.premio)
+            hubo = True
+        if hubo:
+            continue
+        # Histórico: ticket pagado con premio en cabecera y sin jugadas evaluadas.
+        if ticket.estado == "pagado" and D(ticket.premio_total or 0) > 0:
+            total += D(ticket.premio_total)
+    return D(total)
+
+
 def _desglose_cajeros_resumido(db, sucursal, desde, hasta, prueba):
     """Cajeros bajo una banca. No entra en el subtotal de la banca.
 
     Venta y comisión: tickets no anulados del rango, con el % del perfil
-    vigente al momento de cada venta. Premios: lo que esa cajera confirmó
-    en el rango, por fecha de pago, incluidos los abonos parciales y quien
-    pagó sin vender. Los premios pendientes no entran.
+    vigente al momento de cada venta. Premios: importe completo de cada
+    premio ganador válido de los tickets que vendió (pagado, parcial o
+    pendiente), una sola vez. Resultado = Neto − Premios.
     """
-    inicio = datetime.combine(desde, time.min)
-    fin = datetime.combine(hasta, time.min) + timedelta(days=1)
     ventas = {}
+    premios = {}
     tickets = (
         db.query(Ticket)
         .filter(
@@ -6986,56 +7051,21 @@ def _desglose_cajeros_resumido(db, sucursal, desde, hasta, prueba):
         clave = str(pct)
         item["grupos"][clave] = item["grupos"].get(clave, D(0)) + D(ticket.total)
 
-    premios = {}
-
-    def _sumar_premio(uid, monto):
-        if not uid or D(monto) == 0:
-            return
-        usuario = db.get(Usuario, uid)
-        if usuario is None or usuario.sucursal_id != sucursal.id:
-            return
-        fila = premios.setdefault(uid, {"nombre": usuario.nombre, "monto": D(0)})
-        fila["monto"] += D(monto)
-
-    jugadas = (
-        db.query(Jugada, Ticket)
-        .join(Ticket, Jugada.ticket_id == Ticket.id)
-        .filter(
-            Ticket.es_prueba.is_(prueba),
-            Jugada.pagada.is_(True),
-            Jugada.pagado_por_usuario_id.isnot(None),
-            Jugada.pagado_en.isnot(None),
-            Jugada.pagado_en >= inicio,
-            Jugada.pagado_en < fin,
-        )
-        .all()
-    )
-    tickets_con_abono = set()
-    for jugada, ticket in jugadas:
-        pagador = db.get(Usuario, jugada.pagado_por_usuario_id)
-        if pagador is None or pagador.sucursal_id != sucursal.id:
-            continue
-        tickets_con_abono.add(ticket.id)
-        _sumar_premio(pagador.id, jugada.premio or 0)
-
-    historicos = (
-        db.query(Ticket)
-        .filter(
-            Ticket.es_prueba.is_(prueba),
-            Ticket.estado == "pagado",
-            Ticket.pagado_por_usuario_id.isnot(None),
-            Ticket.pagado_en.isnot(None),
-            Ticket.pagado_en >= inicio,
-            Ticket.pagado_en < fin,
-        )
-        .all()
-    )
-    for ticket in historicos:
-        if ticket.id in tickets_con_abono:
-            continue
-        if any(j.pagada for j in ticket.jugadas):
-            continue
-        _sumar_premio(ticket.pagado_por_usuario_id, ticket.premio_total or 0)
+        premio_ticket = D(0)
+        hubo = False
+        for jugada in ticket.jugadas:
+            if not _jugada_premio_completo_valido(db, ticket, jugada):
+                continue
+            premio_ticket += D(jugada.premio)
+            hubo = True
+        if not hubo and ticket.estado == "pagado" and D(ticket.premio_total or 0) > 0:
+            premio_ticket = D(ticket.premio_total)
+        if premio_ticket > 0 and uid:
+            fila_p = premios.setdefault(uid, {
+                "nombre": usuario.nombre if usuario else None,
+                "monto": D(0),
+            })
+            fila_p["monto"] += premio_ticket
 
     salida = []
     total_comision = D(0)
@@ -7071,10 +7101,11 @@ def _desglose_cajeros_resumido(db, sucursal, desde, hasta, prueba):
 
 
 def _fila_banca_resumido(db, sucursal, desde, hasta, prueba):
-    """Una fila contable por banca. Fórmulas LotoBet / panel aprobado:
+    """Una fila contable por banca. Fórmulas del reporte Ventas Resumido:
 
     Neto = Venta − Comisión (comisión = % de la sucursal × venta)
-    Resultado lotería = Neto − Premios pagados (caja de esa banca, fecha de pago)
+    Premios = importe completo de cada premio ganador válido del rango (una vez)
+    Resultado lotería = Neto − Premios
     Recargas: no hay producto; columnas en 0 / omitidas en UI si incluye_recargas=false
     Resultado total = resultado lotería (+ recargas si existieran)
     """
@@ -7082,7 +7113,9 @@ def _fila_banca_resumido(db, sucursal, desde, hasta, prueba):
     venta = D(bloque["ventas"])
     pct = D(sucursal.comision_porcentaje)
     comision = D(venta * pct / D(100))
-    premios = D(bloque["premios_pagados"])
+    premios = _premios_ganadores_resumido(
+        db, desde, hasta, prueba, sucursal_id=sucursal.id,
+    )
     neto = D(venta - comision)
     resultado_lot = D(neto - premios)
     venta_rec = D(0)
@@ -7127,9 +7160,10 @@ def reporte_ventas_resumido(
 
     - Alcance: solo sucursales autorizadas al actor (sin mezclar empresas).
     - Ventas: tickets no anulados por fecha de venta.
-    - Premios: pagados en la banca por fecha de pago (misma regla que resumen).
+    - Premios: importe completo de cada premio ganador válido del rango (una vez),
+      pagado, parcial o pendiente; Resultado = Neto − Premios.
     - Comisión: % vigente de la sucursal × venta (igual que reporte_resumen final).
-    - Anulados no suman venta. Premios pendientes no restan (solo pagados).
+    - Anulados no suman venta.
     """
     from . import permisos as perm
 

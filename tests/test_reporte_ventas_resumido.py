@@ -119,6 +119,116 @@ def test_premios_superan_ventas_resultado_negativo(entorno):
     assert Decimal(fila["resultado_total"]) == Decimal("-591.00")
 
 
+def test_premios_completos_incluyen_pendiente_y_no_cambian_al_pagar(entorno):
+    """Aceptación: neto 72,610.25; pagados 51,250 + pendiente 5,000 → Premios 56,250.
+
+    Resultado = Neto − Premios = 16,360.25. Al pagar los 5,000 ambos importes
+    siguen iguales. Visor y PDF cuadran.
+    """
+    suc = entorno.sucursal(codigo="P562", nombre="BANCA PREMIO COMPLETO", comision=0)
+    entorno.recargar(suc["id"], 500000)
+    entorno.operador("vend562", "1234", suc["id"])
+    headers = entorno.login_terminal("vend562", "1234")
+    sorteo = entorno.sorteo_id("La Primera 12")
+
+    n = 10
+    for _ in range(14):
+        entorno.vender_ok(headers, [{
+            "tipo": "QN", "sorteos": [sorteo], "numeros": f"{n:02d}", "monto": 5000,
+        }])
+        n += 1
+    entorno.vender_ok(headers, [{
+        "tipo": "QN", "sorteos": [sorteo], "numeros": f"{n:02d}", "monto": 2600,
+    }])
+    t_pagado = entorno.vender_ok(headers, [{
+        "tipo": "QN", "sorteos": [sorteo], "numeros": "03", "monto": 5,
+    }])
+    t_pend = entorno.vender_ok(headers, [{
+        "tipo": "QN", "sorteos": [sorteo], "numeros": "04", "monto": 5,
+    }])
+    # 14×5000 + 2600 + 5 + 5 = 72,610.00; el +0.25 se ajusta en BD.
+    entorno.liquidar(sorteo, 3, 4, 45)
+
+    pago = entorno.c.post(
+        "/panel/tickets/pagar",
+        json={"id": t_pagado["id"], "serial": t_pagado["serial"], "sucursal_id": suc["id"]},
+        headers=entorno.admin,
+    )
+    assert pago.status_code == 200, pago.text
+
+    db = dbmod.nueva_sesion()
+    try:
+        for tid, monto in ((t_pagado["id"], "51250"), (t_pend["id"], "5000")):
+            ticket = db.get(Ticket, tid)
+            ticket.premio_total = D(monto)
+            for jugada in ticket.jugadas:
+                if jugada.evaluada and D(jugada.premio or 0) > 0:
+                    jugada.premio = D(monto)
+        # Centavos del neto de aceptación sin romper el mínimo de jugada.
+        ajuste = db.get(Ticket, t_pend["id"])
+        ajuste.total = D(ajuste.total) + D("0.25")
+        db.commit()
+    finally:
+        db.close()
+
+    def leer():
+        r = entorno.c.get(
+            f"/reportes/ventas-resumido?desde=2026-11-14&hasta=2026-11-14&sucursal_id={suc['id']}",
+            headers=entorno.admin,
+        )
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    datos = leer()
+    fila = _fila(datos, "BANCA PREMIO COMPLETO")
+    assert Decimal(fila["loteria"]["venta"]) == Decimal("72610.25")
+    assert Decimal(fila["loteria"]["neto"]) == Decimal("72610.25")
+    assert Decimal(fila["loteria"]["premios"]) == Decimal("56250.00")
+    assert Decimal(fila["loteria"]["resultado"]) == Decimal("16360.25")
+    assert Decimal(datos["total"]["loteria"]["premios"]) == Decimal("56250.00")
+    assert Decimal(datos["total"]["loteria"]["resultado"]) == Decimal("16360.25")
+    cajero = fila["cajeros"][0]
+    assert Decimal(cajero["neto"]) == Decimal("72610.25")
+    assert Decimal(cajero["premios"]) == Decimal("56250.00")
+    assert Decimal(cajero["resultado"]) == Decimal("16360.25")
+
+    pdf = entorno.c.get(
+        f"/reportes/ventas-resumido.pdf?desde=2026-11-14&hasta=2026-11-14"
+        f"&sucursal_id={suc['id']}&desglose=cajeros",
+        headers=entorno.admin,
+    )
+    assert pdf.status_code == 200, pdf.text
+    texto = "\n".join(_texto(_pdf(pdf.content)))
+    assert formato_monto("56250.00") in texto
+    assert formato_monto("16360.25") in texto
+    assert formato_monto("72610.25") in texto
+
+    # Simula el cobro de los RD$5,000.00 en datos locales (sin alterar el factor).
+    db = dbmod.nueva_sesion()
+    try:
+        pendiente = db.get(Ticket, t_pend["id"])
+        for jugada in pendiente.jugadas:
+            if jugada.evaluada and D(jugada.premio or 0) > 0 and not jugada.pagada:
+                jugada.pagada = True
+                jugada.pagado_en = datetime(2026, 11, 14, 18, 0)
+                jugada.pagado_por_usuario_id = pendiente.usuario_id
+        pendiente.estado = "pagado"
+        pendiente.premio_total = D("5000")
+        pendiente.pagado_en = datetime(2026, 11, 14, 18, 0)
+        pendiente.pagado_por_usuario_id = pendiente.usuario_id
+        pendiente.pagado_en_sucursal_id = suc["id"]
+        db.commit()
+    finally:
+        db.close()
+
+    datos2 = leer()
+    fila2 = _fila(datos2, "BANCA PREMIO COMPLETO")
+    assert Decimal(fila2["loteria"]["premios"]) == Decimal("56250.00")
+    assert Decimal(fila2["loteria"]["resultado"]) == Decimal("16360.25")
+    assert Decimal(fila2["cajeros"][0]["premios"]) == Decimal("56250.00")
+    assert Decimal(fila2["cajeros"][0]["resultado"]) == Decimal("16360.25")
+
+
 def test_rango_fechas_sin_ventas(entorno):
     b = entorno.banca(saldo=5000, codigo="VR40", nombre="BANCA VACIA", usuario="vrv1")
     r = entorno.c.get(
@@ -543,7 +653,8 @@ def test_columnas_cajero_comision_perfil_y_premios_pagados(entorno):
     parcial = entorno.vender_ok(banca["headers"], [
         {"tipo": "QN", "sorteos": [s12, s7], "numeros": "25", "monto": 5},
     ])
-    entorno.liquidar(s12, 25, 1, 2)
+    # 98/99 evitan que las ventas 01–04 del rango entren como premios pendientes.
+    entorno.liquidar(s12, 25, 98, 99)
     pago_isa = entorno.c.post("/terminal/tickets/pagar", json={
         "id": parcial["id"], "serial": parcial["serial"], "confirmar_caja_negativa": True,
     }, headers=banca["headers"])
@@ -552,7 +663,7 @@ def test_columnas_cajero_comision_perfil_y_premios_pagados(entorno):
     completo = entorno.vender_ok(hw, [{
         "tipo": "QN", "sorteos": [suerte], "numeros": "33", "monto": 5,
     }])
-    entorno.liquidar(suerte, 33, 4, 8)
+    entorno.liquidar(suerte, 33, 97, 96)
     pago_w = entorno.c.post("/terminal/tickets/pagar", json={
         "id": completo["id"], "serial": completo["serial"], "confirmar_caja_negativa": True,
     }, headers=hw)
@@ -564,9 +675,14 @@ def test_columnas_cajero_comision_perfil_y_premios_pagados(entorno):
         wanda_u = db.query(Usuario).filter_by(usuario="wanda").one()
         isaury.nombre = "Isaury"
         wanda_u.nombre = "Wanda"
+        ids_premio = {parcial["id"], completo["id"]}
         for ticket in db.query(Ticket).filter(Ticket.sucursal_vendedora_id == sucursal_id):
             if D(ticket.total) >= 1000:
                 ticket.fecha = date(2026, 11, 18)
+            elif ticket.id in ids_premio:
+                # Entran al rango por fecha de venta; su monto no altera el caso 34,633.
+                ticket.fecha = date(2026, 11, 18)
+                ticket.total = D(0)
         for jugada in db.query(Jugada).filter(Jugada.pagada.is_(True)):
             if jugada.pagado_por_usuario_id == isaury.id:
                 jugada.premio = D("12040")
@@ -589,6 +705,8 @@ def test_columnas_cajero_comision_perfil_y_premios_pagados(entorno):
     assert Decimal(fila["loteria"]["venta"]) == Decimal("34633.00")
     assert Decimal(fila["loteria"]["comision"]) == Decimal("3463.30")
     assert Decimal(fila["loteria"]["neto"]) == Decimal("31169.70")
+    assert Decimal(fila["loteria"]["premios"]) == Decimal("29440.00")
+    assert Decimal(fila["loteria"]["resultado"]) == Decimal("1729.70")
     por_nombre = {c["nombre"]: c for c in fila["cajeros"]}
     assert set(por_nombre) == {"Isaury", "Wanda"}
     isa = por_nombre["Isaury"]
@@ -649,16 +767,17 @@ def test_columnas_cajero_comision_perfil_y_premios_pagados(entorno):
     dia = detalle("2026-11-18", "2026-11-18")
     assert dia["resultado_periodo"]["desde"] == dia["resultado_periodo"]["hasta"] == "2026-11-18"
     assert Decimal(dia["resultado_periodo"]["ventas_validas"]) == Decimal("14633.00")
-    assert Decimal(dia["resultado_periodo"]["premios_pagados"]) == Decimal("0.00")
+    # Mismo desglose que Ventas Resumido: premio completo por fecha de venta.
+    assert Decimal(dia["resultado_periodo"]["premios_pagados"]) == Decimal("17400.00")
     assert Decimal(dia["resultado_periodo"]["comision"]) == Decimal("2194.95")
-    assert Decimal(dia["resultado_periodo"]["quedo"]) == Decimal("12438.05")
+    assert Decimal(dia["resultado_periodo"]["quedo"]) == Decimal("-4961.95")
     assert dia["resumen"]["mi_caja"] == rango["resumen"]["mi_caja"]
     assert dia["resumen"]["ventas_ciclo"] == rango["resumen"]["ventas_ciclo"]
     otro = detalle("2026-11-19", "2026-11-19")
     assert Decimal(otro["resultado_periodo"]["ventas_validas"]) == Decimal("0.00")
-    assert Decimal(otro["resultado_periodo"]["premios_pagados"]) == Decimal("17400.00")
+    assert Decimal(otro["resultado_periodo"]["premios_pagados"]) == Decimal("0.00")
     assert Decimal(otro["resultado_periodo"]["comision"]) == Decimal("0.00")
-    assert Decimal(otro["resultado_periodo"]["quedo"]) == Decimal("-17400.00")
+    assert Decimal(otro["resultado_periodo"]["quedo"]) == Decimal("0.00")
     invertido = entorno.c.get(
         f"/reportes/ventas-cajeros/{wanda['id']}?desde=2026-11-19&hasta=2026-11-18",
         headers=entorno.admin,
@@ -666,7 +785,8 @@ def test_columnas_cajero_comision_perfil_y_premios_pagados(entorno):
     assert invertido.status_code == 400
 
 
-def test_cajero_sin_venta_entra_por_premio_y_no_mezcla_prueba(entorno, monkeypatch):
+def test_pago_fuera_del_rango_de_venta_no_mueve_premios_del_resumido(entorno, monkeypatch):
+    """Premios del resumido siguen la fecha de venta, no la de pago."""
     banca = entorno.banca(saldo=50000, codigo="C19", nombre="BANCA PAGO SOLO", usuario="vende")
     sid = banca["sucursal"]["id"]
     solo = entorno.operador("solopago", "1234", sid)
@@ -698,14 +818,8 @@ def test_cajero_sin_venta_entra_por_premio_y_no_mezcla_prueba(entorno, monkeypat
     assert r.status_code == 200, r.text
     fila = _fila(r.json(), "BANCA PAGO SOLO")
     assert Decimal(fila["loteria"]["venta"]) == Decimal("0.00")
-    assert [c["nombre"] for c in fila["cajeros"]] == ["Operador solopago"]
-    cajero = fila["cajeros"][0]
-    assert cajero["usuario_id"] == solo["id"]
-    assert Decimal(cajero["venta"]) == Decimal("0.00")
-    assert Decimal(cajero["comision"]) == Decimal("0.00")
-    assert Decimal(cajero["premios"]) == Decimal("600.00")
-    assert Decimal(cajero["neto"]) == Decimal("0.00")
-    assert Decimal(cajero["resultado"]) == Decimal("-600.00")
+    assert Decimal(fila["loteria"]["premios"]) == Decimal("0.00")
+    assert fila["cajeros"] == []
 
     abierto = entorno.sorteo_id("Florida Día")
     entorno.vender_ok(banca["headers"], [{
