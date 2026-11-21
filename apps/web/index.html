@@ -11,7 +11,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
-<link rel="stylesheet" href="/static/style.css?v=premios-pendientes-1">
+<link rel="stylesheet" href="/static/style.css?v=movil-safari-2">
 </head>
 <body class="sin-sesion">
 <div id="login" class="login-overlay" role="dialog" aria-modal="true" aria-labelledby="login-titulo">
@@ -53,15 +53,6 @@
     </div>
   </div>
 
-  <div class="nav-grupo abierto" data-grupo="cajeros">
-    <button type="button" class="nav-grupo-titulo" aria-expanded="true">Cajeros</button>
-    <div class="nav-grupo-items">
-      <button type="button" class="navbtn" data-sec="usuarios"><span class="nav-ico">👤</span> Usuarios</button>
-      <button type="button" class="navbtn" data-sec="ventas-cajeros"><span class="nav-ico">📊</span> Ventas por cajero</button>
-      <button type="button" class="navbtn" data-sec="control-cajeros"><span class="nav-ico">⚖</span> CONTROL DE CAJEROS</button>
-    </div>
-  </div>
-
   <div class="nav-grupo abierto" data-grupo="operaciones">
     <button type="button" class="nav-grupo-titulo" aria-expanded="true">Operaciones</button>
     <div class="nav-grupo-items">
@@ -73,13 +64,11 @@
     </div>
   </div>
 
-  <div class="nav-grupo abierto" data-grupo="config">
-    <button type="button" class="nav-grupo-titulo" aria-expanded="true">Configuración de banca</button>
+  <div class="nav-grupo abierto" data-grupo="personal">
+    <button type="button" class="nav-grupo-titulo" aria-expanded="true">Personal</button>
     <div class="nav-grupo-items">
-      <button type="button" class="navbtn" data-sec="tabla"><span class="nav-ico">＃</span> Tabla de pagos</button>
-      <button type="button" class="navbtn" data-sec="limites"><span class="nav-ico">⚙</span> Límites</button>
-      <button type="button" class="navbtn" data-sec="comisiones"><span class="nav-ico">%</span> Comisiones</button>
-      <button type="button" class="navbtn" data-sec="diseno-ticket" data-solo-admin><span class="nav-ico">🖨</span> Diseño de ticket</button>
+      <button type="button" class="navbtn" data-sec="usuarios"><span class="nav-ico">👤</span> Usuarios</button>
+      <button type="button" class="navbtn" data-sec="control-cajeros"><span class="nav-ico">⚖</span> CONTROL DE CAJEROS</button>
     </div>
   </div>
 
@@ -87,6 +76,24 @@
     <button type="button" class="nav-grupo-titulo" aria-expanded="true">Reportes</button>
     <div class="nav-grupo-items">
       <button type="button" class="navbtn" data-sec="reportes"><span class="nav-ico">☰</span> Reportes de la sucursal</button>
+      <div class="nav-sub" data-sub="centro-ventas">
+        <button type="button" class="nav-sub-titulo" aria-expanded="false">Centro de ventas resumida</button>
+        <div class="nav-sub-items">
+          <button type="button" class="navbtn" data-sec="ventas-resumido"><span class="nav-ico">▤</span> Lotería · Ventas resumido</button>
+          <button type="button" class="navbtn" data-sec="reporte-tickets"><span class="nav-ico">▤</span> Reporte de Tickets</button>
+        </div>
+      </div>
+      <button type="button" class="navbtn" data-sec="ventas-cajeros"><span class="nav-ico">📊</span> Ventas por cajero</button>
+    </div>
+  </div>
+
+  <div class="nav-grupo abierto" data-grupo="config">
+    <button type="button" class="nav-grupo-titulo" aria-expanded="true">Configuración</button>
+    <div class="nav-grupo-items">
+      <button type="button" class="navbtn" data-sec="tabla"><span class="nav-ico">＃</span> Tabla de pagos</button>
+      <button type="button" class="navbtn" data-sec="limites"><span class="nav-ico">⚙</span> Límites</button>
+      <button type="button" class="navbtn" data-sec="comisiones"><span class="nav-ico">%</span> Comisiones</button>
+      <button type="button" class="navbtn" data-sec="diseno-ticket" data-solo-admin><span class="nav-ico">🖨</span> Diseño de ticket</button>
     </div>
   </div>
 
@@ -104,6 +111,7 @@
 </nav>
 
 <main class="panel-principal">
+  <button type="button" id="btn-volver-pantalla" class="btn barra-volver" hidden>Volver</button>
 <section id="sec-diseno-ticket" class="seccion">
   <h2>Diseño de ticket (impresión servidor)</h2>
   <p class="nota">Controla el formato 384 px que imprimirán las APK nuevas. No modifica jugadas, premios ni el QR LOT:id:serial. Las APK antiguas siguen con el formato local de respaldo.</p>
@@ -533,7 +541,7 @@
     <div class="modal-caja">
       <div class="modal-cab">
         <h3>Confirmar anulación</h3>
-        <button type="button" class="btn" id="tic-anular-cancelar">CANCELAR</button>
+        <button type="button" class="btn" id="tic-anular-cancelar">Cerrar</button>
       </div>
       <div class="modal-cuerpo">
         <p id="tic-anular-resumen" class="meta"></p>
@@ -697,6 +705,164 @@
   <pre id="pen-texto" class="texto-impreso" style="display:none"></pre>
 </section>
 
+<section id="sec-ventas-resumido" class="seccion reporte-panel">
+  <div class="rvr-cab">
+    <div class="rvr-marca">BANCA MODERNA</div>
+    <h2>REPORTE DE VENTAS RESUMIDO</h2>
+  </div>
+  <div class="form rvr-filtros" id="rvr-filtros">
+    <label>Grupo
+      <select id="rvr-grupo"></select>
+    </label>
+    <label>Banca
+      <select id="rvr-banca"></select>
+    </label>
+    <label>Fecha Desde
+      <span class="rvr-fecha-caja">
+        <input id="rvr-desde" type="date" lang="es-DO">
+        <span class="rvr-fecha-vista" id="rvr-desde-vista"></span>
+      </span>
+    </label>
+    <label>Fecha Hasta
+      <span class="rvr-fecha-caja">
+        <input id="rvr-hasta" type="date" lang="es-DO">
+        <span class="rvr-fecha-vista" id="rvr-hasta-vista"></span>
+      </span>
+    </label>
+    <label id="rvr-ruta-wrap">Ruta
+      <select id="rvr-ruta"></select>
+    </label>
+    <div class="rvr-acciones-filtro">
+      <button type="button" id="btn-rvr-ver" class="btn rvr-btn-azul">VER</button>
+      <button type="button" id="btn-rvr-imprimir" class="btn rvr-btn-azul">IMPRIMIR</button>
+      <button type="button" id="btn-rvr-regresar" class="btn rvr-btn-azul">REGRESAR</button>
+    </div>
+    <p id="rvr-msg" class="msg"></p>
+  </div>
+  <div id="rvr-visor" class="rvr-visor" hidden>
+    <div class="rvr-toolbar" role="toolbar" aria-label="Controles del reporte">
+      <button type="button" id="btn-rvr-prev" class="rvr-tool" title="Página anterior">◀</button>
+      <span id="rvr-pagina" class="rvr-pagina">1 / 1</span>
+      <button type="button" id="btn-rvr-next" class="rvr-tool" title="Página siguiente">▶</button>
+      <span class="rvr-tool-sep"></span>
+      <label class="rvr-zoom-lbl">Zoom
+        <select id="rvr-zoom">
+          <option value="75">75%</option>
+          <option value="100" selected>100%</option>
+          <option value="125">125%</option>
+        </select>
+      </label>
+      <button type="button" id="btn-rvr-actualizar" class="rvr-tool" title="Actualizar">↻</button>
+      <label class="rvr-buscar-lbl">Buscar
+        <input id="rvr-buscar" type="search" placeholder="Buscar…" autocomplete="off">
+      </label>
+      <button type="button" id="btn-rvr-pdf" class="rvr-tool" title="Descargar PDF A4 horizontal">DESCARGAR PDF</button>
+      <button type="button" id="btn-rvr-print2" class="rvr-tool" title="Imprimir">🖨</button>
+    </div>
+    <div class="rvr-scroll">
+      <div id="rvr-hoja" class="rvr-hoja" data-zoom="100"></div>
+    </div>
+  </div>
+</section>
+
+<section id="sec-reporte-tickets" class="seccion reporte-panel">
+  <div class="rvr-cab">
+    <div class="rvr-marca">BANCA MODERNA</div>
+    <h2>REPORTE DE TICKETS</h2>
+  </div>
+  <p class="nota">Consulta de tickets vendidos. No paga, no anula y no cambia el recibo.</p>
+  <div class="form rvr-filtros" id="rtk-filtros">
+    <label>Grupo
+      <select id="rtk-grupo"></select>
+    </label>
+    <label>Banca
+      <select id="rtk-banca"></select>
+    </label>
+    <label>Fecha Desde
+      <span class="rvr-fecha-caja">
+        <input id="rtk-desde" type="date" lang="es-DO">
+        <span class="rvr-fecha-vista" id="rtk-desde-vista"></span>
+      </span>
+    </label>
+    <label>Fecha Hasta
+      <span class="rvr-fecha-caja">
+        <input id="rtk-hasta" type="date" lang="es-DO">
+        <span class="rvr-fecha-vista" id="rtk-hasta-vista"></span>
+      </span>
+    </label>
+    <label>Hora Desde
+      <input id="rtk-hora-desde" type="time" value="00:00" step="60">
+    </label>
+    <label>Hora Hasta
+      <input id="rtk-hora-hasta" type="time" value="23:59" step="60">
+    </label>
+    <label>Lotería
+      <select id="rtk-loteria"></select>
+    </label>
+    <label>Estado
+      <select id="rtk-estado">
+        <option value="">Todos</option>
+        <option value="vendido">VÁLIDOS</option>
+        <option value="ganador">GANADORES</option>
+        <option value="parcial">PARCIALMENTE PAGADOS</option>
+        <option value="pagado">PAGADOS</option>
+        <option value="anulado">ANULADOS</option>
+        <option value="no_ganador">NO GANADORES</option>
+        <option value="vencido">VENCIDOS</option>
+      </select>
+    </label>
+    <label id="rtk-ruta-wrap">Ruta
+      <select id="rtk-ruta"></select>
+    </label>
+    <label>Ordenar por
+      <select id="rtk-orden">
+        <option value="numero" selected>Número de ticket</option>
+        <option value="fecha">Fecha y hora</option>
+        <option value="banca">Banca</option>
+        <option value="monto">Total apostado</option>
+        <option value="estado">Estado</option>
+      </select>
+    </label>
+    <label>Cajero
+      <select id="rtk-cajero"></select>
+    </label>
+    <label>N.º ticket
+      <input id="rtk-numero" inputmode="numeric" autocomplete="off" placeholder="Opcional">
+    </label>
+    <div class="rvr-acciones-filtro">
+      <button type="button" id="btn-rtk-ver" class="btn rvr-btn-azul">VER</button>
+      <button type="button" id="btn-rtk-imprimir" class="btn rvr-btn-azul">IMPRIMIR</button>
+      <button type="button" id="btn-rtk-regresar" class="btn rvr-btn-azul">REGRESAR</button>
+    </div>
+    <p id="rtk-msg" class="msg"></p>
+  </div>
+  <div id="rtk-visor" class="rvr-visor" hidden>
+    <div class="rvr-toolbar" role="toolbar" aria-label="Controles del reporte de tickets">
+      <button type="button" id="btn-rtk-volver" class="rvr-tool rtk-volver" hidden>Volver al listado</button>
+      <button type="button" id="btn-rtk-prev" class="rvr-tool" title="Página anterior">◀</button>
+      <span id="rtk-pagina" class="rvr-pagina">1 / 1</span>
+      <button type="button" id="btn-rtk-next" class="rvr-tool" title="Página siguiente">▶</button>
+      <span class="rvr-tool-sep"></span>
+      <label class="rvr-zoom-lbl">Zoom
+        <select id="rtk-zoom">
+          <option value="75">75%</option>
+          <option value="100" selected>100%</option>
+          <option value="125">125%</option>
+        </select>
+      </label>
+      <button type="button" id="btn-rtk-actualizar" class="rvr-tool" title="Actualizar">↻</button>
+      <label class="rvr-buscar-lbl">Buscar
+        <input id="rtk-buscar" type="search" placeholder="N.º, banca, cajero…" autocomplete="off">
+      </label>
+      <button type="button" id="btn-rtk-pdf" class="rvr-tool" title="Descargar PDF A4 horizontal">DESCARGAR PDF</button>
+      <button type="button" id="btn-rtk-print2" class="rvr-tool" title="Imprimir">🖨</button>
+    </div>
+    <div class="rvr-scroll">
+      <div id="rtk-hoja" class="rvr-hoja" data-zoom="100"></div>
+    </div>
+  </div>
+</section>
+
 <section id="sec-fuente" class="seccion">
   <h2>Estado de resultados automáticos</h2>
   <p class="nota"><b>Fuente: Conéctate.com</b> — Sus números son información, no el resultado oficial del operador. Tres lecturas iguales y cuatro minutos estables antes de confirmar (intervalo adaptativo cerca del sorteo). Un resultado verificado no habilita pagos hasta Confirmar y liquidar. Si la fuente falla, no se inventan números.</p>
@@ -752,6 +918,6 @@
 </section>
 </main>
 
-<script src="/static/app.js?v=premios-pendientes-1"></script>
+<script src="/static/app.js?v=movil-safari-2"></script>
 </body>
 </html>

@@ -1499,6 +1499,163 @@ def reporte_pendientes(desde: str, hasta: str, sucursal_id: int, formato: str = 
     return servicios.reporte_pendientes(db, _fecha(desde), _fecha(hasta), sucursal_id)
 
 
+@app.get("/reportes/ventas-resumido/filtros")
+def reporte_ventas_resumido_filtros(db=Depends(get_db), usuario=Depends(panel_actual)):
+    """Selectores autorizados (grupos / bancas / rutas) para el reporte resumido."""
+    return servicios.filtros_ventas_resumido(db, usuario)
+
+
+@app.get("/reportes/ventas-resumido")
+def reporte_ventas_resumido(
+    desde: str,
+    hasta: str,
+    sucursal_id: int | None = None,
+    grupo_id: str | None = None,
+    ruta_id: str | None = None,
+    db=Depends(get_db),
+    usuario=Depends(panel_actual),
+):
+    """Reporte de ventas resumido por grupo y banca (Lotería). Solo lectura."""
+    return servicios.reporte_ventas_resumido(
+        db, usuario, _fecha(desde), _fecha(hasta),
+        sucursal_id=sucursal_id, grupo_id=grupo_id, ruta_id=ruta_id,
+    )
+
+
+@app.get("/reportes/ventas-resumido.pdf")
+def reporte_ventas_resumido_pdf(
+    desde: str,
+    hasta: str,
+    sucursal_id: int | None = None,
+    grupo_id: str | None = None,
+    ruta_id: str | None = None,
+    db=Depends(get_db),
+    usuario=Depends(panel_actual),
+):
+    """PDF A4 horizontal. No usa la impresora seleccionada en Windows."""
+    from . import pdf_ventas_resumido
+
+    datos = servicios.reporte_ventas_resumido(
+        db, usuario, _fecha(desde), _fecha(hasta),
+        sucursal_id=sucursal_id, grupo_id=grupo_id, ruta_id=ruta_id,
+    )
+    pdf = pdf_ventas_resumido.construir(datos)
+    nombre = f"Resumen-de-Ventas-{datos['desde']}-al-{datos['hasta']}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{nombre}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+def _parametros_reporte_tickets(
+    db, usuario, desde, hasta, sucursal_id, usuario_id, estado, ticket_id,
+    grupo_id, hora_desde, hora_hasta, sorteo_id, ruta_id, orden,
+):
+    return servicios.reporte_tickets(
+        db, usuario, _fecha(desde), _fecha(hasta),
+        sucursal_id=sucursal_id, usuario_id=usuario_id,
+        estado=estado, ticket_id=ticket_id, grupo_id=grupo_id,
+        hora_desde=hora_desde, hora_hasta=hora_hasta, sorteo_id=sorteo_id,
+        ruta_id=ruta_id, orden=orden,
+    )
+
+
+@app.get("/reportes/tickets")
+def reporte_tickets(
+    desde: str,
+    hasta: str,
+    sucursal_id: int | None = None,
+    usuario_id: int | None = None,
+    estado: str | None = None,
+    ticket_id: int | None = None,
+    grupo_id: str | None = None,
+    hora_desde: str | None = None,
+    hora_hasta: str | None = None,
+    sorteo_id: int | None = None,
+    ruta_id: str | None = None,
+    orden: str | None = None,
+    db=Depends(get_db),
+    usuario=Depends(requiere_rol("admin", "supervisor")),
+):
+    """Listado de tickets consultado. No paga ni anula."""
+    return _parametros_reporte_tickets(
+        db, usuario, desde, hasta, sucursal_id, usuario_id, estado, ticket_id,
+        grupo_id, hora_desde, hora_hasta, sorteo_id, ruta_id, orden,
+    )
+
+
+@app.get("/reportes/tickets/{ticket_id}")
+def reporte_ticket_detalle(
+    ticket_id: int,
+    db=Depends(get_db),
+    usuario=Depends(requiere_rol("admin", "supervisor")),
+):
+    """Jugadas, premios y pagos del ticket. Solo consulta."""
+    return servicios.consulta_ticket_reporte(db, usuario, ticket_id)
+
+
+@app.get("/reportes/tickets/{ticket_id}/pdf")
+def reporte_ticket_detalle_pdf(
+    ticket_id: int,
+    db=Depends(get_db),
+    usuario=Depends(requiere_rol("admin", "supervisor")),
+):
+    """PDF del detalle consultado. No usa el recibo de venta ni la impresora térmica."""
+    from . import pdf_reporte_tickets
+
+    datos = servicios.consulta_ticket_reporte(db, usuario, ticket_id)
+    pdf = pdf_reporte_tickets.construir_detalle(datos)
+    nombre = f"Ticket-{datos['id']}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{nombre}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.get("/reportes/tickets.pdf")
+def reporte_tickets_pdf(
+    desde: str,
+    hasta: str,
+    sucursal_id: int | None = None,
+    usuario_id: int | None = None,
+    estado: str | None = None,
+    ticket_id: int | None = None,
+    grupo_id: str | None = None,
+    hora_desde: str | None = None,
+    hora_hasta: str | None = None,
+    sorteo_id: int | None = None,
+    ruta_id: str | None = None,
+    orden: str | None = None,
+    db=Depends(get_db),
+    usuario=Depends(requiere_rol("admin", "supervisor")),
+):
+    """PDF A4 horizontal del último filtro consultado. No usa la impresora térmica."""
+    from . import pdf_reporte_tickets
+
+    datos = _parametros_reporte_tickets(
+        db, usuario, desde, hasta, sucursal_id, usuario_id, estado, ticket_id,
+        grupo_id, hora_desde, hora_hasta, sorteo_id, ruta_id, orden,
+    )
+    pdf = pdf_reporte_tickets.construir(datos)
+    nombre = f"Reporte-de-Tickets-{datos['desde']}-al-{datos['hasta']}.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{nombre}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 # ------------------------------------------------------------------ auditoría
 @app.get("/auditoria")
 def listar_auditoria(entidad: str | None = None, accion: str | None = None, limite: int = 100,
@@ -2124,6 +2281,31 @@ def terminal_resumen_mes(anio: int, mes: int, alcance: str = "cajero",
     # Misma regla que resumen_dia: 403 si un operador pide alcance=sucursal.
     sucursal = db.get(Sucursal, terminal.sucursal_id)
     return servicios.resumen_mes(db, anio, mes, operador, sucursal, terminal, alcance)
+
+
+@app.get("/terminal/reportes/mes/imagen")
+def terminal_resumen_mes_imagen(
+    anio: int,
+    mes: int,
+    alcance: str = "cajero",
+    db=Depends(get_db),
+    terminal=Depends(terminal_actual),
+    operador=Depends(operador_actual),
+):
+    """PNG 384 px del mes consultado. Solo lectura; no mueve saldos."""
+    from . import impresion_servidor as imp
+
+    sucursal = db.get(Sucursal, terminal.sucursal_id)
+    datos = servicios.resumen_mes(db, anio, mes, operador, sucursal, terminal, alcance)
+    try:
+        png = imp.render_resumen_datos(datos)
+    except Exception as e:
+        raise ErrorServicio(500, f"No se pudo generar la imagen del resumen: {e}")
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store", "X-Ticket-Ancho": "384"},
+    )
 
 
 @app.get("/terminal/reportes/resumen")

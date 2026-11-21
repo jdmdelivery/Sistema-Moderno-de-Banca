@@ -68,10 +68,14 @@ def test_porcentajes_distintos_cambio_anulados_y_entrega(entorno, fijar_hora):
     assert resumen["real"]["quedo"] == "150.00"
     assert resumen["comision"]["real"]["comision"] == "17.50"
     assert resumen["comision"]["real"]["tickets_anulados"] == 1
-    # El texto de caja es compacto; la comisión sigue en el JSON (panel/liquidaciones).
-    assert "VENTAS DEL DÍA: RD$150.00" in resumen["texto"]
-    assert "QUEDÓ: RD$150.00" in resumen["texto"]
-    assert "COMISI" not in resumen["texto"].upper()
+    # El quedó de la caja no resta la comisión. El informe sí usa la comisión registrada.
+    assert resumen["real"]["quedo"] == "150.00"
+    assert resumen["informe"]["oficial"]["comision"] == "17.50"
+    assert resumen["informe"]["oficial"]["balance"] == "132.50"
+    assert resumen["informe"]["oficial"]["total"] == "132.50"
+    assert "RD$150.00" in resumen["texto"]
+    assert "RD$17.50" in resumen["texto"]
+    assert "RD$132.50" in resumen["texto"]
     assert "80.00" not in resumen["comision"]["real"]["ventas_validas"]
     ajeno = _dia(entorno, otra["headers"])
     assert ajeno["real"]["ventas"] == "80.00"

@@ -7,7 +7,7 @@ import json
 import uuid
 from datetime import datetime, time, timedelta
 
-from sqlalchemy import and_, func, or_, update
+from sqlalchemy import and_, extract, func, or_, update
 from sqlalchemy.exc import IntegrityError
 
 from . import motor
@@ -3966,6 +3966,369 @@ def listar_tickets_panel(
     }
 
 
+_ESTADOS_REPORTE_TICKETS = (
+    "vendido", "ganador", "parcial", "pagado", "anulado", "no_ganador", "vencido",
+)
+_ETIQUETA_ESTADO_TICKET = {
+    "vendido": "Válidos",
+    "ganador": "Ganadores",
+    "parcial": "Parcialmente pagados",
+    "pagado": "Pagados",
+    "anulado": "Anulados",
+    "no_ganador": "No ganadores",
+    "vencido": "Vencidos",
+}
+_ORDEN_GRUPO_TICKET = (
+    "vendido", "ganador", "parcial", "pagado", "no_ganador", "vencido", "anulado",
+)
+_ORDENES_REPORTE_TICKET = ("numero", "fecha", "banca", "monto", "estado")
+
+
+def _hhmm(valor, defecto):
+    texto = str(valor or "").strip()
+    if not texto:
+        return defecto
+    for fmt in ("%H:%M", "%H:%M:%S"):
+        try:
+            return datetime.strptime(texto, fmt).time().replace(second=0, microsecond=0)
+        except ValueError:
+            continue
+    raise ErrorServicio(400, "Hora inválida: use HH:MM")
+
+
+def _nombre_usuario(db, usuario_id):
+    if not usuario_id:
+        return ""
+    quien = db.get(Usuario, usuario_id)
+    return quien.nombre if quien else ""
+
+
+def _pagos_reporte(db, ticket):
+    """Historial de cobros. Varios pagos parciales quedan en filas distintas."""
+    grupos = {}
+    orden = []
+    for jugada in ticket.jugadas or []:
+        if not _premio_ya_cobrado(jugada, ticket):
+            continue
+        monto = D(jugada.premio or 0)
+        if monto <= 0:
+            continue
+        uid = jugada.pagado_por_usuario_id or ticket.pagado_por_usuario_id
+        cuando = jugada.pagado_en or ticket.pagado_en
+        op = jugada.pago_operacion_id or ticket.pago_operacion_id or f"ticket-{ticket.id}"
+        clave = (op, uid, cuando)
+        if clave not in grupos:
+            grupos[clave] = {
+                "usuario": _nombre_usuario(db, uid),
+                "usuario_id": uid,
+                "fecha": cuando.isoformat(sep=" ") if cuando else "",
+                "monto": D(0),
+                "operacion_id": op,
+            }
+            orden.append(clave)
+        grupos[clave]["monto"] += monto
+    pagos = []
+    for clave in orden:
+        fila = grupos[clave]
+        fila["monto"] = str(fila["monto"])
+        pagos.append(fila)
+    return pagos
+
+
+def _fila_reporte_ticket(db, ticket):
+    vendedor = db.get(Usuario, ticket.usuario_id) if ticket.usuario_id else None
+    pagos = _pagos_reporte(db, ticket)
+    premio = D(ticket.premio_total or 0)
+    pagado = sum((D(p["monto"]) for p in pagos), D(0))
+    nombres = []
+    for pago in pagos:
+        if pago["usuario"] and pago["usuario"] not in nombres:
+            nombres.append(pago["usuario"])
+    fechas = [p["fecha"] for p in pagos if p["fecha"]]
+    anulado = ticket.estado == "anulado" or ticket.anulado_en is not None
+    return {
+        "id": ticket.id,
+        "serial": ticket.serial,
+        "vendido_en": ticket.vendido_en.isoformat(sep=" ") if ticket.vendido_en else "",
+        "fecha": ticket.fecha.isoformat() if ticket.fecha else "",
+        "cajera": vendedor.nombre if vendedor else "",
+        "cajera_usuario": vendedor.usuario if vendedor else "",
+        "usuario_id": ticket.usuario_id,
+        "sucursal_id": ticket.sucursal_vendedora_id,
+        "sucursal": ticket.sucursal_vendedora.nombre if ticket.sucursal_vendedora else "",
+        "sucursal_codigo": ticket.sucursal_vendedora.codigo if ticket.sucursal_vendedora else "",
+        "total": str(D(ticket.total)),
+        "premio_total": str(premio),
+        "importe_pagado": str(pagado),
+        "estado": ticket.estado,
+        "etiqueta_estado": _ETIQUETA_ESTADO_TICKET.get(ticket.estado, (ticket.estado or "").upper()),
+        "usuario_pago": " · ".join(nombres),
+        "fecha_pago": max(fechas) if fechas else "",
+        "usuario_anulo": _nombre_usuario(db, ticket.anulado_por) if anulado else "",
+        "fecha_anulacion": (
+            ticket.anulado_en.isoformat(sep=" ") if anulado and ticket.anulado_en else ""
+        ),
+        "pagos": pagos,
+        "es_prueba": bool(ticket.es_prueba),
+    }
+
+
+def _clave_orden_ticket(fila, orden):
+    if orden == "fecha":
+        return (fila["vendido_en"] or "", fila["id"])
+    if orden == "banca":
+        return (fila["sucursal_codigo"] or "", fila["sucursal"] or "", fila["id"])
+    if orden == "monto":
+        return (-D(fila["total"]), fila["id"])
+    if orden == "estado":
+        try:
+            grupo = _ORDEN_GRUPO_TICKET.index(fila["estado"])
+        except ValueError:
+            grupo = 99
+        return (grupo, fila["id"])
+    return (fila["id"],)
+
+
+def reporte_tickets(
+    db, admin, desde, hasta, sucursal_id=None, usuario_id=None,
+    estado=None, ticket_id=None, grupo_id=None, hora_desde=None,
+    hora_hasta=None, sorteo_id=None, ruta_id=None, orden=None,
+):
+    """Consulta de tickets. Respeta el alcance y no modifica ventas ni recibos."""
+    from . import permisos as perm
+
+    if hasta < desde:
+        raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+    h_desde = _hhmm(hora_desde, time(0, 0))
+    h_hasta = _hhmm(hora_hasta, time(23, 59))
+    if h_hasta < h_desde:
+        raise ErrorServicio(400, "La hora hasta no puede ser anterior a la hora desde")
+    sid = perm.resolver_filtro_sucursal(db, admin, sucursal_id)
+    uid = int(usuario_id) if usuario_id not in (None, "", 0) else None
+    if uid is not None:
+        cajero = db.get(Usuario, uid)
+        perm.assert_usuario_en_alcance(db, admin, cajero)
+        if cajero.rol != "operador":
+            raise ErrorServicio(400, "El filtro de cajero solo acepta un operador")
+        if sid is not None and cajero.sucursal_id != sid:
+            raise ErrorServicio(400, "El cajero no pertenece a la banca seleccionada")
+    clave = (estado or "").strip().lower()
+    if clave in ("todos", "todas", "*"):
+        clave = ""
+    if clave and clave not in _ESTADOS_REPORTE_TICKETS:
+        raise ErrorServicio(400, "Estado no reconocido")
+    tid = None
+    if ticket_id not in (None, ""):
+        if not str(ticket_id).strip().isdigit():
+            raise ErrorServicio(400, "El número de ticket no es válido")
+        tid = int(str(ticket_id).strip())
+    gid = (grupo_id or "").strip().lower() or None
+    if gid in ("todos", "todas", "*"):
+        gid = None
+    if gid is not None and gid != GRUPO_PRINCIPAL_ID:
+        raise ErrorServicio(400, "Grupo no reconocido")
+    rid = (ruta_id or "").strip().lower() or None
+    if rid in ("todos", "todas", "*"):
+        rid = None
+    if rid is not None:
+        raise ErrorServicio(400, "No hay rutas configuradas en este entorno")
+    orden_clave = (orden or "numero").strip().lower() or "numero"
+    if orden_clave not in _ORDENES_REPORTE_TICKET:
+        raise ErrorServicio(400, "Orden no reconocido")
+    sorteo = None
+    if sorteo_id not in (None, "", 0):
+        sorteo = db.get(Sorteo, int(sorteo_id))
+        if sorteo is None:
+            raise ErrorServicio(400, "Lotería no reconocida")
+
+    q = db.query(Ticket).filter(Ticket.fecha >= desde, Ticket.fecha <= hasta)
+    if sid is not None:
+        q = q.filter(Ticket.sucursal_vendedora_id == sid)
+    elif gid is not None:
+        permitidas = perm.filtrar_query_sucursal(db.query(Sucursal), Sucursal.id, db, admin).all()
+        ids = [s.id for s in permitidas if _grupo_de_sucursal(s)[0] == gid]
+        q = q.filter(Ticket.sucursal_vendedora_id.in_(ids or [-1]))
+    if uid is not None:
+        q = q.filter(Ticket.usuario_id == uid)
+    if clave:
+        q = q.filter(Ticket.estado == clave)
+    if tid is not None:
+        q = q.filter(Ticket.id == tid)
+    if sorteo is not None:
+        q = q.filter(Ticket.id.in_(
+            db.query(Jugada.ticket_id).filter(or_(
+                Jugada.sorteo_id == sorteo.id,
+                Jugada.sorteo2_id == sorteo.id,
+            ))
+        ))
+    dia_completo = h_desde == time(0, 0) and h_hasta == time(23, 59)
+    if not dia_completo:
+        minuto = extract("hour", Ticket.vendido_en) * 60 + extract("minute", Ticket.vendido_en)
+        q = q.filter(
+            Ticket.vendido_en.isnot(None),
+            minuto >= h_desde.hour * 60 + h_desde.minute,
+            minuto <= h_hasta.hour * 60 + h_hasta.minute,
+        )
+    total = q.count()
+    tope = 5000
+    recortados = (
+        q.with_entities(Ticket.id).order_by(Ticket.id.desc()).limit(tope).all()
+    )
+    ids = [fila[0] for fila in recortados]
+    tickets = db.query(Ticket).filter(Ticket.id.in_(ids)).all() if ids else []
+    filas = [_fila_reporte_ticket(db, t) for t in tickets]
+    agrupar = not clave
+    if agrupar:
+        def _orden_grupo(fila):
+            try:
+                grupo = _ORDEN_GRUPO_TICKET.index(fila["estado"])
+            except ValueError:
+                grupo = 99
+            return (grupo, _clave_orden_ticket(fila, orden_clave))
+        filas.sort(key=_orden_grupo)
+    else:
+        filas.sort(key=lambda fila: _clave_orden_ticket(fila, orden_clave))
+    grupos = []
+    if agrupar:
+        por_estado = {}
+        for fila in filas:
+            por_estado.setdefault(fila["estado"], []).append(fila)
+        for estado_fila in _ORDEN_GRUPO_TICKET:
+            items = por_estado.get(estado_fila) or []
+            if not items:
+                continue
+            grupos.append({
+                "estado": estado_fila,
+                "etiqueta": _ETIQUETA_ESTADO_TICKET.get(estado_fila, estado_fila),
+                "cantidad": len(items),
+            })
+    suma = D(0)
+    suma_premio = D(0)
+    for f in filas:
+        suma += D(f["total"])
+        suma_premio += D(f["premio_total"] or 0)
+    banca = None
+    if sid is not None:
+        suc = db.get(Sucursal, sid)
+        banca = f"{suc.codigo} — {suc.nombre}" if suc else str(sid)
+    cajero_txt = None
+    if uid is not None:
+        caj = db.get(Usuario, uid)
+        cajero_txt = caj.nombre if caj else str(uid)
+    ahora = ahora_local()
+    return {
+        "empresa": "BANCA MODERNA",
+        "titulo": "REPORTE DE TICKETS",
+        "desde": desde.isoformat(),
+        "hasta": hasta.isoformat(),
+        "impreso": ahora.strftime("%d/%m/%Y %I:%M %p"),
+        "filtros": {
+            "sucursal_id": sid,
+            "banca": banca or "TODAS LAS BANCAS",
+            "grupo_id": gid,
+            "grupo": GRUPO_PRINCIPAL_NOMBRE if gid else "TODOS LOS GRUPOS",
+            "usuario_id": uid,
+            "cajero": cajero_txt or "TODOS LOS CAJEROS",
+            "estado": clave or "todos",
+            "ticket_id": tid,
+            "hora_desde": h_desde.strftime("%H:%M"),
+            "hora_hasta": h_hasta.strftime("%H:%M"),
+            "sorteo_id": sorteo.id if sorteo else None,
+            "loteria": sorteo.nombre if sorteo else "TODAS LAS LOTERÍAS",
+            "ruta": "TODAS LAS RUTAS",
+            "orden": orden_clave,
+        },
+        "agrupar_estado": agrupar,
+        "grupos": grupos,
+        "tickets": filas,
+        "total": total,
+        "mostrados": len(filas),
+        "recorte": total > len(filas),
+        "suma": str(suma),
+        "suma_premio": str(suma_premio),
+        "ledger": "prueba" if modo_desarrollo() else "reales",
+    }
+
+
+def consulta_ticket_reporte(db, admin, ticket_id):
+    """Detalle de jugadas para el reporte. No paga, no anula y no arma el recibo."""
+    from . import permisos as perm
+
+    ticket = db.get(Ticket, int(ticket_id))
+    perm.assert_ticket_en_alcance(db, admin, ticket)
+    fila = _fila_reporte_ticket(db, ticket)
+    jugadas = []
+    for jugada in ticket.jugadas or []:
+        loterias = [jugada.sorteo.nombre] if jugada.sorteo else []
+        if jugada.sorteo2 is not None:
+            loterias.append(jugada.sorteo2.nombre)
+        cobrada = _premio_ya_cobrado(jugada, ticket)
+        uid = jugada.pagado_por_usuario_id or (ticket.pagado_por_usuario_id if cobrada else None)
+        cuando = jugada.pagado_en or (ticket.pagado_en if cobrada else None)
+        codigo = jugada.tipo.codigo if jugada.tipo else ""
+        sorteos = []
+        for sorteo in (jugada.sorteo, jugada.sorteo2):
+            if sorteo is None:
+                continue
+            horario = ""
+            if sorteo.hora_sorteo is not None:
+                horario = sorteo.hora_sorteo.strftime("%I:%M %p")
+                if horario.startswith("0"):
+                    horario = horario[1:]
+            sorteos.append({"nombre": sorteo.nombre, "horario": horario})
+        jugadas.append({
+            "tipo": codigo,
+            "tipo_nombre": _NOMBRE_JUGADA.get(codigo, jugada.tipo.nombre if jugada.tipo else ""),
+            "numeros": jugada.numeros,
+            "loterias": loterias,
+            "sorteos": sorteos,
+            "monto": str(D(jugada.monto)),
+            "evaluada": bool(jugada.evaluada),
+            "premio": str(D(jugada.premio or 0)) if jugada.premio is not None else None,
+            "pagada": cobrada,
+            "pagado_en": cuando.isoformat(sep=" ") if cuando else "",
+            "pagado_por": _nombre_usuario(db, uid),
+        })
+    grupos = []
+    indice = {}
+    for jugada in jugadas:
+        clave = tuple((s["nombre"], s["horario"]) for s in jugada["sorteos"])
+        if clave not in indice:
+            bloque = {"sorteos": jugada["sorteos"], "jugadas": []}
+            indice[clave] = bloque
+            grupos.append(bloque)
+        indice[clave]["jugadas"].append(jugada)
+    premio = D(fila["premio_total"] or 0)
+    pagado = D(fila["importe_pagado"] or 0)
+    pendiente = premio - pagado
+    if pendiente < 0:
+        pendiente = D(0)
+    return {
+        "id": ticket.id,
+        "serial": ticket.serial,
+        "banca": f"{fila['sucursal_codigo']} {fila['sucursal']}".strip(),
+        "banca_codigo": fila["sucursal_codigo"],
+        "banca_nombre": fila["sucursal"],
+        "fecha_hora": fila["vendido_en"],
+        "cajero": fila["cajera"],
+        "estado": ticket.estado,
+        "etiqueta_estado": fila["etiqueta_estado"],
+        "total": fila["total"],
+        "premio_ganado": str(premio),
+        "importe_pagado": str(pagado),
+        "importe_pendiente": str(pendiente),
+        "pagos": fila["pagos"],
+        "usuario_anulo": fila["usuario_anulo"],
+        "fecha_anulacion": fila["fecha_anulacion"],
+        "anulado_motivo": ticket.anulado_motivo or "",
+        "usuario_pago": fila["usuario_pago"],
+        "fecha_pago": fila["fecha_pago"],
+        "jugadas": jugadas,
+        "grupos": grupos,
+        "empresa": "BANCA MODERNA",
+    }
+
+
 _NOMBRE_JUGADA = {"QN": "QUINIELA", "PL": "PALÉ", "SP": "SÚPER PALÉ", "TR": "TRIPLETA"}
 
 
@@ -5226,12 +5589,17 @@ def resumen_dia(db, desde, hasta, operador, sucursal, terminal, alcance="cajero"
         "prueba": prueba,
         "comision": comision_periodo(db, desde, hasta, sucursal.id, usuario_id),
     }
-    datos["texto"] = _texto_resumen(datos)
-    # Meta opcional: APK futuras pueden pedir PNG; las actuales usan "texto".
+    _aplicar_documento_resumen(
+        datos, desde, hasta, sucursal, real, prueba, datos["comision"],
+    )
+    alcance_q = "sucursal" if usuario_id is None else "cajero"
     datos["impresion"] = {
         "modo": "imagen_servidor",
         "ancho_px": 384,
-        "url": "/terminal/reportes/dia/imagen",
+        "url": (
+            "/terminal/reportes/dia/imagen"
+            f"?desde={desde.isoformat()}&hasta={hasta.isoformat()}&alcance={alcance_q}"
+        ),
         "fallback": "texto",
     }
     return datos
@@ -5322,37 +5690,135 @@ def _bloque_resumen(db, desde, hasta, sucursal_id, usuario_id, prueba):
     }
 
 
-def _texto_resumen(datos):
-    """Resumen compacto para pantalla e impresión 58 mm (sin tickets ni comisión)."""
-    banca = str(datos.get("banca") or datos.get("sucursal") or "BANCA MODERNA").upper()
-    lineas = [
-        banca,
-        "RESUMEN DE CAJA",
-        f"Cajero: {datos['cajero']}",
+def _rd_informe(valor) -> str:
+    """RD$ con miles y dos decimales. El signo negativo queda delante de RD$."""
+    n = D(valor)
+    cuerpo = f"{abs(n):,.2f}"
+    return f"-RD${cuerpo}" if n < 0 else f"RD${cuerpo}"
+
+
+def _recargas_informe():
+    """Neto de recargas del informe.
+
+    No hay producto de recargas: la misma regla del reporte de ventas deja
+    su venta, comisión y neto en cero. Un fondeo de saldo de la sucursal
+    no se suma aquí, porque mezclaría la caja operativa con este informe.
+    Con neto cero, Total coincide con Balance. Si más adelante el neto
+    tuviera movimiento, Total = Balance + ese neto.
+    """
+    return D(0)
+
+
+def _resumen_final(ventas, premios, comision, recargas):
+    """Balance del informe = Ventas − Premios pagados − Comisión.
+
+    No reemplaza el quedó de la caja (ventas − premios). La comisión es la
+    ya registrada para el período, no una tasa nueva.
+    """
+    ventas = D(ventas)
+    premios = D(premios)
+    comision = D(comision)
+    recargas = D(recargas)
+    balance = D(ventas - premios - comision)
+    total = D(balance + recargas)
+    numeros = {
+        "ventas": str(ventas),
+        "premios_pagados": str(premios),
+        "comision": str(comision),
+        "balance": str(balance),
+        "recargas": str(recargas),
+        "total": str(total),
+    }
+    orden = (
+        ("Ventas", "ventas", False),
+        ("Premios", "premios_pagados", False),
+        ("Comisión", "comision", False),
+        ("Balance", "balance", False),
+        ("Recargas", "recargas", False),
+        ("Total", "total", True),
+    )
+    numeros["lineas"] = [
+        {
+            "concepto": etiqueta,
+            "monto": _rd_informe(numeros[clave]),
+            "destacar": destacar,
+        }
+        for etiqueta, clave, destacar in orden
     ]
-    if datos["desde"] == datos["hasta"]:
-        lineas.append(f"FECHA: {datos['desde'].replace('-', '/')}")
-    else:
-        lineas.append(f"DESDE: {datos['desde'].replace('-', '/')}")
-        lineas.append(f"HASTA: {datos['hasta'].replace('-', '/')}")
+    return numeros
+
+
+def _comision_informe(paquete, prueba):
+    if not paquete:
+        return D(0)
+    bloque = paquete.get("prueba") if prueba else paquete.get("real")
+    if not bloque:
+        return D(0)
+    return D(bloque.get("comision") or 0)
+
+
+def _periodo_informe(desde, hasta) -> str:
+    if desde == hasta:
+        return desde.strftime("%d/%m/%Y")
+    return f"{desde.strftime('%d/%m/%Y')} al {hasta.strftime('%d/%m/%Y')}"
+
+
+def _fila_texto_58(concepto, monto, ancho=32) -> str:
+    """Una línea de 32 columnas, o el monto entero en la siguiente si no cabe."""
+    concepto = str(concepto)
+    monto = str(monto)
+    if len(concepto) + 1 + len(monto) <= ancho:
+        return concepto + (" " * (ancho - len(concepto) - len(monto))) + monto
+    return concepto + "\n" + monto.rjust(ancho)
+
+
+def _aplicar_documento_resumen(datos, desde, hasta, sucursal, real, prueba, comision):
+    """Arma el documento que comparten la pantalla y el papel."""
+    recargas = _recargas_informe()
+    oficial = _resumen_final(
+        real["ventas"], real["premios_pagados"], _comision_informe(comision, False), recargas,
+    )
+    prueba_final = None
+    if prueba is not None:
+        prueba_final = _resumen_final(
+            prueba["ventas"],
+            prueba["premios_pagados"],
+            _comision_informe(comision, True),
+            recargas,
+        )
+    datos["informe"] = {
+        "banca": sucursal.nombre if sucursal else "BANCA MODERNA",
+        "codigo": sucursal.codigo if sucursal else "",
+        "cajera": datos.get("cajero") or "",
+        "terminal": datos.get("terminal") or "",
+        "periodo": _periodo_informe(desde, hasta),
+        "oficial": oficial,
+        "prueba": prueba_final,
+    }
+    datos["texto"] = _texto_resumen(datos)
+
+
+def _texto_resumen(datos):
+    """Texto de respaldo del papel. La pantalla usa informe y omite Impreso."""
+    inf = datos["informe"]
+    lineas = [
+        str(inf["banca"]).upper(),
+        "RESUMEN DE CAJA",
+        f"Código: {inf['codigo']}",
+        f"Cajera: {inf['cajera']}",
+        f"Terminal: {inf['terminal']}",
+        f"Período: {inf['periodo']}",
+    ]
     if datos.get("impreso"):
         lineas.append(f"Impreso: {datos['impreso']}")
-    lineas.append("")
-    lineas.extend(_lineas_bloque(datos["real"], modo_desarrollo() and datos.get("prueba") is None))
-    if datos.get("prueba") is not None:
+    lineas.extend(["", "RESUMEN FINAL"])
+    for fila in inf["oficial"]["lineas"]:
+        lineas.append(_fila_texto_58(fila["concepto"], fila["monto"]))
+    if inf.get("prueba") is not None:
         lineas.extend(["", "PRUEBA — NO OFICIAL", ""])
-        lineas.extend(_lineas_bloque(datos["prueba"], True))
+        for fila in inf["prueba"]["lineas"]:
+            lineas.append(_fila_texto_58(fila["concepto"], fila["monto"]))
     return "\n".join(lineas)
-
-
-def _lineas_bloque(bloque, etiqueta_prueba=False):
-    """Texto compacto histórico (ventas / premios / quedó). Detalle extra va en PNG."""
-    pref = "PRUEBA " if etiqueta_prueba else ""
-    return [
-        f"{pref}VENTAS DEL DÍA: RD${bloque['ventas']}",
-        f"{pref}PREMIOS PAGADOS: RD${bloque['premios_pagados']}",
-        f"{pref}QUEDÓ: RD${bloque.get('quedo', bloque['neto'])}",
-    ]
 
 
 def resumen_mes(db, anio, mes, operador, sucursal, terminal, alcance="cajero"):
@@ -5392,6 +5858,14 @@ def resumen_mes(db, anio, mes, operador, sucursal, terminal, alcance="cajero"):
             "prueba": prueba,
         })
     tot_quedo = tot_ventas - tot_premios
+    desde_mes = datetime(anio, mes, 1).date()
+    hasta_mes = datetime(anio, mes, ultimo).date()
+    real_mes = _bloque_resumen(db, desde_mes, hasta_mes, sucursal.id, usuario_id, False)
+    prueba_mes = (
+        _bloque_resumen(db, desde_mes, hasta_mes, sucursal.id, usuario_id, True)
+        if modo_desarrollo() else None
+    )
+    comision_mes = comision_periodo(db, desde_mes, hasta_mes, sucursal.id, usuario_id)
     ahora = ahora_local()
     datos = {
         "alcance": "sucursal" if usuario_id is None else "cajera autenticada",
@@ -5409,27 +5883,24 @@ def resumen_mes(db, anio, mes, operador, sucursal, terminal, alcance="cajero"):
             "premios_pagados": str(tot_premios),
             "quedo": str(tot_quedo),
         },
+        "desde": desde_mes.strftime("%d-%m-%Y"),
+        "hasta": hasta_mes.strftime("%d-%m-%Y"),
+        "banca": sucursal.nombre if sucursal else "BANCA MODERNA",
         "impreso": ahora.strftime("%d-%m-%Y %I:%M %p"),
     }
-    lineas = [
-        "BANCA MODERNA",
-        "RESUMEN MENSUAL",
-        f"Cajero: {datos['cajero']}",
-        f"MES: {datos['mes_etiqueta']}",
-        "",
-        "DÍA | VENTAS | PAGADOS | QUEDÓ",
-    ]
-    for fila in dias:
-        lineas.append(
-            f"{fila['dia']:02d} | RD${fila['ventas']} | RD${fila['premios_pagados']} | RD${fila['quedo']}"
-        )
-    lineas.extend([
-        "",
-        f"TOTAL VENTAS: RD${datos['totales']['ventas']}",
-        f"TOTAL PAGADOS: RD${datos['totales']['premios_pagados']}",
-        f"TOTAL QUEDÓ: RD${datos['totales']['quedo']}",
-    ])
-    datos["texto"] = "\n".join(lineas)
+    _aplicar_documento_resumen(
+        datos, desde_mes, hasta_mes, sucursal, real_mes, prueba_mes, comision_mes,
+    )
+    alcance_q = "sucursal" if usuario_id is None else "cajero"
+    datos["impresion"] = {
+        "modo": "imagen_servidor",
+        "ancho_px": 384,
+        "url": (
+            "/terminal/reportes/mes/imagen"
+            f"?anio={anio}&mes={mes}&alcance={alcance_q}"
+        ),
+        "fallback": "texto",
+    }
     return datos
 
 
@@ -6400,3 +6871,229 @@ def _buscar_tickets(db, desde, hasta, sucursal_id, usuario_id, texto):
             "jugadas": jugadas,
         })
     return filas
+
+
+# ------------------------------------------------------ reporte ventas resumido
+GRUPO_PRINCIPAL_ID = "principal"
+GRUPO_PRINCIPAL_NOMBRE = "GRUPO PRINCIPAL"
+
+
+def _grupo_de_sucursal(sucursal):
+    """Agrupación virtual hasta existir modelo de grupos. Una sola empresa local."""
+    return GRUPO_PRINCIPAL_ID, GRUPO_PRINCIPAL_NOMBRE
+
+
+def _ruta_de_sucursal(sucursal):
+    """Sin modelo de rutas: None = sin ruta asignada."""
+    return None
+
+
+def filtros_ventas_resumido(db, admin):
+    """Opciones de filtro autorizadas para el reporte (alcance del actor)."""
+    from . import permisos as perm
+
+    q = db.query(Sucursal).order_by(Sucursal.codigo)
+    q = perm.filtrar_query_sucursal(q, Sucursal.id, db, admin)
+    bancas = []
+    for s in q.all():
+        gid, gnom = _grupo_de_sucursal(s)
+        bancas.append({
+            "id": s.id,
+            "codigo": s.codigo,
+            "nombre": s.nombre,
+            "grupo_id": gid,
+            "grupo_nombre": gnom,
+            "ruta_id": _ruta_de_sucursal(s),
+            "comision_porcentaje": str(D(s.comision_porcentaje)),
+            "activa": bool(s.activa),
+        })
+    grupos = [{"id": GRUPO_PRINCIPAL_ID, "nombre": GRUPO_PRINCIPAL_NOMBRE}]
+    # Sin rutas en el esquema actual; el selector queda con TODAS.
+    rutas = []
+    return {
+        "grupos": grupos,
+        "bancas": bancas,
+        "rutas": rutas,
+        "incluye_recargas": False,
+        "empresa": "BANCA MODERNA",
+    }
+
+
+def _fila_banca_resumido(db, sucursal, desde, hasta, prueba):
+    """Una fila contable por banca. Fórmulas LotoBet / panel aprobado:
+
+    Neto = Venta − Comisión (comisión = % de la sucursal × venta)
+    Resultado lotería = Neto − Premios pagados (caja de esa banca, fecha de pago)
+    Recargas: no hay producto; columnas en 0 / omitidas en UI si incluye_recargas=false
+    Resultado total = resultado lotería (+ recargas si existieran)
+    """
+    bloque = _bloque_periodo(db, desde, hasta, prueba, sucursal_id=sucursal.id)
+    venta = D(bloque["ventas"])
+    pct = D(sucursal.comision_porcentaje)
+    comision = D(venta * pct / D(100))
+    premios = D(bloque["premios_pagados"])
+    neto = D(venta - comision)
+    resultado_lot = D(neto - premios)
+    venta_rec = D(0)
+    comision_rec = D(0)
+    neto_rec = D(0)
+    resultado_total = D(resultado_lot + neto_rec)
+    gid, gnom = _grupo_de_sucursal(sucursal)
+    return {
+        "sucursal_id": sucursal.id,
+        "codigo": sucursal.codigo,
+        "banca": sucursal.nombre,
+        "grupo_id": gid,
+        "grupo_nombre": gnom,
+        "ruta_id": _ruta_de_sucursal(sucursal),
+        "comision_porcentaje": str(pct),
+        "tickets": int(bloque["tickets"]),
+        "loteria": {
+            "venta": str(venta),
+            "comision": str(comision),
+            "neto": str(neto),
+            "premios": str(premios),
+            "resultado": str(resultado_lot),
+        },
+        "recargas": {
+            "venta": str(venta_rec),
+            "comision": str(comision_rec),
+            "neto": str(neto_rec),
+        },
+        "resultado_total": str(resultado_total),
+    }
+
+
+def reporte_ventas_resumido(
+    db, admin, desde, hasta, sucursal_id=None, grupo_id=None, ruta_id=None,
+):
+    """Reporte de ventas resumido por grupo/banca (estilo LotoBet).
+
+    - Alcance: solo sucursales autorizadas al actor (sin mezclar empresas).
+    - Ventas: tickets no anulados por fecha de venta.
+    - Premios: pagados en la banca por fecha de pago (misma regla que resumen).
+    - Comisión: % vigente de la sucursal × venta (igual que reporte_resumen final).
+    - Anulados no suman venta. Premios pendientes no restan (solo pagados).
+    """
+    from . import permisos as perm
+
+    if hasta < desde:
+        raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+
+    sid = perm.resolver_filtro_sucursal(db, admin, sucursal_id)
+    gid = (grupo_id or "").strip().lower() or None
+    if gid in ("todos", "todas", "*"):
+        gid = None
+    if gid is not None and gid != GRUPO_PRINCIPAL_ID:
+        raise ErrorServicio(400, "Grupo no reconocido")
+
+    rid = (ruta_id or "").strip().lower() or None
+    if rid in ("todos", "todas", "*"):
+        rid = None
+    if rid is not None:
+        # Sin rutas reales: filtro vacío a propósito (no inventar datos).
+        raise ErrorServicio(400, "No hay rutas configuradas en este entorno")
+
+    q = db.query(Sucursal).order_by(Sucursal.nombre, Sucursal.codigo)
+    q = perm.filtrar_query_sucursal(q, Sucursal.id, db, admin)
+    if sid is not None:
+        q = q.filter(Sucursal.id == sid)
+    sucursales = q.all()
+    if gid is not None:
+        sucursales = [s for s in sucursales if _grupo_de_sucursal(s)[0] == gid]
+
+    prueba = modo_desarrollo()
+    por_grupo = {}
+    for suc in sucursales:
+        fila = _fila_banca_resumido(db, suc, desde, hasta, prueba)
+        clave = fila["grupo_id"]
+        if clave not in por_grupo:
+            por_grupo[clave] = {
+                "grupo_id": fila["grupo_id"],
+                "grupo_nombre": fila["grupo_nombre"],
+                "bancas": [],
+                "subtotal": None,
+            }
+        por_grupo[clave]["bancas"].append(fila)
+
+    grupos = []
+    tot_venta = D(0)
+    tot_comision = D(0)
+    tot_neto = D(0)
+    tot_premios = D(0)
+    tot_resultado = D(0)
+    tot_venta_rec = D(0)
+    tot_comision_rec = D(0)
+    tot_neto_rec = D(0)
+    tot_resultado_total = D(0)
+    n_bancas = 0
+
+    for clave in sorted(por_grupo.keys(), key=lambda k: por_grupo[k]["grupo_nombre"]):
+        g = por_grupo[clave]
+        sv = sc = sn = sp = sr = D(0)
+        svr = scr = snr = srt = D(0)
+        for f in g["bancas"]:
+            sv += D(f["loteria"]["venta"])
+            sc += D(f["loteria"]["comision"])
+            sn += D(f["loteria"]["neto"])
+            sp += D(f["loteria"]["premios"])
+            sr += D(f["loteria"]["resultado"])
+            svr += D(f["recargas"]["venta"])
+            scr += D(f["recargas"]["comision"])
+            snr += D(f["recargas"]["neto"])
+            srt += D(f["resultado_total"])
+        g["subtotal"] = {
+            "bancas": len(g["bancas"]),
+            "loteria": {
+                "venta": str(sv), "comision": str(sc), "neto": str(sn),
+                "premios": str(sp), "resultado": str(sr),
+            },
+            "recargas": {"venta": str(svr), "comision": str(scr), "neto": str(snr)},
+            "resultado_total": str(srt),
+        }
+        grupos.append(g)
+        tot_venta += sv
+        tot_comision += sc
+        tot_neto += sn
+        tot_premios += sp
+        tot_resultado += sr
+        tot_venta_rec += svr
+        tot_comision_rec += scr
+        tot_neto_rec += snr
+        tot_resultado_total += srt
+        n_bancas += len(g["bancas"])
+
+    promedio = D(tot_venta / n_bancas) if n_bancas else D(0)
+    ahora = ahora_local()
+    return {
+        "empresa": "BANCA MODERNA",
+        "titulo": "REPORTE DE VENTAS RESUMIDO",
+        "desde": desde.isoformat(),
+        "hasta": hasta.isoformat(),
+        "impreso": ahora.strftime("%d/%m/%Y %I:%M %p"),
+        "ledger": "prueba" if prueba else "reales",
+        "incluye_recargas": False,
+        "filtros": {
+            "sucursal_id": sid,
+            "grupo_id": gid or "todos",
+            "ruta_id": "todas",
+        },
+        "grupos": grupos,
+        "total": {
+            "bancas": n_bancas,
+            "promedio_venta": str(promedio),
+            "loteria": {
+                "venta": str(tot_venta),
+                "comision": str(tot_comision),
+                "neto": str(tot_neto),
+                "premios": str(tot_premios),
+                "resultado": str(tot_resultado),
+            },
+            "recargas": {
+                "venta": str(tot_venta_rec),
+                "comision": str(tot_comision_rec),
+                "neto": str(tot_neto_rec),
+            },
+            "resultado_total": str(tot_resultado_total),
+        },
+    }

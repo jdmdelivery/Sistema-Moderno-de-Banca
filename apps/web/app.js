@@ -57,6 +57,11 @@ function pantallaAcceso() {
   document.body.classList.add("sin-sesion");
   document.body.classList.remove("con-sesion");
   cerrarMenuMovil();
+  document.querySelectorAll(".modal").forEach((m) => { m.hidden = true; });
+  BLOQUEO_MODAL = 0;
+  document.documentElement.classList.remove("modal-abierto");
+  document.body.classList.remove("modal-abierto");
+  if (!MENU_SCROLL_BLOQUEADO) document.body.style.top = "";
   const login = $("#login");
   if (login) {
     login.style.display = "";
@@ -86,6 +91,23 @@ function puedeVerSeccion(sec) {
   if (SECCIONES_SOLO_SUPER.has(sec)) return esSuperAdmin();
   if (sec === "diseno-ticket") return esAdminPanel();
   return true;
+}
+function sincronizarCentroVentas(secActiva) {
+  const sub = document.querySelector('.nav-sub[data-sub="centro-ventas"]');
+  if (!sub) return;
+  const enlaces = [...sub.querySelectorAll(".navbtn")];
+  let visibles = 0;
+  for (const boton of enlaces) {
+    const permitido = puedeVerSeccion(boton.dataset.sec);
+    boton.hidden = !permitido;
+    if (permitido) visibles += 1;
+  }
+  sub.hidden = visibles === 0;
+  const sec = secActiva || (typeof SECCION_ACTIVA !== "undefined" ? SECCION_ACTIVA : "");
+  if (!enlaces.some((boton) => boton.dataset.sec === sec && !boton.hidden)) return;
+  sub.classList.add("abierto");
+  const titulo = sub.querySelector(".nav-sub-titulo");
+  if (titulo) titulo.setAttribute("aria-expanded", "true");
 }
 function etiquetaRol(rol) {
   return ({ super_admin: "Super Admin", admin: "Administrador", supervisor: "Supervisor", operador: "Operador" })[rol] || rol;
@@ -174,6 +196,7 @@ function aplicarVisibilidadRol() {
     }
   }
   actualizarEncabezadoContexto();
+  sincronizarCentroVentas();
   const subLogin = document.querySelector("#login .sub");
   if (subLogin && !TOKEN) subLogin.textContent = "Panel del Consorcio";
   // Desktop: menú abierto; móvil: cerrado.
@@ -249,20 +272,189 @@ function bloquearScrollFondo(activo) {
   }
   if (activo) {
     if (MENU_SCROLL_BLOQUEADO) return;
-    MENU_SCROLL_Y = window.scrollY || window.pageYOffset || 0;
+    if (document.body.classList.contains("modal-abierto")) {
+      MENU_SCROLL_Y = SCROLL_MODAL_Y;
+    } else {
+      MENU_SCROLL_Y = window.scrollY || window.pageYOffset || 0;
+      document.body.style.top = "-" + MENU_SCROLL_Y + "px";
+    }
     document.documentElement.classList.add("menu-abierto");
     document.body.classList.add("menu-abierto");
-    document.body.style.top = "-" + MENU_SCROLL_Y + "px";
     MENU_SCROLL_BLOQUEADO = true;
   } else {
     if (!MENU_SCROLL_BLOQUEADO) return;
     document.documentElement.classList.remove("menu-abierto");
     document.body.classList.remove("menu-abierto");
-    document.body.style.top = "";
     MENU_SCROLL_BLOQUEADO = false;
+    if (BLOQUEO_MODAL > 0) return;
+    document.body.style.top = "";
     const y = MENU_SCROLL_Y;
     window.requestAnimationFrame(() => window.scrollTo(0, y));
   }
+}
+
+let BLOQUEO_MODAL = 0;
+let SCROLL_MODAL_Y = 0;
+const HIST_SCROLL = {};
+
+let SCROLL_OBJETIVO = null;
+let SCROLL_VIGILAR_HASTA = 0;
+
+function fijarScroll(y) {
+  SCROLL_OBJETIVO = y || 0;
+  SCROLL_VIGILAR_HASTA = performance.now() + 600;
+  window.scrollTo(0, SCROLL_OBJETIVO);
+}
+
+window.addEventListener("scroll", () => {
+  if (SCROLL_OBJETIVO == null || performance.now() > SCROLL_VIGILAR_HASTA) {
+    SCROLL_OBJETIVO = null;
+    return;
+  }
+  if (document.body.classList.contains("modal-abierto") || document.body.classList.contains("menu-abierto")) return;
+  if (Math.abs(window.scrollY - SCROLL_OBJETIVO) > 2) window.scrollTo(0, SCROLL_OBJETIVO);
+}, { passive: true });
+
+function scrollDePagina() {
+  if (document.body.classList.contains("modal-abierto")) return SCROLL_MODAL_Y;
+  if (MENU_SCROLL_BLOQUEADO) return MENU_SCROLL_Y;
+  return window.scrollY || window.pageYOffset || 0;
+}
+
+function adquirirBloqueoModal() {
+  SCROLL_OBJETIVO = null;
+  BLOQUEO_MODAL += 1;
+  if (BLOQUEO_MODAL > 1) return;
+  if (!MENU_SCROLL_BLOQUEADO) {
+    SCROLL_MODAL_Y = window.scrollY || window.pageYOffset || 0;
+    document.body.style.top = "-" + SCROLL_MODAL_Y + "px";
+  } else {
+    SCROLL_MODAL_Y = MENU_SCROLL_Y;
+  }
+  document.documentElement.classList.add("modal-abierto");
+  document.body.classList.add("modal-abierto");
+}
+
+function soltarBloqueoModal() {
+  BLOQUEO_MODAL = Math.max(0, BLOQUEO_MODAL - 1);
+  if (BLOQUEO_MODAL > 0) return;
+  document.documentElement.classList.remove("modal-abierto");
+  document.body.classList.remove("modal-abierto");
+  if (MENU_SCROLL_BLOQUEADO) return;
+  document.body.style.top = "";
+  const y = SCROLL_MODAL_Y;
+  window.requestAnimationFrame(() => fijarScroll(y));
+}
+
+function modalVisible() {
+  const lista = document.querySelectorAll(".modal:not([hidden])");
+  return lista.length ? lista[lista.length - 1] : null;
+}
+
+function abrirModal(el) {
+  if (!el || !el.hidden) return;
+  adquirirBloqueoModal();
+  const prof = (history.state && history.state.prof) || 0;
+  history.pushState({
+    sec: SECCION_ACTIVA,
+    modal: el.id,
+    prof: prof + 1,
+  }, "", urlHistorial(SECCION_ACTIVA, "ventana-" + el.id));
+  el.hidden = false;
+  el.querySelectorAll(".modal-cuerpo").forEach((cuerpo) => { cuerpo.scrollTop = 0; });
+}
+
+function cerrarModal(el, desdeHistorial) {
+  if (!el || el.hidden) return;
+  el.hidden = true;
+  soltarBloqueoModal();
+  if (!desdeHistorial && history.state && history.state.modal === el.id) history.back();
+}
+
+function urlHistorial(sec, extra) {
+  const base = location.pathname + location.search;
+  let hash = "#/" + (sec || "inicio");
+  if (extra) hash += "/" + extra;
+  return base + hash;
+}
+
+function asegurarHistorial() {
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+  if (!history.state || history.state.sec == null) {
+    history.replaceState({
+      sec: SECCION_ACTIVA || "inicio",
+      prof: 0,
+    }, "", urlHistorial(SECCION_ACTIVA || "inicio"));
+  }
+}
+
+function casaDelRol() {
+  return typeof esSuperAdmin === "function" && esSuperAdmin() ? "super" : "inicio";
+}
+
+function actualizarBarraVolver() {
+  const btn = $("#btn-volver-pantalla");
+  if (!btn) return;
+  const enCasa = SECCION_ACTIVA === casaDelRol();
+  const detalleTicket = SECCION_ACTIVA === "reporte-tickets" && RTK && RTK.detalle;
+  btn.hidden = enCasa && !detalleTicket;
+}
+
+function volverPantalla() {
+  if (SECCION_ACTIVA === "reporte-tickets" && RTK && RTK.detalle) {
+    if (history.state && history.state.detalle) history.back();
+    else volverListadoTickets(true);
+    return;
+  }
+  if (history.state && history.state.prof > 0) history.back();
+  else ir(casaDelRol(), { desdeHistorial: true, y: HIST_SCROLL[casaDelRol()] || 0 });
+}
+
+function alRetroceder(ev) {
+  const st = ev.state || {};
+  const abierto = modalVisible();
+  if (abierto && st.modal !== abierto.id) {
+    cerrarModal(abierto, true);
+    return;
+  }
+  if (typeof RTK !== "undefined" && RTK.detalle && !st.detalle) {
+    volverListadoTickets(true);
+    return;
+  }
+  if (st.sec && st.sec !== SECCION_ACTIVA) {
+    ir(st.sec, { desdeHistorial: true, y: HIST_SCROLL[st.sec] || 0 });
+    return;
+  }
+  actualizarBarraVolver();
+}
+
+let TOQUE_Y = 0;
+document.addEventListener("touchstart", (ev) => {
+  if (ev.touches && ev.touches[0]) TOQUE_Y = ev.touches[0].clientY;
+}, { passive: true });
+document.addEventListener("touchmove", (ev) => {
+  const bloqueado = document.body.classList.contains("modal-abierto") || document.body.classList.contains("menu-abierto");
+  if (!bloqueado) return;
+  const destino = ev.target && ev.target.closest ? ev.target.closest(".modal-cuerpo, nav.sidebar") : null;
+  const y = ev.touches && ev.touches[0] ? ev.touches[0].clientY : TOQUE_Y;
+  const dy = y - TOQUE_Y;
+  TOQUE_Y = y;
+  if (!destino) { ev.preventDefault(); return; }
+  const max = destino.scrollHeight - destino.clientHeight;
+  if (max <= 1) { ev.preventDefault(); return; }
+  if (dy > 0 && destino.scrollTop <= 0) ev.preventDefault();
+  else if (dy < 0 && destino.scrollTop >= max - 1) ev.preventDefault();
+}, { passive: false });
+
+function sincronizarViewport() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  document.documentElement.style.setProperty("--vv-alto", Math.round(vv.height) + "px");
+}
+if (window.visualViewport) {
+  visualViewport.addEventListener("resize", sincronizarViewport);
+  visualViewport.addEventListener("scroll", sincronizarViewport);
+  sincronizarViewport();
 }
 
 function setMenuAbierto(abierto) {
@@ -319,9 +511,31 @@ function onResizeMenu() {
     }
   }
 }
-function ir(sec) {
+function ir(sec, opts) {
+  opts = opts || {};
+  asegurarHistorial();
   if (!puedeVerSeccion(sec)) {
     sec = esSuperAdmin() ? "super" : "inicio";
+  }
+  const anterior = SECCION_ACTIVA;
+  if (opts.desdeHistorial) {
+    if (sec !== anterior) {
+      if (GANADORES_RELOJ) {
+        clearInterval(GANADORES_RELOJ);
+        GANADORES_RELOJ = null;
+      }
+      cerrarMenuMovil();
+      SECCION_ACTIVA = sec;
+      $$(".navbtn").forEach((b) => b.classList.toggle("activo", b.dataset.sec === sec));
+      sincronizarCentroVentas(sec);
+      $$(".seccion").forEach((s) => s.classList.toggle("activo", s.id === "sec-" + sec));
+    }
+    window.requestAnimationFrame(() => fijarScroll(opts.y || 0));
+    actualizarBarraVolver();
+    return;
+  }
+  if (anterior && anterior !== sec) {
+    HIST_SCROLL[anterior] = scrollDePagina();
   }
   if (GANADORES_RELOJ) {
     clearInterval(GANADORES_RELOJ);
@@ -330,6 +544,7 @@ function ir(sec) {
   cerrarMenuMovil();
   SECCION_ACTIVA = sec;
   $$(".navbtn").forEach((b) => b.classList.toggle("activo", b.dataset.sec === sec));
+  sincronizarCentroVentas(sec);
   $$(".seccion").forEach((s) => s.classList.toggle("activo", s.id === "sec-" + sec));
   const cargar = {
     inicio: cargarInicio, super: cargarSuperAdmin, sucursales: cargarSucursales, terminales: cargarTerminales,
@@ -339,10 +554,20 @@ function ir(sec) {
     limites: cargarLimites, resultados: cargarResultados, tickets: cargarTicketsLista,
     fuente: cargarFuente, ganadores: cargarGanadores,
     caja: cargarCaja, entregas: cargarEntregas, fondos: cargarFondos, comisiones: cargarComisiones,
-    reportes: cargarReportes, auditoria: async () => {},
+    reportes: cargarReportes, "ventas-resumido": cargarVentasResumido,
+    "reporte-tickets": cargarReporteTickets,
+    auditoria: async () => {},
     "diseno-ticket": cargarDisenoTicket,
   }[sec];
-  if (cargar) cargar().catch((e) => console.error(e));
+  if (!opts.desdeHistorial && anterior !== sec) {
+    const prof = (history.state && history.state.prof) || 0;
+    history.pushState({ sec: sec, prof: prof + 1 }, "", urlHistorial(sec));
+  }
+  const yDestino = opts.desdeHistorial ? (opts.y || 0) : 0;
+  const llevar = () => fijarScroll(yDestino);
+  window.requestAnimationFrame(llevar);
+  if (cargar) cargar().then(llevar).catch((e) => console.error(e));
+  actualizarBarraVolver();
 }
 
 /* ----------------------------------------------------------- Super Admin UI */
@@ -998,11 +1223,11 @@ async function verDetalleCajero(id) {
   const cuerpo = $("#vc-modal-cuerpo");
   const btnVolver = $("#vc-modal-volver");
   VC_DETALLE_ORIGEN = seccionActivaId();
-  VC_DETALLE_SCROLL = window.scrollY || window.pageYOffset || 0;
+  VC_DETALLE_SCROLL = scrollDePagina();
   if (btnVolver) btnVolver.textContent = textoVolverDetalleCajero(VC_DETALLE_ORIGEN);
   $("#vc-modal-titulo").textContent = "Detalle del cajero";
   cuerpo.innerHTML = '<p class="nota">Cargando…</p>';
-  modal.hidden = false;
+  abrirModal(modal);
   try {
     const q = new URLSearchParams();
     const desdeDet = (SECCION_ACTIVA === "control-cajeros" ? $("#cc-desde") : $("#vc-desde"))?.value;
@@ -1163,7 +1388,7 @@ async function cerrarCicloCajeraPerfil(boton) {
 }
 function cerrarDetalleCajero() {
   const modal = $("#vc-modal");
-  if (modal) modal.hidden = true;
+  if (modal) cerrarModal(modal);
   // Cierra overlay sin ir()/recargar: conserva filtros, DOM de lista y scroll.
   const y = VC_DETALLE_SCROLL || 0;
   requestAnimationFrame(() => {
@@ -1308,7 +1533,7 @@ function abrirModalAjusteCc(usuarioId) {
   $("#cc-aj-operacion").value = ("aj-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)).slice(0, 40);
   $("#cc-aj-msg").textContent = "";
   actualizarPreviewAjusteCc();
-  $("#cc-modal").hidden = false;
+  abrirModal($("#cc-modal"));
   CC_AJUSTE_EN_CURSO = false;
   const btn = $("#cc-aj-aplicar");
   if (btn) btn.disabled = false;
@@ -1327,7 +1552,7 @@ function actualizarPreviewAjusteCc() {
 }
 function cerrarModalAjusteCc() {
   const modal = $("#cc-modal");
-  if (modal) modal.hidden = true;
+  if (modal) cerrarModal(modal);
 }
 async function aplicarAjusteCc() {
   if (CC_AJUSTE_EN_CURSO) return;
@@ -1845,7 +2070,7 @@ async function verTicketDetalle(id) {
       <h4>Jugadas</h4><ul class="tic-jugadas">${jugadas || "<li>Sin jugadas</li>"}</ul>
       ${d.estado === "anulado" ? `<p class="nota">Anulado: ${esc(d.anulado_en || "—")} · ${esc(d.anulado_por || "—")} · ${esc(d.anulado_motivo || "—")}</p>` : ""}
       ${d.pago ? `<p class="nota">Pago: ${esc(d.pago.fecha_hora || "—")} · ${esc(d.pago.sucursal || "—")} · cajero ${esc(d.pago.cajero || "—")}</p>` : ""}`;
-    $("#tic-modal").hidden = false;
+    abrirModal($("#tic-modal"));
     const btn = $("#tic-modal-anular");
     const puede = !!(d.puede_anular_admin || (d.anulacion_admin && d.anulacion_admin.puede_anular));
     btn.hidden = !puede;
@@ -1879,7 +2104,7 @@ async function abrirModalAnular(id, serial) {
     $("#tic-anular-motivo").value = "";
     msg("#tic-anular-msg", "");
     $("#tic-anular-confirmar").disabled = !info.puede_anular;
-    $("#tic-anular-modal").hidden = false;
+    abrirModal($("#tic-anular-modal"));
   } catch (e) {
     msg("#tic-lista-msg", e.message, false);
   }
@@ -1910,9 +2135,12 @@ async function confirmarAnulacionAdmin() {
     $("#tic-id").value = d.id;
     $("#tic-serial").value = d.serial;
     pintarTicket(d);
-    $("#tic-anular-modal").hidden = true;
-    $("#tic-modal").hidden = true;
+    cerrarModal($("#tic-anular-modal"), true);
+    cerrarModal($("#tic-modal"), true);
     TIC_ANULAR = null;
+    if (history.state && (history.state.modal === "tic-anular-modal" || history.state.modal === "tic-modal")) {
+      history.go(-2);
+    }
     msg("#tic-lista-msg", `Ticket #${d.id} ANULADO ✔`);
     if (typeof cargarDashboard === "function") {
       try { await cargarDashboard(); } catch (_) { /* opcional */ }
@@ -2314,6 +2542,848 @@ function imprimirPendientes() {
   w.document.close(); w.print();
 }
 
+/* ----------------------------------------- reporte ventas resumido (Lotería) */
+const RVR = {
+  filtros: null,
+  datos: null,
+  pagina: 1,
+  porPagina: 12,
+  zoom: 100,
+  buscar: "",
+};
+
+function rvrFecha(iso) {
+  const p = String(iso || "").split("-");
+  return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : esc(iso || "");
+}
+function rvrMonto(v) {
+  const n = Number(v);
+  const txt = fmt(v);
+  if (!Number.isFinite(n) || n >= 0) return esc(txt);
+  return `<span class="rvr-neg">${esc(txt)}</span>`;
+}
+
+function rvrCeldasLoteria(bloque) {
+  return `<td>${rvrMonto(bloque.venta)}</td><td>${rvrMonto(bloque.comision)}</td>
+    <td>${rvrMonto(bloque.neto)}</td><td>${rvrMonto(bloque.premios)}</td>
+    <td>${rvrMonto(bloque.resultado)}</td>`;
+}
+
+function rvrCeldasRecargas(bloque, resultadoTotal) {
+  // Sección visual LotoBet (siempre visible). Sin producto real → 0.00.
+  const rec = bloque || { venta: "0", comision: "0", neto: "0" };
+  return `<td>${rvrMonto(rec.venta)}</td><td>${rvrMonto(rec.comision)}</td>
+    <td>${rvrMonto(rec.neto)}</td><td>${rvrMonto(resultadoTotal)}</td>`;
+}
+
+function rvrFilasPlanas(datos) {
+  const filas = [];
+  for (const g of (datos.grupos || [])) {
+    filas.push({ tipo: "grupo", grupo: g });
+    for (const b of (g.bancas || [])) filas.push({ tipo: "banca", banca: b, grupo: g });
+    filas.push({ tipo: "subtotal", grupo: g });
+  }
+  filas.push({ tipo: "total", total: datos.total });
+  filas.push({ tipo: "total_bancas", total: datos.total });
+  filas.push({ tipo: "promedio", total: datos.total });
+  return filas;
+}
+
+function rvrCoincideBusqueda(fila, q) {
+  if (!q) return true;
+  const t = q.toLowerCase();
+  if (fila.tipo === "grupo") return (fila.grupo.grupo_nombre || "").toLowerCase().includes(t);
+  if (fila.tipo === "banca") {
+    const b = fila.banca;
+    return `${b.banca} ${b.codigo}`.toLowerCase().includes(t);
+  }
+  if (fila.tipo === "subtotal") return "sub-total".includes(t) || "subtotal".includes(t) || (fila.grupo.grupo_nombre || "").toLowerCase().includes(t);
+  if (fila.tipo === "total" || fila.tipo === "total_bancas" || fila.tipo === "promedio") {
+    return "total".includes(t) || "promedio".includes(t) || "bancas".includes(t);
+  }
+  return true;
+}
+
+function rvrEscaparRe(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function rvrResaltar(html, q) {
+  if (!q) return html;
+  try {
+    const re = new RegExp("(" + rvrEscaparRe(q) + ")", "gi");
+    return html.replace(re, '<mark class="rvr-mark">$1</mark>');
+  } catch {
+    return html;
+  }
+}
+
+function rvrHtmlDocumento(datos, filas, buscar) {
+  // Recargas siempre visible (LotoBet). Valores 0.00 hasta existir el producto.
+  const colSpan = 10;
+  const vacioRec = { venta: "0.00", comision: "0.00", neto: "0.00" };
+  let cuerpo = "";
+  for (const f of filas) {
+    if (f.tipo === "grupo") {
+      const n = (f.grupo.bancas || []).length || (f.grupo.subtotal && f.grupo.subtotal.bancas) || 0;
+      cuerpo += `<tr class="grupo"><td class="izq" colspan="${colSpan}">Grupo: ${esc(f.grupo.grupo_nombre)}&nbsp;&nbsp;&nbsp;Total de Bancas: (${n})</td></tr>`;
+    } else if (f.tipo === "banca") {
+      const b = f.banca;
+      cuerpo += `<tr class="banca">
+        <td class="izq">${esc(b.codigo)} ${esc(b.banca)}</td>
+        ${rvrCeldasLoteria(b.loteria)}
+        ${rvrCeldasRecargas(b.recargas || vacioRec, b.resultado_total)}
+      </tr>`;
+    } else if (f.tipo === "subtotal") {
+      const s = f.grupo.subtotal;
+      cuerpo += `<tr class="bloque-totales">
+        <td class="izq">Sub-Total</td>
+        ${rvrCeldasLoteria(s.loteria)}
+        ${rvrCeldasRecargas(s.recargas || vacioRec, s.resultado_total)}
+      </tr>`;
+    } else if (f.tipo === "total") {
+      const t = f.total;
+      cuerpo += `<tr class="bloque-totales">
+        <td class="izq">Total</td>
+        ${rvrCeldasLoteria(t.loteria)}
+        ${rvrCeldasRecargas(t.recargas || vacioRec, t.resultado_total)}
+      </tr>`;
+    } else if (f.tipo === "total_bancas") {
+      cuerpo += `<tr class="bloque-totales"><td class="izq" colspan="${colSpan}">Total de Bancas: (${f.total.bancas})</td></tr>`;
+    } else if (f.tipo === "promedio") {
+      cuerpo += `<tr class="bloque-totales"><td class="izq" colspan="${colSpan}">Promedio de Ventas por Banca: (${esc(fmt(f.total.promedio_venta))})</td></tr>`;
+    }
+  }
+  if (!filas.length) {
+    cuerpo = `<tr><td class="rvr-vacio" colspan="${colSpan}">Sin bancas para los filtros seleccionados.</td></tr>`;
+  }
+  const html = `
+    <div class="rvr-doc-cab">
+      <div class="emp">${esc(datos.empresa || "BANCA MODERNA")}</div>
+      <div class="hora">Fecha/Hora ${esc(datos.impreso || "")}</div>
+      <div class="tit">Resumen de Ventas</div>
+      <div class="meta">Desde ${rvrFecha(datos.desde)} al ${rvrFecha(datos.hasta)}</div>
+    </div>
+    <table class="rvr-tabla">
+      <thead>
+        <tr>
+          <th class="izq" rowspan="2">Banca</th>
+          <th colspan="5" class="sec-lot">LOTERÍA</th>
+          <th colspan="3" class="sec-rec">RECARGAS</th>
+          <th class="sec-total" rowspan="2">Resultado Total</th>
+        </tr>
+        <tr>
+          <th>Venta</th><th>Comisión</th><th>Neto</th><th>Premios</th><th>Resultado</th>
+          <th>Venta</th><th>Comisión</th><th>Neto</th>
+        </tr>
+      </thead>
+      <tbody>${cuerpo}</tbody>
+    </table>`;
+  return rvrResaltar(html, buscar || "");
+}
+
+function renderVentasResumido() {
+  const hoja = $("#rvr-hoja");
+  const visor = $("#rvr-visor");
+  if (!hoja || !visor || !RVR.datos) return;
+  visor.hidden = false;
+  const d = RVR.datos;
+  const planas = rvrFilasPlanas(d).filter((f) => rvrCoincideBusqueda(f, RVR.buscar));
+  const cuerpo = planas.filter((f) => ["grupo", "banca", "subtotal"].includes(f.tipo));
+  const cierre = planas.filter((f) => ["total", "total_bancas", "promedio"].includes(f.tipo));
+  const totalPag = Math.max(1, Math.ceil(Math.max(cuerpo.length, 1) / RVR.porPagina));
+  if (RVR.pagina > totalPag) RVR.pagina = totalPag;
+  if (RVR.pagina < 1) RVR.pagina = 1;
+  const ini = (RVR.pagina - 1) * RVR.porPagina;
+  let paginaFilas = cuerpo.slice(ini, ini + RVR.porPagina);
+  if (RVR.pagina === totalPag) paginaFilas = paginaFilas.concat(cierre);
+  hoja.innerHTML = rvrHtmlDocumento(d, paginaFilas, RVR.buscar);
+  hoja.dataset.zoom = String(RVR.zoom);
+  const pagEl = $("#rvr-pagina");
+  if (pagEl) pagEl.textContent = `${RVR.pagina} / ${totalPag}`;
+  const prev = $("#btn-rvr-prev");
+  const next = $("#btn-rvr-next");
+  if (prev) prev.disabled = RVR.pagina <= 1;
+  if (next) next.disabled = RVR.pagina >= totalPag;
+}
+
+function rvrParametros() {
+  const q = new URLSearchParams();
+  q.set("desde", $("#rvr-desde").value);
+  q.set("hasta", $("#rvr-hasta").value);
+  const banca = $("#rvr-banca").value;
+  const grupo = $("#rvr-grupo").value;
+  const ruta = $("#rvr-ruta").value;
+  if (banca) q.set("sucursal_id", banca);
+  if (grupo) q.set("grupo_id", grupo);
+  if (ruta) q.set("ruta_id", ruta);
+  return q;
+}
+
+function rvrPoblarSelects() {
+  const f = RVR.filtros || { grupos: [], bancas: [], rutas: [] };
+  const gSel = $("#rvr-grupo");
+  const bSel = $("#rvr-banca");
+  const rSel = $("#rvr-ruta");
+  if (!gSel || !bSel || !rSel) return;
+  const gid = gSel.value;
+  gSel.innerHTML = '<option value="">TODOS LOS GRUPOS</option>' +
+    (f.grupos || []).map((g) => `<option value="${esc(g.id)}">${esc(g.nombre)}</option>`).join("");
+  if (gid) gSel.value = gid;
+  const grupoActivo = gSel.value;
+  const bancas = (f.bancas || []).filter((b) => !grupoActivo || b.grupo_id === grupoActivo);
+  const bid = bSel.value;
+  bSel.innerHTML = '<option value="">TODAS LAS BANCAS</option>' +
+    bancas.map((b) => `<option value="${b.id}">${esc(b.codigo)} — ${esc(b.nombre)}</option>`).join("");
+  if (bid && [...bSel.options].some((o) => o.value === bid)) bSel.value = bid;
+  const rutas = f.rutas || [];
+  rSel.innerHTML = '<option value="">TODAS LAS RUTAS</option>' +
+    rutas.map((r) => `<option value="${esc(r.id)}">${esc(r.nombre)}</option>`).join("");
+  const wrap = $("#rvr-ruta-wrap");
+  if (wrap) wrap.style.display = rutas.length ? "" : "";
+}
+
+function rvrPintarFechas() {
+  for (const id of ["rvr-desde", "rvr-hasta"]) {
+    const input = document.getElementById(id);
+    const vista = document.getElementById(id + "-vista");
+    if (!input || !vista) continue;
+    vista.textContent = input.value ? rvrFecha(input.value) : "DD/MM/AAAA";
+  }
+}
+
+async function cargarVentasResumido() {
+  const hoy = hoyISO();
+  if ($("#rvr-desde") && !$("#rvr-desde").value) $("#rvr-desde").value = hoy;
+  if ($("#rvr-hasta") && !$("#rvr-hasta").value) $("#rvr-hasta").value = hoy;
+  rvrPintarFechas();
+  try {
+    RVR.filtros = await api("/reportes/ventas-resumido/filtros");
+    rvrPoblarSelects();
+    msg("#rvr-msg", "Filtros listos. Pulse VER para consultar.", true);
+  } catch (e) {
+    msg("#rvr-msg", e.message, false);
+  }
+}
+
+async function verVentasResumido() {
+  try {
+    const q = rvrParametros();
+    RVR.datos = await api("/reportes/ventas-resumido?" + q.toString());
+    RVR.pagina = 1;
+    renderVentasResumido();
+    msg("#rvr-msg", `Reporte listo · ${RVR.datos.total.bancas} banca(s)`, true);
+  } catch (e) {
+    msg("#rvr-msg", e.message, false);
+  }
+}
+
+async function rvrObtenerPdf() {
+  if (!$("#rvr-desde").value || !$("#rvr-hasta").value) {
+    msg("#rvr-msg", "Indique el rango de fechas", false);
+    return null;
+  }
+  const r = await fetch("/reportes/ventas-resumido.pdf?" + rvrParametros().toString(), {
+    headers: TOKEN ? { Authorization: "Bearer " + TOKEN } : {},
+  });
+  if (!r.ok) {
+    let detalle = "No se pudo generar el PDF";
+    try {
+      const j = await r.json();
+      detalle = (j && j.detail) || detalle;
+    } catch { /* el cuerpo no era JSON */ }
+    throw new Error(typeof detalle === "string" ? detalle : "No se pudo generar el PDF");
+  }
+  const blob = await r.blob();
+  if (!blob || !blob.size) throw new Error("El PDF llegó vacío");
+  return blob;
+}
+
+function rvrNombrePdf() {
+  const desde = $("#rvr-desde").value || "desde";
+  const hasta = $("#rvr-hasta").value || "hasta";
+  return `Resumen-de-Ventas-${desde}-al-${hasta}.pdf`;
+}
+
+async function descargarPdfVentasResumido() {
+  try {
+    const blob = await rvrObtenerPdf();
+    if (!blob) return;
+    const url = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = rvrNombrePdf();
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    msg("#rvr-msg", "PDF A4 horizontal descargado. No usa la impresora de Windows.", true);
+  } catch (e) {
+    msg("#rvr-msg", e.message, false);
+  }
+}
+
+async function imprimirVentasResumido() {
+  try {
+    const blob = await rvrObtenerPdf();
+    if (!blob) return;
+    const url = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
+    const w = window.open(url, "_blank");
+    if (!w) {
+      msg("#rvr-msg", "El navegador bloqueó la ventana. Use DESCARGAR PDF: el archivo ya es A4 horizontal.", false);
+      return;
+    }
+    const lanzar = () => {
+      try { w.focus(); w.print(); } catch { /* el visor PDF imprime cuando termina de abrir */ }
+    };
+    setTimeout(lanzar, 700);
+    msg("#rvr-msg", "Documento A4 horizontal, sin el panel. La hoja del PDF no depende de la impresora térmica.", true);
+  } catch (e) {
+    msg("#rvr-msg", e.message, false);
+  }
+}
+
+function rvrPrepararImpresionPanel() {
+  if (!RVR.datos || !$("#rvr-hoja")) return;
+  const planas = rvrFilasPlanas(RVR.datos);
+  $("#rvr-hoja").innerHTML = rvrHtmlDocumento(RVR.datos, planas, "");
+  $("#rvr-hoja").dataset.zoom = "100";
+}
+
+function regresarVentasResumido() {
+  $("#rvr-visor").hidden = true;
+  RVR.datos = null;
+  ir("reportes");
+}
+
+/* ---------------------------------------------- reporte de tickets (consulta) */
+const RTK = {
+  cajeros: [],
+  filtros: null,
+  datos: null,
+  consulta: null,
+  detalle: null,
+  vista: null,
+  pagina: 1,
+  porPagina: 12,
+  zoom: 100,
+  buscar: "",
+};
+
+function rtkPintarFechas() {
+  for (const id of ["rtk-desde", "rtk-hasta"]) {
+    const input = document.getElementById(id);
+    const vista = document.getElementById(id + "-vista");
+    if (!input || !vista) continue;
+    vista.textContent = input.value ? rvrFecha(input.value) : "DD/MM/AAAA";
+  }
+}
+
+function rtkCuando(iso) {
+  const texto = String(iso || "").trim();
+  if (!texto) return "";
+  const [fecha, hora] = texto.split(" ");
+  const p = fecha.split("-");
+  const hm = (hora || "").slice(0, 5);
+  if (p.length === 3) return `${p[2]}/${p[1]}/${p[0]}${hm ? " " + hm : ""}`;
+  return texto;
+}
+
+function rtkEstado(valor) {
+  return String(valor || "todos").replaceAll("_", " ").toUpperCase();
+}
+
+function rtkPoblarSelects() {
+  const f = RTK.filtros || { grupos: [], bancas: [], rutas: [] };
+  const gSel = $("#rtk-grupo");
+  const bSel = $("#rtk-banca");
+  const rSel = $("#rtk-ruta");
+  const lSel = $("#rtk-loteria");
+  if (!gSel || !bSel || !rSel || !lSel) return;
+  const gid = gSel.value;
+  gSel.innerHTML = '<option value="">TODOS LOS GRUPOS</option>' +
+    (f.grupos || []).map((g) => `<option value="${esc(g.id)}">${esc(g.nombre)}</option>`).join("");
+  if (gid) gSel.value = gid;
+  const grupoActivo = gSel.value;
+  const bancas = (f.bancas || []).filter((b) => !grupoActivo || b.grupo_id === grupoActivo);
+  const bid = bSel.value;
+  bSel.innerHTML = '<option value="">TODAS LAS BANCAS</option>' +
+    bancas.map((b) => `<option value="${b.id}">${esc(b.codigo)} — ${esc(b.nombre)}</option>`).join("");
+  if (bid && [...bSel.options].some((o) => o.value === bid)) bSel.value = bid;
+  const rid = rSel.value;
+  rSel.innerHTML = '<option value="">TODAS LAS RUTAS</option>' +
+    (f.rutas || []).map((r) => `<option value="${esc(r.id)}">${esc(r.nombre)}</option>`).join("");
+  if (rid) rSel.value = rid;
+  const lid = lSel.value;
+  lSel.innerHTML = '<option value="">TODAS LAS LOTERÍAS</option>' +
+    opciones(SORTEOS, (s) => s.id, (s) => s.nombre);
+  if (lid && [...lSel.options].some((o) => o.value === lid)) lSel.value = lid;
+  rtkPoblarCajeros();
+}
+
+function rtkPoblarCajeros() {
+  const banca = $("#rtk-banca") ? $("#rtk-banca").value : "";
+  const previo = $("#rtk-cajero") ? $("#rtk-cajero").value : "";
+  const lista = RTK.cajeros.filter((u) => !banca || String(u.sucursal_id) === String(banca));
+  $("#rtk-cajero").innerHTML =
+    '<option value="">TODOS LOS CAJEROS</option>' +
+    opciones(lista, (u) => u.id, (u) => `${u.nombre} (${u.usuario})`);
+  if ([...$("#rtk-cajero").options].some((o) => o.value === previo)) $("#rtk-cajero").value = previo;
+}
+
+function rtkFiltrosFormulario() {
+  return {
+    desde: $("#rtk-desde").value,
+    hasta: $("#rtk-hasta").value,
+    hora_desde: $("#rtk-hora-desde").value || "00:00",
+    hora_hasta: $("#rtk-hora-hasta").value || "23:59",
+    grupo_id: $("#rtk-grupo").value,
+    sucursal_id: $("#rtk-banca").value,
+    sorteo_id: $("#rtk-loteria").value,
+    estado: $("#rtk-estado").value,
+    ruta_id: $("#rtk-ruta").value,
+    orden: $("#rtk-orden").value || "numero",
+    usuario_id: $("#rtk-cajero").value,
+    ticket_id: ($("#rtk-numero").value || "").trim(),
+  };
+}
+
+function rtkParametros(filtros) {
+  const f = filtros || rtkFiltrosFormulario();
+  const q = new URLSearchParams();
+  q.set("desde", f.desde || "");
+  q.set("hasta", f.hasta || "");
+  q.set("hora_desde", f.hora_desde || "00:00");
+  q.set("hora_hasta", f.hora_hasta || "23:59");
+  q.set("orden", f.orden || "numero");
+  if (f.grupo_id) q.set("grupo_id", f.grupo_id);
+  if (f.sucursal_id) q.set("sucursal_id", f.sucursal_id);
+  if (f.sorteo_id) q.set("sorteo_id", f.sorteo_id);
+  if (f.usuario_id) q.set("usuario_id", f.usuario_id);
+  if (f.estado) q.set("estado", f.estado);
+  if (f.ruta_id) q.set("ruta_id", f.ruta_id);
+  if (f.ticket_id) q.set("ticket_id", f.ticket_id);
+  return q;
+}
+
+function rtkFilasVisibles() {
+  const todas = (RTK.datos && RTK.datos.tickets) || [];
+  const q = (RTK.buscar || "").trim().toLowerCase();
+  if (!q) return todas;
+  return todas.filter((t) => {
+    const txt = [
+      t.id, t.serial, t.sucursal, t.sucursal_codigo, t.cajera, t.cajera_usuario,
+      t.estado, t.etiqueta_estado, t.usuario_pago, t.usuario_anulo,
+    ].join(" ").toLowerCase();
+    return txt.includes(q);
+  });
+}
+
+function rtkLineasPagina(filas, agrupar) {
+  const paginas = Math.max(1, Math.ceil(Math.max(filas.length, 1) / RTK.porPagina));
+  if (RTK.pagina > paginas) RTK.pagina = paginas;
+  if (RTK.pagina < 1) RTK.pagina = 1;
+  const ini = (RTK.pagina - 1) * RTK.porPagina;
+  const slice = filas.slice(ini, ini + RTK.porPagina);
+  const lineas = [];
+  let previo = null;
+  for (const t of slice) {
+    if (agrupar && t.estado !== previo) {
+      const n = filas.filter((x) => x.estado === t.estado).length;
+      lineas.push({ tipo: "grupo", etiqueta: t.etiqueta_estado || t.estado, n });
+      previo = t.estado;
+    }
+    lineas.push({ tipo: "ticket", t });
+  }
+  return { lineas, paginas };
+}
+
+function rtkHtmlDocumento(datos, filas, resumen, conDetalle) {
+  const f = (datos && datos.filtros) || {};
+  const numero = f.ticket_id ? ` · N.º ${esc(f.ticket_id)}` : "";
+  const detalle = conDetalle !== false;
+  const agrupar = !!(datos && datos.agrupar_estado);
+  const pack = detalle
+    ? rtkLineasPagina(filas, agrupar)
+    : { lineas: rtkLineasCompletas(filas, agrupar), paginas: 1 };
+  const cuerpo = pack.lineas.map((linea) => {
+    if (linea.tipo === "grupo") {
+      const sufijo = linea.n === 1 ? "ticket" : "tickets";
+      return `<tr class="grupo"><td class="izq" colspan="9">${esc(linea.etiqueta)} · ${linea.n} ${sufijo}</td></tr>`;
+    }
+    const t = linea.t;
+    const ganado = Number(t.premio_total || 0) > 0 ? fmt(t.premio_total) : "";
+    const numeroCelda = detalle
+      ? `<button type="button" class="rtk-num" data-rtk-ver="${esc(t.id)}">${esc(t.id)}</button>`
+      : esc(t.id);
+    return `<tr>
+      <td class="izq">${esc(t.sucursal_codigo)} ${esc(t.sucursal)}</td>
+      <td class="corto">${esc(rtkCuando(t.vendido_en))}</td>
+      <td class="corto">${numeroCelda}</td>
+      <td>${esc(fmt(t.total))}</td>
+      <td>${ganado ? esc(ganado) : ""}</td>
+      <td class="izq">${esc(t.usuario_pago || "")}</td>
+      <td class="corto">${esc(rtkCuando(t.fecha_pago))}</td>
+      <td class="izq">${esc(t.usuario_anulo || "")}</td>
+      <td class="corto">${esc(rtkCuando(t.fecha_anulacion))}</td>
+    </tr>`;
+  }).join("");
+  const n = resumen ? resumen.n : filas.length;
+  const suma = resumen ? resumen.suma : filas.reduce((acc, t) => acc + Number(t.total || 0), 0);
+  const premio = resumen ? resumen.premio : filas.reduce((acc, t) => acc + Number(t.premio_total || 0), 0);
+  return `<div class="rvr-doc-cab">
+      <div class="emp">${esc(datos.empresa || "BANCA MODERNA")}</div>
+      <div class="hora">Fecha/Hora ${esc(datos.impreso || "")}</div>
+      <div class="tit">Resumen de Tickets</div>
+      <div class="meta">Desde ${rvrFecha(datos.desde)} ${esc(f.hora_desde || "00:00")} al ${rvrFecha(datos.hasta)} ${esc(f.hora_hasta || "23:59")}</div>
+      <div class="meta">Grupo: ${esc(f.grupo || "TODOS LOS GRUPOS")} · Banca: ${esc(f.banca || "TODAS LAS BANCAS")} · Lotería: ${esc(f.loteria || "TODAS LAS LOTERÍAS")} · Estado: ${esc(rtkEstado(f.estado))}</div>
+      <div class="meta">Ruta: ${esc(f.ruta || "TODAS LAS RUTAS")} · Cajero: ${esc(f.cajero || "TODOS LOS CAJEROS")} · Orden: ${esc(f.orden || "numero")}${numero}</div>
+    </div>
+    <table class="rvr-tabla">
+      <thead><tr>
+        <th class="izq">Banca</th><th class="corto">Fecha y hora</th><th class="corto">N.º</th>
+        <th>Total apostado</th><th>Total ganado</th><th class="izq">Usuario que pagó</th>
+        <th class="corto">Fecha de pago</th><th class="izq">Usuario que anuló</th><th class="corto">Fecha de anulación</th>
+      </tr></thead>
+      <tbody>
+        ${cuerpo || `<tr><td class="izq" colspan="9">No hay tickets con esos filtros.</td></tr>`}
+        <tr class="bloque-totales">
+          <td class="izq">Total</td>
+          <td></td>
+          <td class="corto">${n} ticket(s)</td>
+          <td>${esc(fmt(suma))}</td>
+          <td>${Number(premio) > 0 ? esc(fmt(premio)) : ""}</td>
+          <td colspan="4"></td>
+        </tr>
+      </tbody>
+    </table>`;
+}
+
+function rtkLineasCompletas(filas, agrupar) {
+  const lineas = [];
+  let previo = null;
+  for (const t of filas) {
+    if (agrupar && t.estado !== previo) {
+      const n = filas.filter((x) => x.estado === t.estado).length;
+      lineas.push({ tipo: "grupo", etiqueta: t.etiqueta_estado || t.estado, n });
+      previo = t.estado;
+    }
+    lineas.push({ tipo: "ticket", t });
+  }
+  return lineas;
+}
+
+function rtkScroll() {
+  return document.querySelector("#sec-reporte-tickets .rvr-scroll");
+}
+
+function rtkRaizScroll() {
+  return document.scrollingElement || document.documentElement;
+}
+
+function rtkMarcarDetalle(activo) {
+  const btn = $("#btn-rtk-volver");
+  if (btn) btn.hidden = !activo;
+  const hoja = $("#rtk-hoja");
+  if (hoja) hoja.classList.toggle("rtk-detalle", !!activo);
+}
+
+function rtkTituloGrupo(sorteos) {
+  const partes = (sorteos || []).map((s) => {
+    const nombre = String(s.nombre || "").trim();
+    const horario = String(s.horario || "").trim();
+    if (horario && !nombre.toLowerCase().includes(horario.toLowerCase())) {
+      return `${nombre} · ${horario}`.replace(/^ · | · $/g, "");
+    }
+    return nombre;
+  }).filter(Boolean);
+  return partes.join(" + ") || "Sin lotería";
+}
+
+function rtkHtmlDetalle(d) {
+  const grupos = (d.grupos || []).map((g) => {
+    const titulo = rtkTituloGrupo(g.sorteos);
+    const filas = (g.jugadas || []).map((j) => {
+      const ganado = j.premio != null ? fmt(j.premio) : "";
+      return `<tr>
+        <td class="izq">${esc(j.tipo_nombre)} ${esc(j.numeros)}</td>
+        <td>${esc(fmt(j.monto))}</td>
+        <td>${ganado ? esc(ganado) : ""}</td>
+      </tr>`;
+    }).join("");
+    return `<tr class="grupo"><td class="izq" colspan="3">${esc(titulo)}</td></tr>${filas}`;
+  }).join("");
+  const pagosCab = (d.pagos || []).map((p) =>
+    `${p.usuario || ""}${p.fecha ? " el " + rtkCuando(p.fecha) : ""}`.trim()).filter(Boolean);
+  const pago = pagosCab.length ? `<div class="meta">Pagado por ${esc(pagosCab.join(" · "))}</div>` : "";
+  const anulado = d.fecha_anulacion
+    ? `<div class="meta">Anulado por ${esc(d.usuario_anulo || "")} el ${esc(rtkCuando(d.fecha_anulacion))}</div>`
+    : "";
+  const historial = (d.pagos || []).map((p) => `<tr>
+      <td class="izq">${esc(p.usuario || "")}</td>
+      <td class="corto">${esc(rtkCuando(p.fecha))}</td>
+      <td>${esc(fmt(p.monto))}</td>
+    </tr>`).join("") || `<tr><td class="izq" colspan="3">Sin pagos</td></tr>`;
+  return `<div class="rvr-doc-cab">
+      <div class="emp">${esc(d.empresa || "BANCA MODERNA")}</div>
+      <div class="tit">Ticket #${esc(d.id)}</div>
+      <div class="meta">${esc(d.banca_codigo || "")} ${esc(d.banca_nombre || d.banca || "")}</div>
+      <div class="meta">Fecha y hora ${esc(rtkCuando(d.fecha_hora))}</div>
+      <div class="meta">Estado: ${esc(d.etiqueta_estado || rtkEstado(d.estado))}</div>
+      ${pago}${anulado}
+    </div>
+    <table class="rvr-tabla">
+      <thead><tr>
+        <th class="izq">Tipo y número</th><th>Apostado</th><th>Ganado</th>
+      </tr></thead>
+      <tbody>
+        ${grupos || `<tr><td class="izq" colspan="3">Sin jugadas</td></tr>`}
+      </tbody>
+    </table>
+    <table class="rvr-tabla rtk-cierre">
+      <tbody>
+        <tr class="bloque-totales"><td class="izq">Total apostado</td><td class="rtk-monto">${esc(fmt(d.total))}</td></tr>
+        <tr class="bloque-totales"><td class="izq">Premio ganado</td><td class="rtk-monto">${esc(fmt(d.premio_ganado))}</td></tr>
+        <tr class="bloque-totales"><td class="izq">Monto pagado</td><td class="rtk-monto">${esc(fmt(d.importe_pagado))}</td></tr>
+        <tr class="bloque-totales"><td class="izq">Saldo pendiente</td><td class="rtk-monto">${esc(fmt(d.importe_pendiente))}</td></tr>
+      </tbody>
+    </table>
+    <div class="rvr-doc-cab" style="margin-top:12px">
+      <div class="tit">Historial de pagos</div>
+    </div>
+    <table class="rvr-tabla">
+      <thead><tr><th class="izq">Usuario</th><th class="corto">Fecha</th><th>Monto</th></tr></thead>
+      <tbody>${historial}</tbody>
+    </table>`;
+}
+
+function renderReporteTickets() {
+  const hoja = $("#rtk-hoja");
+  if (!hoja || !RTK.datos) return;
+  RTK.detalle = null;
+  rtkMarcarDetalle(false);
+  const filas = rtkFilasVisibles();
+  const suma = filas.reduce((n, t) => n + Number(t.total || 0), 0);
+  const premio = filas.reduce((n, t) => n + Number(t.premio_total || 0), 0);
+  const pack = rtkLineasPagina(filas, !!RTK.datos.agrupar_estado);
+  hoja.innerHTML = rtkHtmlDocumento(RTK.datos, filas, { n: filas.length, suma, premio }, true);
+  hoja.dataset.zoom = String(RTK.zoom);
+  const pag = $("#rtk-pagina");
+  if (pag) pag.textContent = `${RTK.pagina} / ${pack.paginas}`;
+  const prev = $("#btn-rtk-prev");
+  const next = $("#btn-rtk-next");
+  if (prev) prev.disabled = RTK.pagina <= 1;
+  if (next) next.disabled = RTK.pagina >= pack.paginas;
+}
+
+function pintarDetalleReporteTicket() {
+  const hoja = $("#rtk-hoja");
+  if (!hoja || !RTK.detalle) return;
+  hoja.innerHTML = rtkHtmlDetalle(RTK.detalle);
+  hoja.dataset.zoom = String(RTK.zoom);
+  rtkMarcarDetalle(true);
+  const pag = $("#rtk-pagina");
+  if (pag) pag.textContent = `Ticket #${RTK.detalle.id}`;
+  const prev = $("#btn-rtk-prev");
+  const next = $("#btn-rtk-next");
+  if (prev) prev.disabled = true;
+  if (next) next.disabled = true;
+}
+
+function rtkPrepararImpresion() {
+  if (!$("#rtk-hoja")) return;
+  if (RTK.detalle) {
+    $("#rtk-hoja").innerHTML = rtkHtmlDetalle(RTK.detalle);
+    $("#rtk-hoja").dataset.zoom = "100";
+    return;
+  }
+  if (!RTK.datos) return;
+  const filas = RTK.datos.tickets || [];
+  const suma = filas.reduce((n, t) => n + Number(t.total || 0), 0);
+  const premio = filas.reduce((n, t) => n + Number(t.premio_total || 0), 0);
+  $("#rtk-hoja").innerHTML = rtkHtmlDocumento(RTK.datos, filas, { n: filas.length, suma, premio }, false);
+  $("#rtk-hoja").dataset.zoom = "100";
+}
+
+async function cargarReporteTickets() {
+  const hoy = hoyISO();
+  if ($("#rtk-desde") && !$("#rtk-desde").value) $("#rtk-desde").value = hoy;
+  if ($("#rtk-hasta") && !$("#rtk-hasta").value) $("#rtk-hasta").value = hoy;
+  if ($("#rtk-hora-desde") && !$("#rtk-hora-desde").value) $("#rtk-hora-desde").value = "00:00";
+  if ($("#rtk-hora-hasta") && !$("#rtk-hora-hasta").value) $("#rtk-hora-hasta").value = "23:59";
+  rtkPintarFechas();
+  try {
+    RTK.filtros = await api("/reportes/ventas-resumido/filtros");
+    if (!SORTEOS.length) SORTEOS = await api("/sorteos");
+    RTK.cajeros = (await api("/usuarios")).filter((u) => u.rol === "operador");
+    rtkPoblarSelects();
+    if (!RTK.datos) msg("#rtk-msg", "Filtros listos. Pulse VER para consultar.", true);
+  } catch (e) {
+    msg("#rtk-msg", e.message, false);
+  }
+}
+
+async function verReporteTickets() {
+  const f = rtkFiltrosFormulario();
+  if (!f.desde || !f.hasta) {
+    msg("#rtk-msg", "Indique el rango de fechas", false);
+    return;
+  }
+  if (f.ticket_id && !/^\d+$/.test(f.ticket_id)) {
+    msg("#rtk-msg", "El número de ticket no es válido", false);
+    return;
+  }
+  if (f.hora_hasta < f.hora_desde) {
+    msg("#rtk-msg", "La hora hasta no puede ser anterior a la hora desde", false);
+    return;
+  }
+  try {
+    RTK.datos = await api("/reportes/tickets?" + rtkParametros(f).toString());
+    RTK.consulta = f;
+    RTK.detalle = null;
+    RTK.vista = null;
+    RTK.pagina = 1;
+    $("#rtk-visor").hidden = false;
+    renderReporteTickets();
+    const n = RTK.datos.total || 0;
+    const aviso = RTK.datos.recorte ? " · se muestran los 5.000 más recientes" : "";
+    const rango = `${rvrFecha(RTK.datos.desde)} ${f.hora_desde} al ${rvrFecha(RTK.datos.hasta)} ${f.hora_hasta}`;
+    msg("#rtk-msg", `Reporte listo · ${n} ticket(s) · ${rango}${aviso}`, true);
+  } catch (e) {
+    msg("#rtk-msg", e.message, false);
+  }
+}
+
+async function rtkObtenerPdf() {
+  const ruta = RTK.detalle
+    ? `/reportes/tickets/${RTK.detalle.id}/pdf`
+    : (RTK.consulta ? "/reportes/tickets.pdf?" + rtkParametros(RTK.consulta).toString() : "");
+  if (!ruta) {
+    msg("#rtk-msg", "Pulse VER para consultar antes de imprimir o descargar.", false);
+    return null;
+  }
+  const r = await fetch(ruta, {
+    headers: TOKEN ? { Authorization: "Bearer " + TOKEN } : {},
+  });
+  if (!r.ok) {
+    let detalle = "No se pudo generar el PDF";
+    try {
+      const j = await r.json();
+      detalle = (j && j.detail) || detalle;
+    } catch { /* el cuerpo no era JSON */ }
+    throw new Error(typeof detalle === "string" ? detalle : "No se pudo generar el PDF");
+  }
+  const blob = await r.blob();
+  if (!blob || !blob.size) throw new Error("El PDF llegó vacío");
+  return blob;
+}
+
+function rtkNombrePdf() {
+  if (RTK.detalle) return `Ticket-${RTK.detalle.id}.pdf`;
+  const f = RTK.consulta || {};
+  return `Reporte-de-Tickets-${f.desde || "desde"}-al-${f.hasta || "hasta"}.pdf`;
+}
+
+async function descargarPdfReporteTickets() {
+  try {
+    const blob = await rtkObtenerPdf();
+    if (!blob) return;
+    const url = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = rtkNombrePdf();
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    msg("#rtk-msg", RTK.detalle
+      ? `PDF del ticket #${RTK.detalle.id} descargado.`
+      : "PDF A4 horizontal descargado con el último reporte consultado.", true);
+  } catch (e) {
+    msg("#rtk-msg", e.message, false);
+  }
+}
+
+async function imprimirReporteTickets() {
+  try {
+    const blob = await rtkObtenerPdf();
+    if (!blob) return;
+    const url = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
+    const w = window.open(url, "_blank");
+    if (!w) {
+      msg("#rtk-msg", "El navegador bloqueó la ventana. Use DESCARGAR PDF: el archivo ya es A4 horizontal.", false);
+      return;
+    }
+    setTimeout(() => { try { w.focus(); w.print(); } catch { /* el visor imprime al abrir */ } }, 700);
+    msg("#rtk-msg", RTK.detalle
+      ? `Impresión del ticket #${RTK.detalle.id}.`
+      : "Impresión del último reporte consultado, en A4 horizontal.", true);
+  } catch (e) {
+    msg("#rtk-msg", e.message, false);
+  }
+}
+
+function regresarReporteTickets() {
+  RTK.detalle = null;
+  RTK.vista = null;
+  $("#rtk-visor").hidden = true;
+  ir("reportes");
+}
+
+function volverListadoTickets(desdeHistorial) {
+  if (!RTK.datos) return;
+  const vista = RTK.vista || {};
+  RTK.detalle = null;
+  RTK.pagina = vista.pagina || RTK.pagina;
+  RTK.buscar = vista.buscar || "";
+  if ($("#rtk-buscar")) $("#rtk-buscar").value = RTK.buscar;
+  renderReporteTickets();
+  const scroll = rtkScroll();
+  if (scroll) {
+    scroll.scrollTop = vista.scrollTop || 0;
+    scroll.scrollLeft = vista.scrollLeft || 0;
+  }
+  const raiz = rtkRaizScroll();
+  if (raiz) raiz.scrollTop = vista.paginaTop || 0;
+  RTK.vista = null;
+  actualizarBarraVolver();
+  if (!desdeHistorial && history.state && history.state.detalle) history.back();
+}
+
+async function verDetalleReporteTicket(id) {
+  try {
+    if (!RTK.detalle) {
+      const scroll = rtkScroll();
+      const raiz = rtkRaizScroll();
+      RTK.vista = {
+        pagina: RTK.pagina,
+        buscar: RTK.buscar,
+        scrollTop: scroll ? scroll.scrollTop : 0,
+        scrollLeft: scroll ? scroll.scrollLeft : 0,
+        paginaTop: raiz ? raiz.scrollTop : 0,
+      };
+    }
+    RTK.detalle = await api(`/reportes/tickets/${id}`);
+    pintarDetalleReporteTicket();
+    const scroll = rtkScroll();
+    if (scroll) {
+      scroll.scrollTop = 0;
+      scroll.scrollLeft = 0;
+    }
+    msg("#rtk-msg", `Detalle del ticket #${RTK.detalle.id}.`, true);
+    if (!(history.state && history.state.detalle)) {
+      const prof = (history.state && history.state.prof) || 0;
+      history.pushState({
+        sec: "reporte-tickets",
+        detalle: RTK.detalle.id,
+        prof: prof + 1,
+      }, "", urlHistorial("reporte-tickets", "ticket-" + RTK.detalle.id));
+    }
+    actualizarBarraVolver();
+  } catch (e) {
+    msg("#rtk-msg", e.message, false);
+  }
+}
+
 /* ---------------------------------------------------------------- auditoría */
 async function verAuditoria() {
   const ent = $("#aud-entidad").value.trim(), acc = $("#aud-accion").value.trim();
@@ -2355,6 +3425,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!grupo) return;
     const abierto = !grupo.classList.contains("abierto");
     grupo.classList.toggle("abierto", abierto);
+    b.setAttribute("aria-expanded", abierto ? "true" : "false");
+  }));
+  $$(".nav-sub-titulo").forEach((b) => b.addEventListener("click", () => {
+    const sub = b.closest(".nav-sub");
+    if (!sub) return;
+    const abierto = !sub.classList.contains("abierto");
+    sub.classList.toggle("abierto", abierto);
     b.setAttribute("aria-expanded", abierto ? "true" : "false");
   }));
   window.addEventListener("resize", onResizeMenu);
@@ -2436,11 +3513,11 @@ document.addEventListener("DOMContentLoaded", () => {
       pintarListaTickets().catch((e) => msg("#tic-lista-msg", e.message, false));
     });
   });
-  $("#tic-modal-cerrar")?.addEventListener("click", () => { $("#tic-modal").hidden = true; });
+  $("#tic-modal-cerrar")?.addEventListener("click", () => cerrarModal($("#tic-modal")));
   $("#tic-modal")?.addEventListener("click", (ev) => {
-    if (ev.target === $("#tic-modal")) $("#tic-modal").hidden = true;
+    if (ev.target === $("#tic-modal")) cerrarModal($("#tic-modal"));
   });
-  const cerrarAnular = () => { $("#tic-anular-modal").hidden = true; TIC_ANULAR = null; };
+  const cerrarAnular = () => { TIC_ANULAR = null; cerrarModal($("#tic-anular-modal")); };
   $("#tic-anular-cancelar")?.addEventListener("click", cerrarAnular);
   $("#tic-anular-cancelar-2")?.addEventListener("click", cerrarAnular);
   $("#tic-anular-confirmar")?.addEventListener("click", () => {
@@ -2471,6 +3548,83 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-pen-ver").addEventListener("click", verPendientes);
   $("#btn-pen-texto").addEventListener("click", verPendientesTexto);
   $("#btn-pen-imprimir").addEventListener("click", imprimirPendientes);
+  if ($("#btn-rvr-ver")) $("#btn-rvr-ver").addEventListener("click", () => verVentasResumido());
+  if ($("#btn-rvr-imprimir")) $("#btn-rvr-imprimir").addEventListener("click", imprimirVentasResumido);
+  if ($("#btn-rvr-print2")) $("#btn-rvr-print2").addEventListener("click", imprimirVentasResumido);
+  if ($("#btn-rvr-pdf")) $("#btn-rvr-pdf").addEventListener("click", descargarPdfVentasResumido);
+  window.addEventListener("beforeprint", rvrPrepararImpresionPanel);
+  window.addEventListener("afterprint", () => { if (RVR.datos) renderVentasResumido(); });
+  if ($("#btn-rvr-regresar")) $("#btn-rvr-regresar").addEventListener("click", regresarVentasResumido);
+  if ($("#btn-rvr-actualizar")) $("#btn-rvr-actualizar").addEventListener("click", () => verVentasResumido());
+  if ($("#btn-rvr-prev")) $("#btn-rvr-prev").addEventListener("click", () => { RVR.pagina -= 1; renderVentasResumido(); });
+  if ($("#btn-rvr-next")) $("#btn-rvr-next").addEventListener("click", () => { RVR.pagina += 1; renderVentasResumido(); });
+  if ($("#rvr-zoom")) $("#rvr-zoom").addEventListener("change", (e) => {
+    RVR.zoom = Number(e.target.value) || 100;
+    if ($("#rvr-hoja")) $("#rvr-hoja").dataset.zoom = String(RVR.zoom);
+  });
+  for (const id of ["rvr-desde", "rvr-hasta"]) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", rvrPintarFechas);
+  }
+  if ($("#rvr-buscar")) $("#rvr-buscar").addEventListener("input", (e) => {
+    RVR.buscar = (e.target.value || "").trim();
+    RVR.pagina = 1;
+    renderVentasResumido();
+  });
+  if ($("#btn-rtk-ver")) $("#btn-rtk-ver").addEventListener("click", () => verReporteTickets());
+  if ($("#btn-rtk-imprimir")) $("#btn-rtk-imprimir").addEventListener("click", imprimirReporteTickets);
+  if ($("#btn-rtk-print2")) $("#btn-rtk-print2").addEventListener("click", imprimirReporteTickets);
+  if ($("#btn-rtk-pdf")) $("#btn-rtk-pdf").addEventListener("click", descargarPdfReporteTickets);
+  if ($("#btn-rtk-regresar")) $("#btn-rtk-regresar").addEventListener("click", regresarReporteTickets);
+  if ($("#btn-rtk-volver")) $("#btn-rtk-volver").addEventListener("click", () => {
+    if (history.state && history.state.detalle) history.back();
+    else volverListadoTickets(true);
+  });
+  if ($("#btn-volver-pantalla")) $("#btn-volver-pantalla").addEventListener("click", volverPantalla);
+  window.addEventListener("popstate", alRetroceder);
+  asegurarHistorial();
+  if ($("#btn-rtk-actualizar")) $("#btn-rtk-actualizar").addEventListener("click", () => {
+    if (RTK.detalle) verDetalleReporteTicket(RTK.detalle.id);
+    else verReporteTickets();
+  });
+  if ($("#btn-rtk-prev")) $("#btn-rtk-prev").addEventListener("click", () => {
+    if (RTK.detalle) return;
+    RTK.pagina -= 1;
+    renderReporteTickets();
+  });
+  if ($("#btn-rtk-next")) $("#btn-rtk-next").addEventListener("click", () => {
+    if (RTK.detalle) return;
+    RTK.pagina += 1;
+    renderReporteTickets();
+  });
+  if ($("#rtk-zoom")) $("#rtk-zoom").addEventListener("change", (e) => {
+    RTK.zoom = Number(e.target.value) || 100;
+    if ($("#rtk-hoja")) $("#rtk-hoja").dataset.zoom = String(RTK.zoom);
+  });
+  if ($("#rtk-buscar")) $("#rtk-buscar").addEventListener("input", (e) => {
+    if (RTK.detalle) return;
+    RTK.buscar = (e.target.value || "").trim();
+    RTK.pagina = 1;
+    renderReporteTickets();
+  });
+  if ($("#rtk-banca")) $("#rtk-banca").addEventListener("change", rtkPoblarCajeros);
+  if ($("#rtk-grupo")) $("#rtk-grupo").addEventListener("change", rtkPoblarSelects);
+  for (const id of ["rtk-desde", "rtk-hasta"]) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", rtkPintarFechas);
+  }
+  const hojaTickets = $("#rtk-hoja");
+  if (hojaTickets) hojaTickets.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-rtk-ver]");
+    if (!btn) return;
+    verDetalleReporteTicket(btn.dataset.rtkVer);
+  });
+  window.addEventListener("beforeprint", rtkPrepararImpresion);
+  window.addEventListener("afterprint", () => {
+    if (RTK.detalle) pintarDetalleReporteTicket();
+    else if (RTK.datos) renderReporteTickets();
+  });
+  if ($("#rvr-grupo")) $("#rvr-grupo").addEventListener("change", () => rvrPoblarSelects());
   $("#btn-aud-ver").addEventListener("click", () => verAuditoria().catch((e) => alert(e.message)));
   $("#btn-fuente").addEventListener("click", () => consultarFuente().catch((e) => msg("#fuente-msg", e.message, false)));
   $("#btn-gan").addEventListener("click", () => cargarGanadores().catch((e) => msg("#gan-msg", e.message, false)));
@@ -2610,7 +3764,7 @@ async function verTicketGanador(id) {
   const cuerpo = $("#gan-modal-cuerpo");
   $("#gan-modal-titulo").textContent = `Ticket #${id}`;
   cuerpo.innerHTML = '<p class="nota">Cargando…</p>';
-  modal.hidden = false;
+  abrirModal(modal);
   try {
     const d = await api(`/ganadores/${id}`);
     const grupos = (d.grupos || []).map((g) => {
@@ -2645,7 +3799,7 @@ async function verTicketGanador(id) {
 
 function cerrarModalGanador() {
   const modal = $("#gan-modal");
-  if (modal) modal.hidden = true;
+  if (modal) cerrarModal(modal);
 }
 
 window.verTicketGanador = verTicketGanador;

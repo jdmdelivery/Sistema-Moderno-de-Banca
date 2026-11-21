@@ -37,26 +37,31 @@ def test_hoy_ayer_y_rango_imprimen_el_periodo_sin_alterar_saldos(entorno, monkey
     assert hoy["real"]["neto"] == "10.00"
     assert hoy["desde"] == "14-11-2026"
     assert hoy["hasta"] == "14-11-2026"
-    assert "Cajero: Operador vend1" in hoy["texto"]
-    assert "FECHA: 14/11/2026" in hoy["texto"]
+    assert "Cajera: Operador vend1" in hoy["texto"]
+    assert "Período: 14/11/2026" in hoy["texto"]
+    assert "Código:" in hoy["texto"]
+    assert "Terminal:" in hoy["texto"]
+    assert "Impreso:" in hoy["texto"]
     assert "Sucursal:" not in hoy["texto"]
-    assert "VENTAS DEL DÍA: RD$10.00" in hoy["texto"]
-    assert "PREMIOS PAGADOS: RD$0.00" in hoy["texto"]
-    assert "QUEDÓ: RD$10.00" in hoy["texto"]
+    assert hoy["informe"]["oficial"]["ventas"] == "10.00"
+    assert hoy["informe"]["oficial"]["balance"] == "10.00"
+    assert hoy["informe"]["oficial"]["total"] == "10.00"
     assert "TICKET" not in hoy["texto"]
     assert entorno.saldo(b["sucursal"]["id"]) == antes
 
     ayer = _resumen(entorno, b["headers"], "2026-11-13", "2026-11-13")
     assert ayer["real"]["ventas"] == "0.00"
     assert ayer["real"]["quedo"] == "0.00"
-    assert "FECHA: 13/11/2026" in ayer["texto"]
-    assert "VENTAS DEL DÍA: RD$0.00" in ayer["texto"]
+    assert "Período: 13/11/2026" in ayer["texto"]
+    assert ayer["informe"]["oficial"]["ventas"] == "0.00"
+    assert ayer["informe"]["oficial"]["balance"] == "0.00"
+    assert ayer["informe"]["oficial"]["total"] == "0.00"
 
     rango = _resumen(entorno, b["headers"], "2026-11-13", "2026-11-14")
     assert rango["real"]["ventas"] == "10.00"
     assert rango["real"]["quedo"] == "10.00"
-    assert "DESDE: 13/11/2026" in rango["texto"]
-    assert "HASTA: 14/11/2026" in rango["texto"]
+    assert "Período: 13/11/2026 al 14/11/2026" in rango["texto"]
+    assert rango["informe"]["periodo"] == "13/11/2026 al 14/11/2026"
 
     entrega = entorno.c.post(
         "/terminal/entregas",
@@ -67,7 +72,8 @@ def test_hoy_ayer_y_rango_imprimen_el_periodo_sin_alterar_saldos(entorno, monkey
     despues = _resumen(entorno, b["headers"], "2026-11-14", "2026-11-14")
     assert despues["real"]["ventas"] == "10.00"
     assert despues["real"]["quedo"] == "10.00"
-    assert "VENTAS DEL DÍA: RD$10.00" in despues["texto"]
+    assert despues["informe"]["oficial"]["ventas"] == "10.00"
+    assert despues["informe"]["oficial"]["total"] == "10.00"
     assert entorno.saldo(b["sucursal"]["id"]) == antes
     db = dbmod.nueva_sesion()
     assert db.query(Entrega).count() == 1
@@ -88,10 +94,10 @@ def test_hoy_ayer_y_rango_imprimen_el_periodo_sin_alterar_saldos(entorno, monkey
     assert medianoche["desde"] == "15-11-2026"
     assert medianoche["hasta"] == "15-11-2026"
     assert medianoche["real"]["ventas"] == "0.00"
-    assert "FECHA: 15/11/2026" in medianoche["texto"]
+    assert "Período: 15/11/2026" in medianoche["texto"]
     conservado = _resumen(entorno, b["headers"], "2026-11-14", "2026-11-14")
     assert conservado["real"]["ventas"] == "10.00"
-    assert "FECHA: 14/11/2026" in conservado["texto"]
+    assert "Período: 14/11/2026" in conservado["texto"]
     assert entorno.saldo(b["sucursal"]["id"]) == antes
 
 
@@ -138,10 +144,16 @@ def test_mes_completo_incluye_todos_los_dias_y_totales(entorno, monkeypatch):
     assert datos["totales"]["ventas"] == "15.00"
     assert datos["totales"]["premios_pagados"] == "300.00"
     assert datos["totales"]["quedo"] == "-285.00"
-    assert "DÍA | VENTAS | PAGADOS | QUEDÓ" in datos["texto"]
-    assert "TOTAL VENTAS: RD$15.00" in datos["texto"]
-    assert "TOTAL PAGADOS: RD$300.00" in datos["texto"]
-    assert "TOTAL QUEDÓ: RD$-285.00" in datos["texto"]
+    assert datos["informe"]["periodo"] == "01/11/2026 al 30/11/2026"
+    assert datos["informe"]["oficial"]["ventas"] == "15.00"
+    assert datos["informe"]["oficial"]["premios_pagados"] == "300.00"
+    assert datos["informe"]["oficial"]["comision"] == "0.00"
+    assert datos["informe"]["oficial"]["balance"] == "-285.00"
+    assert datos["informe"]["oficial"]["recargas"] == "0.00"
+    assert datos["informe"]["oficial"]["total"] == "-285.00"
+    assert "RESUMEN FINAL" in datos["texto"]
+    assert "-RD$285.00" in datos["texto"]
+    assert "anio=2026" in datos["impresion"]["url"] and "mes=11" in datos["impresion"]["url"]
     assert entorno.saldo(b["sucursal"]["id"]) == antes
 
     febrero = entorno.c.get("/terminal/reportes/mes?anio=2024&mes=2", headers=b["headers"])

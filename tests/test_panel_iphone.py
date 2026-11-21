@@ -86,7 +86,7 @@ def test_usuarios_tarjetas_movil_y_tabla_escritorio(entorno):
     sw = entorno.c.get("/sw.js").text
     assert 'id="sec-usuarios"' in html
     assert "usu-hero" in html
-    assert "perfil-ciclo-balance-4" in html  # cache-bust CSS/JS
+    assert "movil-safari-2" in html  # cache-bust CSS/JS
     assert "tarjetaUsuarioHtml" in js
     assert "pintarUsuarios" in js and "esUsuariosMovil" in js
     assert "usu-lista-movil" in js and "usu-tabla-escritorio" in js
@@ -104,7 +104,25 @@ def test_usuarios_tarjetas_movil_y_tabla_escritorio(entorno):
     assert ".usu-lista-movil{display:flex" in compact
     assert ".usu-tabla-escritorio{display:none!important}" in compact
     assert "@media(min-width:901px)" in compact
-    assert "banca-admin-shell-v12-perfil-ciclo-balance" in sw
+    assert "banca-admin-shell-v14-premios-pendientes" in sw
+
+
+def test_movil_volver_cierra_y_bloquea_fondo(entorno):
+    html = entorno.c.get("/").text
+    css = entorno.c.get("/static/style.css").text
+    js = entorno.c.get("/static/app.js").text
+    assert 'id="btn-volver-pantalla"' in html
+    assert ">Volver</button>" in html
+    for modal in ("cc-modal", "vc-modal", "tic-modal", "tic-anular-modal", "gan-modal"):
+        assert f'id="{modal}"' in html
+    assert html.count(">Cerrar</button>") >= 5
+    assert "body.modal-abierto" in css
+    assert "overscroll-behavior:contain" in css.replace(" ", "")
+    assert "--vv-alto" in css
+    assert "abrirModal" in js and "cerrarModal" in js
+    assert "adquirirBloqueoModal" in js and "soltarBloqueoModal" in js
+    assert "popstate" in js and "alRetroceder" in js
+    assert "HIST_SCROLL" in js
 
 
 def test_fuente_resultados_es_conectate(entorno):

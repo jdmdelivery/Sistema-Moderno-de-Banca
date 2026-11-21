@@ -52,13 +52,16 @@ def test_resumen_de_la_cajera_no_mueve_la_caja_ni_mezcla_pruebas(entorno, monkey
     assert datos["real"]["neto"] == "20.00"
     assert datos["real"]["premios_pendientes"] == "0.00"
     assert datos["prueba"] is None
+    assert datos["informe"]["prueba"] is None
     assert "PRUEBA — NO OFICIAL" not in datos["texto"]
-    assert "VENTAS DEL DÍA: RD$20.00" in datos["texto"]
-    assert "PREMIOS PAGADOS: RD$0.00" in datos["texto"]
-    assert "QUEDÓ: RD$20.00" in datos["texto"]
+    assert datos["informe"]["oficial"]["ventas"] == "20.00"
+    assert datos["informe"]["oficial"]["premios_pagados"] == "0.00"
+    assert datos["informe"]["oficial"]["comision"] == "0.00"
+    assert datos["informe"]["oficial"]["balance"] == "20.00"
+    assert datos["informe"]["oficial"]["total"] == "20.00"
+    assert "RD$20.00" in datos["texto"]
     assert "PAGADO EN OTRA" not in datos["texto"]
     assert "TICKET" not in datos["texto"]
-    assert "COMISI" not in datos["texto"].upper()
     assert entorno.saldo(b1["sucursal"]["id"]) == antes
     assert vendido["id"] != ganador["id"]
     ajeno = entorno.c.get("/terminal/reportes/dia", headers=otra["headers"]).json()
@@ -77,7 +80,9 @@ def test_resumen_de_la_cajera_no_mueve_la_caja_ni_mezcla_pruebas(entorno, monkey
     mixto = entorno.c.get("/terminal/reportes/dia", headers=b1["headers"]).json()
     assert mixto["real"]["ventas"] == "20.00"
     assert mixto["prueba"]["ventas"] == "50.00"
-    assert "PRUEBA — NO OFICIAL" in mixto["texto"]
+    assert mixto["informe"]["oficial"]["ventas"] == "20.00"
+    assert mixto["informe"]["prueba"]["ventas"] == "50.00"
+    assert mixto["texto"].count("PRUEBA — NO OFICIAL") == 1
     assert entorno.saldo(b1["sucursal"]["id"]) == antes
 
     db = dbmod.nueva_sesion()

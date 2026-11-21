@@ -114,6 +114,81 @@ class _Lienzo:
             else:
                 self.y += h + (self.gap if extra is None else extra)
 
+    def _partir(self, texto: str, font, ancho: int) -> list[str]:
+        texto = str(texto or "").strip()
+        if not texto:
+            return [""]
+        palabras = texto.split()
+        lineas: list[str] = []
+        actual = ""
+        for palabra in palabras:
+            prueba = f"{actual} {palabra}".strip()
+            if actual and _medir(self.draw, prueba, font)[0] > ancho:
+                lineas.append(actual)
+                actual = palabra
+            else:
+                actual = prueba
+        if actual:
+            lineas.append(actual)
+        return lineas or [""]
+
+    def texto_completo(self, s: str, font, *, centrado: bool = False, extra: int | None = None):
+        """Escribe el texto entero. Encoge o parte líneas; no lo corta con puntos."""
+        s = str(s or "")
+        tam = int(getattr(font, "size", 16) or 16)
+        fuente = font
+        if " " not in s.strip() and _medir(self.draw, s, fuente)[0] > self.util:
+            while tam > 11 and _medir(self.draw, s, fuente)[0] > self.util:
+                tam -= 1
+                fuente = _fuente(tam, negrita=True)
+            self._linea_entera(s, fuente, centrado, extra)
+            return
+        lineas = self._partir(s, fuente, self.util)
+        for i, ln in enumerate(lineas):
+            fuente_linea = fuente
+            t = tam
+            while t > 11 and _medir(self.draw, ln, fuente_linea)[0] > self.util:
+                t -= 1
+                fuente_linea = _fuente(t, negrita=True)
+            self._linea_entera(ln, fuente_linea, centrado, 1 if i < len(lineas) - 1 else extra)
+
+    def _linea_entera(self, ln: str, font, centrado: bool, extra: int | None):
+        w, h_med = _medir(self.draw, ln, font)
+        h = max(h_med, _alto(font))
+        x = _centrar_x(self.ancho, w) if centrado else MARGEN_X
+        if x < MARGEN_X:
+            x = MARGEN_X
+        self.draw.text((x, self.y), ln, fill=0, font=font)
+        self.y += h + (self.gap if extra is None else extra)
+
+    def fila_completa(self, izq: str, der: str, font_izq, font_der=None, *, extra: int | None = None):
+        """Etiqueta a la izquierda y monto completo a la derecha, sin recortes."""
+        font_der = font_der or font_izq
+        der = str(der or "")
+        tam = int(getattr(font_der, "size", 18) or 18)
+        fuente_monto = font_der
+        while tam > 10 and _medir(self.draw, der, fuente_monto)[0] > self.util:
+            tam -= 1
+            fuente_monto = _fuente(tam, negrita=True)
+        der_w = _medir(self.draw, der, fuente_monto)[0]
+        lineas = self._partir(str(izq or ""), font_izq, self.util)
+        ultima = lineas[-1] if lineas else ""
+        ultima_w = _medir(self.draw, ultima, font_izq)[0]
+        cabe = ultima_w + 8 + der_w <= self.util
+        previas = lineas[:-1] if cabe and lineas else lineas
+        for ln in previas:
+            self._linea_entera(ln, font_izq, False, 1)
+        h = max(
+            _medir(self.draw, ultima if cabe else " ", font_izq)[1],
+            _medir(self.draw, der, fuente_monto)[1],
+            _alto(font_izq),
+            _alto(fuente_monto),
+        )
+        if cabe:
+            self.draw.text((MARGEN_X, self.y), ultima, fill=0, font=font_izq)
+        self.draw.text((self.ancho - MARGEN_X - der_w, self.y), der, fill=0, font=fuente_monto)
+        self.y += h + (self.gap if extra is None else extra)
+
     def fila(self, izq: str, der: str, font_izq, font_der=None, *, extra: int | None = None):
         font_der = font_der or font_izq
         izq = _recortar(self.draw, str(izq), font_izq, self.util // 2)
@@ -152,44 +227,55 @@ def _cabecera(c: _Lienzo, banca: str, titulo: str):
 
 
 def render_resumen_png(datos: dict[str, Any]) -> bytes:
-    """PNG del resumen de caja. Usa los mismos montos del dict de resumen_dia."""
+    """PNG 384 px del resumen de caja. Mismos montos y período que la pantalla."""
     c = _Lienzo()
     f_c = _fuente(16, negrita=True)
     f_m = _fuente(18, negrita=True)
-    f_bal = _fuente(22, negrita=True)
-    _cabecera(c, str(datos.get("banca") or datos.get("sucursal") or "BANCA"), "RESUMEN DE CAJA")
-    if datos.get("desde") == datos.get("hasta"):
-        c.texto(f"Fecha: {datos.get('desde', '')}", f_c, centrado=True)
-    else:
-        c.texto(f"Desde: {datos.get('desde', '')}", f_c, centrado=True)
-        c.texto(f"Hasta: {datos.get('hasta', '')}", f_c, centrado=True)
+    f_tot = _fuente(22, negrita=True)
+    inf = datos.get("informe") or {}
+    banca = str(inf.get("banca") or datos.get("banca") or datos.get("sucursal") or "BANCA").strip().upper() or "BANCA"
+    f_nom = _nombre_ajustado(c.draw, banca, c.util, 28, 14)
+    c.texto_completo(banca, f_nom, centrado=True, extra=4)
+    c.texto_completo("RESUMEN DE CAJA", _fuente(22, negrita=True), centrado=True, extra=4)
+    c.sep()
+    c.texto_completo(f"Código: {inf.get('codigo', '')}", f_c)
+    c.texto_completo(f"Cajera: {inf.get('cajera') or datos.get('cajero', '')}", f_c)
+    c.texto_completo(f"Terminal: {inf.get('terminal') or datos.get('terminal', '')}", f_c)
+    periodo = inf.get("periodo")
+    if not periodo and datos.get("desde"):
+        periodo = datos.get("desde") if datos.get("desde") == datos.get("hasta") else (
+            f"{datos.get('desde', '')} al {datos.get('hasta', '')}"
+        )
+    c.texto_completo(f"Período: {periodo or ''}", f_c)
     if datos.get("impreso"):
-        c.texto(f"Impreso: {datos['impreso']}", f_c, centrado=True)
-    c.texto(f"Cajero: {datos.get('cajero', '')}", f_c)
-    if datos.get("sucursal"):
-        c.texto(f"Sucursal: {datos['sucursal']}", f_c)
+        c.texto_completo(f"Impreso: {datos['impreso']}", f_c)
     c.sep()
 
-    def bloque(titulo: str | None, b: dict):
+    def bloque(titulo: str | None, b: dict | None):
+        if not b:
+            return
         if titulo:
-            c.texto(titulo, f_m, centrado=True, extra=4)
-        c.fila("Ventas", _rd(b.get("ventas")), f_c, f_m)
-        if _D(b.get("anulados_monto") or 0) > 0:
-            c.fila("Anulados", _rd(b.get("anulados_monto")), f_c, f_m)
-        c.fila("Premios pagados", _rd(b.get("premios_pagados")), f_c, f_m)
-        if _D(b.get("premios_pendientes") or 0) > 0:
-            c.fila("Premios pend.", _rd(b.get("premios_pendientes")), f_c, f_m)
-        if _D(b.get("pagado_en_otra") or 0) > 0:
-            c.fila("Pagado otra", _rd(b.get("pagado_en_otra")), f_c, f_m)
-        c.sep()
-        c.fila("BALANCE", _rd(b.get("quedo", b.get("neto"))), f_bal, f_bal)
+            c.texto_completo(titulo, f_m, centrado=True, extra=4)
+        else:
+            c.texto_completo("RESUMEN FINAL", f_m, centrado=True, extra=4)
+        lineas = b.get("lineas") or []
+        if not lineas:
+            return
+        for fila in lineas:
+            destacar = bool(fila.get("destacar"))
+            if destacar:
+                c.sep()
+            c.fila_completa(
+                str(fila.get("concepto") or ""),
+                str(fila.get("monto") or ""),
+                f_tot if destacar else f_c,
+                f_tot if destacar else f_m,
+            )
 
-    real = datos.get("real") or {}
-    bloque(None, real)
-    prueba = datos.get("prueba")
-    if prueba is not None:
+    bloque(None, inf.get("oficial"))
+    if inf.get("prueba") is not None:
         c.sep()
-        bloque("PRUEBA — NO OFICIAL", prueba)
+        bloque("PRUEBA — NO OFICIAL", inf.get("prueba"))
     return c.png()
 
 
