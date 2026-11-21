@@ -286,6 +286,7 @@ def test_endpoint_pdf_local_a4_sin_impresora(entorno):
     )
     assert r.status_code == 200, r.text
     assert r.headers["content-type"].startswith("application/pdf")
+    assert r.headers["content-disposition"].startswith("inline;")
     assert "Resumen-de-Ventas-" in r.headers["content-disposition"]
     doc = _pdf(r.content)
     assert len(doc) == 1
@@ -522,6 +523,40 @@ def test_columnas_cajero_comision_perfil_y_premios_pagados(entorno):
     )
     assert "Total comisión de cajeras" not in _texto(_pdf(plano.content))[0]
 
+    def detalle(desde, hasta):
+        resp = entorno.c.get(
+            f"/reportes/ventas-cajeros/{wanda['id']}?desde={desde}&hasta={hasta}",
+            headers=entorno.admin,
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    rango = detalle("2026-11-18", "2026-11-19")
+    periodo = rango["resultado_periodo"]
+    assert periodo["desde"] == "2026-11-18" and periodo["hasta"] == "2026-11-19"
+    assert Decimal(periodo["ventas_validas"]) == Decimal("14633.00")
+    assert Decimal(periodo["premios_pagados"]) == Decimal("17400.00")
+    assert Decimal(periodo["comision"]) == Decimal("2194.95")
+    assert Decimal(periodo["quedo"]) == Decimal("-4961.95")
+    dia = detalle("2026-11-18", "2026-11-18")
+    assert dia["resultado_periodo"]["desde"] == dia["resultado_periodo"]["hasta"] == "2026-11-18"
+    assert Decimal(dia["resultado_periodo"]["ventas_validas"]) == Decimal("14633.00")
+    assert Decimal(dia["resultado_periodo"]["premios_pagados"]) == Decimal("0.00")
+    assert Decimal(dia["resultado_periodo"]["comision"]) == Decimal("2194.95")
+    assert Decimal(dia["resultado_periodo"]["quedo"]) == Decimal("12438.05")
+    assert dia["resumen"]["mi_caja"] == rango["resumen"]["mi_caja"]
+    assert dia["resumen"]["ventas_ciclo"] == rango["resumen"]["ventas_ciclo"]
+    otro = detalle("2026-11-19", "2026-11-19")
+    assert Decimal(otro["resultado_periodo"]["ventas_validas"]) == Decimal("0.00")
+    assert Decimal(otro["resultado_periodo"]["premios_pagados"]) == Decimal("17400.00")
+    assert Decimal(otro["resultado_periodo"]["comision"]) == Decimal("0.00")
+    assert Decimal(otro["resultado_periodo"]["quedo"]) == Decimal("-17400.00")
+    invertido = entorno.c.get(
+        f"/reportes/ventas-cajeros/{wanda['id']}?desde=2026-11-19&hasta=2026-11-18",
+        headers=entorno.admin,
+    )
+    assert invertido.status_code == 400
+
 
 def test_cajero_sin_venta_entra_por_premio_y_no_mezcla_prueba(entorno, monkeypatch):
     banca = entorno.banca(saldo=50000, codigo="C19", nombre="BANCA PAGO SOLO", usuario="vende")
@@ -583,3 +618,175 @@ def test_cajero_sin_venta_entra_por_premio_y_no_mezcla_prueba(entorno, monkeypat
         headers=entorno.admin,
     )
     assert Decimal(_fila(real.json(), "BANCA PAGO SOLO")["loteria"]["venta"]) == Decimal("15.00")
+
+
+def test_pdf_con_comision_de_cajeras_de_la_captura_no_revienta():
+    """132,697 − 71,630 − 19,904.55 cabe en el PDF. La fila de la banca sigue en 61,067."""
+    ventas, premios, comision = 13269700, 7163000, 1990455
+    assert ventas - premios == 6106700
+    assert ventas - premios - comision == 4116245
+    banca = {
+        "codigo": "1301",
+        "banca": "BANCA CASTILLO",
+        "loteria": {
+            "venta": "132697.00", "comision": "0.00", "neto": "132697.00",
+            "premios": "71630.00", "resultado": "61067.00",
+        },
+        "recargas": {"venta": "0.00", "comision": "0.00", "neto": "0.00"},
+        "resultado_total": "61067.00",
+        "cajeros": [{
+            "nombre": "Wanda", "venta": "132697.00", "comision": "19904.55",
+            "neto": "112792.45", "premios": "71630.00", "resultado": "41162.45",
+        }],
+        "total_comision_cajeras": "19904.55",
+    }
+    sub = {
+        "loteria": banca["loteria"], "recargas": banca["recargas"],
+        "resultado_total": "61067.00", "bancas": 1,
+    }
+    pdf = construir({
+        "empresa": "BANCA MODERNA",
+        "desde": "2026-11-20",
+        "hasta": "2026-11-21",
+        "impreso": "21/11/2026 01:00 AM",
+        "desglose_cajeros": True,
+        "grupos": [{"grupo_nombre": "GRUPO", "bancas": [banca], "subtotal": sub}],
+        "total": {**sub, "bancas": 1, "promedio_venta": "132697.00"},
+    })
+    assert pdf.startswith(b"%PDF")
+    texto = _texto(_pdf(pdf))[0]
+    assert formato_monto("19904.55") in texto
+    assert formato_monto("61067.00") in texto
+    assert formato_monto("132697.00") in texto
+
+
+def test_el_boton_resultado_no_cambia_la_fila_ni_mi_caja():
+    raiz = Path(__file__).resolve().parent.parent
+    js = (raiz / "apps" / "web" / "app.js").read_text(encoding="utf-8")
+    html = (raiz / "apps" / "web" / "index.html").read_text(encoding="utf-8")
+    css = (raiz / "apps" / "web" / "style.css").read_text(encoding="utf-8")
+    assert 'id="btn-rvr-resultado"' in html
+    assert 'id="btn-vc-resultado"' in js
+    assert "calcularResultadoBanca" in js
+    assert "total_comision_cajeras" in js
+    assert "rvrCeldasLoteria(b.loteria)" in js
+    assert "MI CAJA no cambia" in js
+    assert "navigator.share" in js
+    assert "a.download" in js
+    compacto = css.replace(" ", "")
+    assert "#sec-reporte-tickets.rvr-scroll" in compacto
+    assert "touch-action:pan-xpan-y" in compacto
+    assert 'id="vc-resultado-desde"' in js and 'id="vc-resultado-hasta"' in js
+    assert "Desde ${desde} · Hasta ${hasta}" in js
+    assert "HASTA no puede ser anterior a DESDE" in js
+    assert "const comision = centavos(p.comision);" in js
+    assert "const quedo = ventas - premios - comision;" in js
+    assert "no se resta otra vez" in js
+    assert "resultado_periodo" in js
+
+
+def _resultado_ui(venta, premios, comision):
+    """La misma resta del botón: ventas − premios pagados − comisión ganada, una vez."""
+    return Decimal(venta) - Decimal(premios) - Decimal(comision)
+
+
+def test_resultado_resta_la_comision_ganada_una_vez_antes_y_despues_de_pagarla(entorno):
+    """132,697 − 71,630 − 19,904.55 = 41,162.45 con la comisión pendiente y ya pagada.
+
+    El pago no cierra el ciclo, no cambia MI CAJA y no cambia la fila de la banca.
+    """
+    suc = entorno.sucursal(codigo="R132", nombre="BANCA RESULTADO", comision=0)
+    entorno.recargar(suc["id"], 300000)
+    cajera = entorno.operador("cajera132", "1234", suc["id"])
+    headers = entorno.login_terminal("cajera132", "1234")
+    alta = entorno.c.post(
+        "/comisiones",
+        json={"usuario_id": cajera["id"], "porcentaje": 15},
+        headers=entorno.admin,
+    )
+    assert alta.status_code in (200, 201), alta.text
+    factor = entorno.c.post(
+        "/tabla-pagos",
+        json={"tipo": "QN", "clave": "1ro", "factor": 71.63, "vigente_desde": "2026-11-14 09:00"},
+        headers=entorno.admin,
+    )
+    assert factor.status_code == 201, factor.text
+
+    sorteo = entorno.sorteo_id("La Primera 12")
+    for i, monto in enumerate([5000] * 26 + [1697], start=1):
+        entorno.vender_ok(headers, [{
+            "tipo": "QN", "sorteos": [sorteo], "numeros": f"{i:02d}", "monto": monto,
+        }])
+    ganador = entorno.vender_ok(headers, [{
+        "tipo": "QN", "sorteos": [sorteo], "numeros": "77", "monto": 1000,
+    }])
+    entorno.liquidar(sorteo, 77, 98, 99)
+    pago = entorno.c.post("/terminal/tickets/pagar", json={
+        "id": ganador["id"], "serial": ganador["serial"],
+    }, headers=headers)
+    assert pago.status_code == 200, pago.text
+
+    def leer():
+        reporte = entorno.c.get(
+            f"/reportes/ventas-resumido?desde=2026-11-14&hasta=2026-11-14&sucursal_id={suc['id']}",
+            headers=entorno.admin,
+        )
+        assert reporte.status_code == 200, reporte.text
+        banca = _fila(reporte.json(), "BANCA RESULTADO")
+        detalle = entorno.c.get(
+            f"/reportes/ventas-cajeros/{cajera['id']}?desde=2026-11-14&hasta=2026-11-14",
+            headers=entorno.admin,
+        )
+        assert detalle.status_code == 200, detalle.text
+        return banca, detalle.json()
+
+    banca, detalle = leer()
+    com = detalle["comision"]
+    resumen = detalle["resumen"]
+    assert Decimal(banca["loteria"]["venta"]) == Decimal("132697.00")
+    assert Decimal(banca["loteria"]["premios"]) == Decimal("71630.00")
+    assert Decimal(banca["loteria"]["resultado"]) == Decimal("61067.00")
+    assert Decimal(banca["total_comision_cajeras"]) == Decimal("19904.55")
+    assert _resultado_ui(
+        banca["loteria"]["venta"], banca["loteria"]["premios"], banca["total_comision_cajeras"],
+    ) == Decimal("41162.45")
+    assert Decimal(resumen["ventas_ciclo"]) == Decimal("132697.00")
+    assert Decimal(resumen["premios_pagados"]) == Decimal("71630.00")
+    assert Decimal(com["comision_acumulada"]) == Decimal("19904.55")
+    assert Decimal(com["comision_pendiente"]) == Decimal("19904.55")
+    assert Decimal(com["comision_pagada"]) == Decimal("0.00")
+    assert _resultado_ui(
+        resumen["ventas_ciclo"], resumen["premios_pagados"], com["comision_acumulada"],
+    ) == Decimal("41162.45")
+    assert Decimal(detalle["resultado_periodo"]["quedo"]) == Decimal("41162.45")
+    assert Decimal(detalle["resultado_periodo"]["comision"]) == Decimal("19904.55")
+    mi_caja = Decimal(resumen["mi_caja"])
+    saldo_banca = Decimal(str(entorno.saldo(suc["id"])))
+
+    cobro = entorno.c.post("/comisiones/pagos", json={
+        "usuario_id": cajera["id"], "monto": 19904.55, "operacion_id": "pago-comision-132",
+    }, headers=entorno.admin)
+    assert cobro.status_code == 201, cobro.text
+
+    banca2, detalle2 = leer()
+    com2 = detalle2["comision"]
+    resumen2 = detalle2["resumen"]
+    assert Decimal(banca2["loteria"]["venta"]) == Decimal("132697.00")
+    assert Decimal(banca2["loteria"]["premios"]) == Decimal("71630.00")
+    assert Decimal(banca2["loteria"]["resultado"]) == Decimal("61067.00")
+    assert Decimal(banca2["total_comision_cajeras"]) == Decimal("19904.55")
+    assert _resultado_ui(
+        banca2["loteria"]["venta"], banca2["loteria"]["premios"], banca2["total_comision_cajeras"],
+    ) == Decimal("41162.45")
+    assert Decimal(resumen2["ventas_ciclo"]) == Decimal("132697.00")
+    assert Decimal(resumen2["premios_pagados"]) == Decimal("71630.00")
+    assert Decimal(com2["comision_acumulada"]) == Decimal("19904.55")
+    assert Decimal(com2["comision_pagada"]) == Decimal("19904.55")
+    assert Decimal(com2["comision_pendiente"]) == Decimal("0.00")
+    assert _resultado_ui(
+        resumen2["ventas_ciclo"], resumen2["premios_pagados"], com2["comision_acumulada"],
+    ) == Decimal("41162.45")
+    assert Decimal(detalle2["resultado_periodo"]["quedo"]) == Decimal("41162.45")
+    assert Decimal(detalle2["resultado_periodo"]["comision"]) == Decimal("19904.55")
+    assert Decimal(resumen2["mi_caja"]) == mi_caja
+    assert Decimal(str(entorno.saldo(suc["id"]))) == saldo_banca

@@ -1317,6 +1317,12 @@ async function verDetalleCajero(id) {
         ${notaBalance}
         ${notaCierre}
         <div class="vc-comision-acciones">${btnCerrar}</div>
+        <div class="vc-resultado-rango">
+          <label class="vc-resultado-fecha">DESDE<input type="date" id="vc-resultado-desde" value="${esc(d.desde || "")}"></label>
+          <label class="vc-resultado-fecha">HASTA<input type="date" id="vc-resultado-hasta" value="${esc(d.hasta || "")}"></label>
+          <button type="button" class="btn vc-btn-resultado" id="btn-vc-resultado">RESULTADO</button>
+        </div>
+        <div id="vc-resultado" class="vc-resultado" hidden></div>
       </section>
       <p class="vc-detalle-tickets-meta">Tickets del ciclo: ${esc(r.tickets_vendidos)}</p>
       <section class="vc-hist">
@@ -1345,10 +1351,67 @@ async function verDetalleCajero(id) {
         alert(e.message || String(e));
       }));
     }
+    const botonResultado = cuerpo.querySelector("#btn-vc-resultado");
+    if (botonResultado) {
+      botonResultado.addEventListener("click", () => alternarResultadoCajero(d));
+    }
   } catch (e) {
     cuerpo.innerHTML = `<p class="msg error">${esc(e.message)}</p>`;
   }
 }
+function alternarResultadoCajero(d) {
+  const panel = $("#vc-resultado");
+  if (!panel) return;
+  const desde = ($("#vc-resultado-desde") && $("#vc-resultado-desde").value) || "";
+  const hasta = ($("#vc-resultado-hasta") && $("#vc-resultado-hasta").value) || "";
+  if (!desde || !hasta) {
+    panel.hidden = false;
+    panel.innerHTML = `<p class="vc-resultado-aviso">Elija DESDE y HASTA.</p>`;
+    return;
+  }
+  if (hasta < desde) {
+    panel.hidden = false;
+    panel.innerHTML = `<p class="vc-resultado-aviso">HASTA no puede ser anterior a DESDE.</p>`;
+    return;
+  }
+  const usuarioId = d && d.resumen && d.resumen.usuario_id;
+  panel.hidden = false;
+  panel.innerHTML = `<p class="vc-resultado-nota">Calculando…</p>`;
+  const q = new URLSearchParams({ desde, hasta });
+  api(`/reportes/ventas-cajeros/${usuarioId}?` + q.toString()).then((nuevo) => {
+    if (($("#vc-resultado-desde") || {}).value !== desde || ($("#vc-resultado-hasta") || {}).value !== hasta) return;
+    pintarResultadoCajero(nuevo.resultado_periodo || {});
+  }).catch((e) => {
+    panel.innerHTML = `<p class="vc-resultado-aviso">${esc(e.message || "No se pudo calcular el resultado.")}</p>`;
+  });
+}
+
+function pintarResultadoCajero(p) {
+  const panel = $("#vc-resultado");
+  if (!panel) return;
+  const ventas = centavos(p.ventas_validas);
+  const premios = centavos(p.premios_pagados);
+  const comision = centavos(p.comision);
+  const quedo = ventas - premios - comision;
+  const anulados = Number(p.tickets_anulados || 0);
+  panel.innerHTML = `<strong>RESULTADO</strong>
+    <p class="vc-resultado-periodo">Desde ${rvrFecha(p.desde)} · Hasta ${rvrFecha(p.hasta)}</p>
+    <table>
+      ${htmlLineaResultado("Ventas válidas", ventas, "")}
+      ${htmlLineaResultado("Premios pagados", premios, "-")}
+      ${htmlLineaResultado("Comisión de la cajera", comision, "-")}
+      ${htmlLineaResultado("Quedó", quedo, "")}
+    </table>
+    <p class="vc-resultado-nota">Es la comisión ganada sobre estas ventas. Si ya estaba pagada, no se resta otra vez. Premios pendientes excluidos. Tickets anulados excluidos: ${anulados}. MI CAJA no cambia.</p>
+    <button type="button" id="btn-vc-resultado-cerrar" class="btn">Cerrar</button>`;
+  panel.hidden = false;
+  const cerrar = $("#btn-vc-resultado-cerrar");
+  if (cerrar) cerrar.addEventListener("click", () => {
+    panel.hidden = true;
+    panel.innerHTML = "";
+  });
+}
+
 async function refrescarDashboardCajeroTrasCierre(usuarioId) {
   // Actualiza lista + detalle sin recargar la página ni alterar MI CAJA.
   if (typeof refrescarVentasCajeros === "function") {
@@ -2739,6 +2802,127 @@ function renderVentasResumido() {
   const next = $("#btn-rvr-next");
   if (prev) prev.disabled = RVR.pagina <= 1;
   if (next) next.disabled = RVR.pagina >= totalPag;
+  const panel = $("#rvr-resultado");
+  if (panel && !panel.hidden) pintarResultadoVentas();
+}
+
+function calcularResultadoBanca(banca) {
+  const lot = (banca && banca.loteria) || {};
+  const ventas = centavos(lot.venta);
+  const premios = centavos(lot.premios);
+  const comision = centavos(banca && banca.total_comision_cajeras);
+  const recargas = centavos(banca && banca.recargas && banca.recargas.neto);
+  const extras = [];
+  let quedo = ventas - premios - comision;
+  if (recargas !== 0) {
+    extras.push({ nombre: "Recargas (neto)", centavos: recargas });
+    quedo += recargas;
+  }
+  return {
+    codigo: banca.codigo || "",
+    banca: banca.banca || "",
+    ventas,
+    premios,
+    comision,
+    extras,
+    quedo,
+    fila: centavos(lot.resultado),
+  };
+}
+
+function htmlLineaResultado(etiqueta, cent, signo) {
+  const absoluto = montoDesdeCentavos(Math.abs(cent));
+  let valor = absoluto;
+  if (signo === "-") valor = "− " + absoluto;
+  else if (signo === "+") valor = (cent < 0 ? "− " : "+ ") + absoluto;
+  else if (cent < 0) valor = "− " + absoluto;
+  return `<tr><td>${esc(etiqueta)}</td><td>${valor}</td></tr>`;
+}
+
+function pintarResultadoVentas() {
+  const panel = $("#rvr-resultado");
+  if (!panel) return;
+  if (!RVR.datos) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    msg("#rvr-msg", "Pulse VER para consultar antes del resultado.", false);
+    return;
+  }
+  const bloques = [];
+  let ventas = 0;
+  let premios = 0;
+  let comision = 0;
+  let quedo = 0;
+  let extrasTotal = 0;
+  let n = 0;
+  for (const grupo of (RVR.datos.grupos || [])) {
+    for (const banca of (grupo.bancas || [])) {
+      const calc = calcularResultadoBanca(banca);
+      n += 1;
+      ventas += calc.ventas;
+      premios += calc.premios;
+      comision += calc.comision;
+      quedo += calc.quedo;
+      extrasTotal += calc.extras.reduce((suma, fila) => suma + fila.centavos, 0);
+      let extra = "";
+      for (const fila of calc.extras) {
+        const signo = fila.centavos < 0 ? "-" : "+";
+        extra += htmlLineaResultado(fila.nombre, fila.centavos, signo);
+      }
+      const diferenciaEsLaComision = calc.comision !== 0 && (calc.fila - calc.quedo) === calc.comision;
+      const notaFila = diferenciaEsLaComision
+        ? `<p class="rvr-resultado-nota">La fila de la banca muestra ${montoDesdeCentavos(calc.fila)}. Esa fila no resta la comisión de las cajeras.</p>`
+        : "";
+      bloques.push(`<section class="rvr-resultado-banca">
+        <h4>${esc(calc.codigo)} ${esc(calc.banca)}</h4>
+        <table>
+          ${htmlLineaResultado("Ventas válidas", calc.ventas, "")}
+          ${htmlLineaResultado("Premios pagados", calc.premios, "-")}
+          ${htmlLineaResultado("Comisión de cajeras", calc.comision, "-")}
+          ${extra}
+          ${htmlLineaResultado("Quedó", calc.quedo, "")}
+        </table>
+        ${notaFila}
+      </section>`);
+    }
+  }
+  const total = n > 1 ? `<section class="rvr-resultado-banca">
+      <h4>Total del período</h4>
+      <table>
+        ${htmlLineaResultado("Ventas válidas", ventas, "")}
+        ${htmlLineaResultado("Premios pagados", premios, "-")}
+        ${htmlLineaResultado("Comisión de cajeras", comision, "-")}
+        ${extrasTotal ? htmlLineaResultado("Recargas (neto)", extrasTotal, extrasTotal < 0 ? "-" : "+") : ""}
+        ${htmlLineaResultado("Quedó", quedo, "")}
+      </table>
+    </section>` : "";
+  const desde = rvrFecha(RVR.datos.desde);
+  const hasta = rvrFecha(RVR.datos.hasta);
+  panel.innerHTML = `<div class="rvr-resultado-cab">
+      <strong>RESULTADO</strong>
+      <span>Desde ${desde} · Hasta ${hasta}</span>
+      <button type="button" id="btn-rvr-resultado-cerrar" class="rvr-tool">Cerrar</button>
+    </div>
+    ${bloques.join("") || "<p>Sin bancas en este reporte.</p>"}
+    ${total}
+    <p class="rvr-resultado-nota">Ventas válidas − premios efectivamente pagados − comisión de cajeras. No incluye premios pendientes ni tickets anulados. MI CAJA no cambia.</p>`;
+  panel.hidden = false;
+  const cerrar = $("#btn-rvr-resultado-cerrar");
+  if (cerrar) cerrar.addEventListener("click", () => {
+    panel.hidden = true;
+    panel.innerHTML = "";
+  });
+}
+
+function alternarResultadoVentas() {
+  const panel = $("#rvr-resultado");
+  if (!panel) return;
+  if (!panel.hidden) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  pintarResultadoVentas();
 }
 
 function rvrParametros() {
@@ -2817,6 +3001,48 @@ async function verVentasResumido(mostrarCajeros = RVR.mostrarCajeros) {
   }
 }
 
+function esTelefonoApple() {
+  const ua = navigator.userAgent || "";
+  const ipadEscritorio = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+  return /iPhone|iPad|iPod/.test(ua) || ipadEscritorio;
+}
+
+function centavos(valor) {
+  const n = Number(String(valor == null ? "0" : valor).replace(/,/g, ""));
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 100);
+}
+
+function montoDesdeCentavos(cent) {
+  return fmt(cent / 100);
+}
+
+async function entregarPdf(blob, nombre, selectorMsg, textoOk) {
+  const archivo = new File([blob], nombre, { type: "application/pdf" });
+  if (esTelefonoApple() && navigator.canShare && navigator.canShare({ files: [archivo] })) {
+    try {
+      await navigator.share({ files: [archivo], title: nombre });
+      msg(selectorMsg, "PDF listo. Puede guardarlo en Archivos o compartirlo.", true);
+      return "share";
+    } catch (e) {
+      if (e && e.name === "AbortError") {
+        msg(selectorMsg, "Compartir cancelado. El PDF no se guardó.", false);
+        return "cancel";
+      }
+    }
+  }
+  const url = URL.createObjectURL(archivo);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  msg(selectorMsg, textoOk, true);
+  return "download";
+}
+
 async function rvrObtenerPdf() {
   if (!$("#rvr-desde").value || !$("#rvr-hasta").value) {
     msg("#rvr-msg", "Indique el rango de fechas", false);
@@ -2850,15 +3076,12 @@ async function descargarPdfVentasResumido() {
   try {
     const blob = await rvrObtenerPdf();
     if (!blob) return;
-    const url = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = rvrNombrePdf();
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    msg("#rvr-msg", "PDF A4 horizontal descargado. No usa la impresora de Windows.", true);
+    await entregarPdf(
+      blob,
+      rvrNombrePdf(),
+      "#rvr-msg",
+      "PDF A4 horizontal descargado. No usa la impresora de Windows.",
+    );
   } catch (e) {
     msg("#rvr-msg", e.message, false);
   }
@@ -2868,6 +3091,10 @@ async function imprimirVentasResumido() {
   try {
     const blob = await rvrObtenerPdf();
     if (!blob) return;
+    if (esTelefonoApple()) {
+      await entregarPdf(blob, rvrNombrePdf(), "#rvr-msg", "PDF A4 horizontal listo para guardar o imprimir.");
+      return;
+    }
     const url = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
     const w = window.open(url, "_blank");
     if (!w) {
@@ -3310,6 +3537,10 @@ async function verReporteTickets() {
     RTK.pagina = 1;
     $("#rtk-visor").hidden = false;
     renderReporteTickets();
+    if (rvrEsMovil()) {
+      const visor = document.getElementById("rtk-visor");
+      if (visor) visor.scrollIntoView({ block: "start" });
+    }
     const n = RTK.datos.total || 0;
     const aviso = RTK.datos.recorte ? " · se muestran los 5.000 más recientes" : "";
     const rango = `${rvrFecha(RTK.datos.desde)} ${f.hora_desde} al ${rvrFecha(RTK.datos.hasta)} ${f.hora_hasta}`;
@@ -3353,17 +3584,10 @@ async function descargarPdfReporteTickets() {
   try {
     const blob = await rtkObtenerPdf();
     if (!blob) return;
-    const url = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = rtkNombrePdf();
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    msg("#rtk-msg", RTK.detalle
+    const texto = RTK.detalle
       ? `PDF del ticket #${RTK.detalle.id} descargado.`
-      : "PDF A4 horizontal descargado con el último reporte consultado.", true);
+      : "PDF A4 horizontal descargado con el último reporte consultado.";
+    await entregarPdf(blob, rtkNombrePdf(), "#rtk-msg", texto);
   } catch (e) {
     msg("#rtk-msg", e.message, false);
   }
@@ -3373,6 +3597,13 @@ async function imprimirReporteTickets() {
   try {
     const blob = await rtkObtenerPdf();
     if (!blob) return;
+    if (esTelefonoApple()) {
+      const texto = RTK.detalle
+        ? `PDF del ticket #${RTK.detalle.id} listo para guardar o imprimir.`
+        : "PDF del reporte listo para guardar o imprimir.";
+      await entregarPdf(blob, rtkNombrePdf(), "#rtk-msg", texto);
+      return;
+    }
     const url = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
     const w = window.open(url, "_blank");
     if (!w) {
@@ -3451,6 +3682,10 @@ async function verDetalleReporteTicket(id) {
     if (scroll) {
       scroll.scrollTop = 0;
       scroll.scrollLeft = 0;
+    }
+    if (rvrEsMovil()) {
+      const visor = document.getElementById("rtk-visor");
+      if (visor) visor.scrollIntoView({ block: "start" });
     }
     msg("#rtk-msg", `Recibo del ticket #${RTK.detalle.id}.`, true);
     if (!(history.state && history.state.detalle)) {
@@ -3640,6 +3875,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("#btn-rvr-imprimir")) $("#btn-rvr-imprimir").addEventListener("click", imprimirVentasResumido);
   if ($("#btn-rvr-print2")) $("#btn-rvr-print2").addEventListener("click", imprimirVentasResumido);
   if ($("#btn-rvr-pdf")) $("#btn-rvr-pdf").addEventListener("click", descargarPdfVentasResumido);
+  if ($("#btn-rvr-resultado")) $("#btn-rvr-resultado").addEventListener("click", alternarResultadoVentas);
   window.addEventListener("beforeprint", rvrPrepararImpresionPanel);
   window.addEventListener("afterprint", () => { if (RVR.datos) renderVentasResumido(); });
   if ($("#btn-rvr-regresar")) $("#btn-rvr-regresar").addEventListener("click", regresarVentasResumido);

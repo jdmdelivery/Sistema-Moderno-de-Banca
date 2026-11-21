@@ -941,3 +941,52 @@ body.modal-abierto{position:fixed;width:100%;left:0;right:0}
   background:#efefef;border:1px solid #9a9a9a;border-radius:2px;
   color:#111 !important;font-size:11px;padding:2px 8px;cursor:pointer;
 }
+.reporte-panel .rvr-resultado-btn{font-weight:800;letter-spacing:.03em}
+.rvr-resultado{
+  background:#fff;color:#111;border-bottom:1px solid #a0a0a0;
+  padding:12px 14px;max-height:46vh;overflow:auto;-webkit-overflow-scrolling:touch;
+}
+.rvr-resultado-cab{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+.rvr-resultado-cab strong{color:#003399;font-size:16px}
+.rvr-resultado-cab span{color:#222;font-size:13px}
+.rvr-resultado-banca{margin:0 0 12px}
+.rvr-resultado-banca h4{margin:0 0 6px;color:#003399;font-size:15px}
+.rvr-resultado table{width:100%;border-collapse:collapse;background:#fff !important;color:#111 !important;border:1px solid #d5d5d5}
+.vc-resultado table{width:100%;border-collapse:collapse;background:transparent;color:inherit;border:0}
+.rvr-resultado td{padding:4px 6px;border-bottom:1px solid #e4e4e4;font-size:15px;background:#fff !important;color:#111 !important}
+.vc-resultado td{padding:4px 6px;border-bottom:1px solid #1a3a5c;font-size:15px}
+.rvr-resultado td:last-child,.vc-resultado td:last-child{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+.rvr-resultado tr:last-child td{font-size:17px;color:#003399 !important;background:#f4f8ff !important}
+.rvr-resultado-nota,.vc-resultado-nota{margin:6px 0 0;color:#333;font-size:13px;line-height:1.35}
+.vc-resultado{
+  margin-top:10px;background:#102744;border:1px solid #2a5f96;border-radius:12px;padding:12px;color:#e8f2ea;
+}
+.vc-resultado strong{display:block;color:#d7e6f7;letter-spacing:.04em;margin-bottom:4px}
+.vc-resultado-periodo{margin:0 0 8px;color:#8fb0d6;font-size:13px}
+.vc-resultado td{color:#e8f2ea;border-bottom-color:#1a3a5c}
+.vc-resultado tr:last-child td{color:#8fd0ff}
+.vc-resultado-nota{color:#c5d7ea}
+.vc-resultado-rango{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:10px}
+.vc-resultado-fecha{display:flex;flex-direction:column;gap:2px;color:#d7e6f7;font-size:11px;font-weight:700;letter-spacing:.04em}
+.vc-resultado-fecha input{min-height:40px;border-radius:8px;border:1px solid #2a5f96;background:#0c1c33;color:#fff;padding:4px 8px;font-size:14px}
+.vc-resultado-aviso{color:#ffb4b4;font-weight:700;margin:0}
+.vc-btn-resultado{background:#1e6fd9;border-color:#1e6fd9;color:#fff;font-weight:800}
+@media(max-width:900px){
+  #sec-reporte-tickets{max-width:100%;overflow-x:hidden}
+  #sec-reporte-tickets .rvr-visor:not([hidden]){
+    display:flex;flex-direction:column;width:100%;max-width:100%;
+    height:calc(100dvh - 12px);
+    max-height:calc(100dvh - env(safe-area-inset-top) - 12px);
+    overflow:hidden;
+  }
+  #sec-reporte-tickets .rvr-toolbar{
+    position:static;top:auto;flex:0 0 auto;z-index:2;background:#fff;
+  }
+  #sec-reporte-tickets .rvr-tool.rtk-volver{min-height:44px;font-size:16px;padding:0 12px}
+  #sec-reporte-tickets .rvr-scroll{
+    flex:1 1 auto;min-height:0;max-width:100%;
+    overflow:auto;-webkit-overflow-scrolling:touch;
+    touch-action:pan-x pan-y;overscroll-behavior:contain;
+  }
+  .rvr-resultado-btn,.vc-btn-resultado{min-height:44px;font-size:16px}
+}

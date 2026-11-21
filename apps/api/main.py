@@ -1547,7 +1547,7 @@ def reporte_ventas_resumido_pdf(
         content=pdf,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="{nombre}"',
+            "Content-Disposition": f'inline; filename="{nombre}"',
             "Cache-Control": "no-store",
         },
     )
@@ -1616,7 +1616,7 @@ def reporte_ticket_detalle_pdf(
         content=pdf,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="{nombre}"',
+            "Content-Disposition": f'inline; filename="{nombre}"',
             "Cache-Control": "no-store",
         },
     )
@@ -1665,7 +1665,7 @@ def reporte_ticket_recibo_pdf(
         content=pdf,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="Recibo-{int(ticket_id)}.pdf"',
+            "Content-Disposition": f'inline; filename="Recibo-{int(ticket_id)}.pdf"',
             "Cache-Control": "no-store",
         },
     )
@@ -1701,7 +1701,7 @@ def reporte_tickets_pdf(
         content=pdf,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="{nombre}"',
+            "Content-Disposition": f'inline; filename="{nombre}"',
             "Cache-Control": "no-store",
         },
     )

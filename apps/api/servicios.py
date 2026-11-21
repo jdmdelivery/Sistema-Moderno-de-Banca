@@ -6627,6 +6627,35 @@ def resumen_ventas_cajeros(db, admin, desde, hasta, sucursal_id=None, usuario_id
     }
 
 
+def _resultado_periodo_cajera(db, cajero, desde, hasta, prueba):
+    """Ventas válidas, premios pagados y comisión ganada del rango. No toca el ciclo ni MI CAJA.
+
+    Usa el mismo desglose de Ventas Resumidas: la comisión es la del porcentaje
+    vigente en cada venta, una sola vez, esté pagada o pendiente.
+    """
+    periodo = _periodo_ventas_cajero(db, cajero, desde, hasta, prueba)
+    venta = D(0)
+    premios = D(0)
+    comision = D(0)
+    sucursal = db.get(Sucursal, cajero.sucursal_id) if cajero.sucursal_id else None
+    if sucursal is not None:
+        filas, _total = _desglose_cajeros_resumido(db, sucursal, desde, hasta, prueba)
+        mia = next((fila for fila in filas if fila["usuario_id"] == cajero.id), None)
+        if mia is not None:
+            venta = D(mia["venta"])
+            premios = D(mia["premios"])
+            comision = D(mia["comision"])
+    return {
+        "desde": desde.isoformat(),
+        "hasta": hasta.isoformat(),
+        "ventas_validas": str(D(venta)),
+        "premios_pagados": str(D(premios)),
+        "comision": str(D(comision)),
+        "tickets_anulados": int(periodo["tickets_anulados"]),
+        "quedo": str(D(venta - premios - comision)),
+    }
+
+
 def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
     from . import permisos as perm
 
@@ -6775,6 +6804,7 @@ def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
         "desde": desde.isoformat(),
         "hasta": hasta.isoformat(),
         "resumen": fila,
+        "resultado_periodo": _resultado_periodo_cajera(db, cajero, desde, hasta, prueba),
         "comision": comision,
         "ventas": historial_ventas,
         "premios_pagados": historial_pagos,
