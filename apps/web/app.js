@@ -196,6 +196,11 @@ function aplicarVisibilidadRol() {
     }
   }
   actualizarEncabezadoContexto();
+  const menuAdmin = document.querySelector(".nav-admin");
+  const menuClasico = document.querySelector(".nav-clasico");
+  const esAdminSucursal = !!(YO && YO.rol === "admin");
+  if (menuAdmin) menuAdmin.hidden = !esAdminSucursal;
+  if (menuClasico) menuClasico.hidden = esAdminSucursal;
   sincronizarCentroVentas();
   const subLogin = document.querySelector("#login .sub");
   if (subLogin && !TOKEN) subLogin.textContent = "Panel del Consorcio";
@@ -2311,8 +2316,9 @@ let FONDO_OPERACION = "";
 
 function mostrarFondo(visible) {
   for (const sec of ["fondos", "comisiones"]) {
-    const boton = document.querySelector(`.navbtn[data-sec="${sec}"]`);
-    if (boton) boton.hidden = !visible;
+    document.querySelectorAll(`.navbtn[data-sec="${sec}"]`).forEach((boton) => {
+      boton.hidden = !visible;
+    });
   }
   const superBtn = $("#nav-super");
   if (superBtn && !visible && !esSuperAdmin()) superBtn.hidden = true;
@@ -2796,6 +2802,7 @@ function renderVentasResumido() {
   if (RVR.pagina === totalPag) paginaFilas = paginaFilas.concat(cierre);
   hoja.innerHTML = rvrHtmlDocumento(d, paginaFilas, RVR.buscar);
   hoja.dataset.zoom = String(RVR.zoom);
+  rvrAjustarMarcoZoom();
   const pagEl = $("#rvr-pagina");
   if (pagEl) pagEl.textContent = `${RVR.pagina} / ${totalPag}`;
   const prev = $("#btn-rvr-prev");
@@ -3111,11 +3118,28 @@ async function imprimirVentasResumido() {
   }
 }
 
+function rvrAjustarMarcoZoom() {
+  const hoja = $("#rvr-hoja");
+  const marco = $("#rvr-marco");
+  if (!hoja || !marco) return;
+  const escala = (Number(hoja.dataset.zoom) || 100) / 100;
+  if (escala >= 1) {
+    marco.style.width = "";
+    marco.style.height = "";
+    marco.style.overflow = "";
+    return;
+  }
+  marco.style.overflow = "hidden";
+  marco.style.width = `${Math.ceil(hoja.offsetWidth * escala)}px`;
+  marco.style.height = `${Math.ceil(hoja.offsetHeight * escala)}px`;
+}
+
 function rvrPrepararImpresionPanel() {
   if (!RVR.datos || !$("#rvr-hoja")) return;
   const planas = rvrFilasPlanas(RVR.datos);
   $("#rvr-hoja").innerHTML = rvrHtmlDocumento(RVR.datos, planas, "");
   $("#rvr-hoja").dataset.zoom = "100";
+  rvrAjustarMarcoZoom();
 }
 
 function rvrEsMovil() {
@@ -3890,6 +3914,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("#rvr-zoom")) $("#rvr-zoom").addEventListener("change", (e) => {
     RVR.zoom = Number(e.target.value) || 100;
     if ($("#rvr-hoja")) $("#rvr-hoja").dataset.zoom = String(RVR.zoom);
+    rvrAjustarMarcoZoom();
   });
   for (const id of ["rvr-desde", "rvr-hasta"]) {
     const el = document.getElementById(id);

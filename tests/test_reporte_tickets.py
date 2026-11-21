@@ -39,6 +39,19 @@ def test_menu_admin_agrupa_sin_duplicar_reportes():
     assert reportes.index('data-sec="reportes"') < reportes.index('data-sub="centro-ventas"')
     assert reportes.index('data-sub="centro-ventas"') < reportes.index('data-sec="ventas-cajeros"')
     assert "sincronizarCentroVentas" in JS
+    admin = HTML.split('class="nav-admin"', 1)[1].split('class="nav-clasico"', 1)[0]
+    tarjetas = [
+        'data-sec="inicio"', 'data-sec="tickets"', 'data-sec="usuarios"',
+        'data-sec="control-cajeros"', 'data-sec="ventas-cajeros"',
+        'data-sec="ventas-resumido"', 'data-sec="reporte-tickets"',
+        'data-sec="tabla"', 'data-sec="limites"', 'data-sec="comisiones"',
+        'data-sec="diseno-ticket"',
+    ]
+    posiciones = [admin.index(item) for item in tarjetas]
+    assert posiciones == sorted(posiciones)
+    assert "Centro de ventas resumida" not in admin
+    assert 'data-sec="sucursales"' not in admin
+    assert 'YO.rol === "admin"' in JS
     sucursal = HTML.split('id="sec-reportes"')[1].split("</section>")[0]
     assert "Resumen de ventas" in sucursal
     assert "Ventas por usuario" in sucursal

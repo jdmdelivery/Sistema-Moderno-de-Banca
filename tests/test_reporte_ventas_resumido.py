@@ -297,6 +297,24 @@ def test_endpoint_pdf_local_a4_sin_impresora(entorno):
     assert anon.status_code == 401
 
 
+def test_pdf_con_totales_en_cero_se_descarga_en_a4(entorno):
+    entorno.banca(saldo=1000, codigo="VR0", nombre="BANCA SIN VENTAS", usuario="vr0")
+    for extra in ("", "&desglose=cajeros"):
+        r = entorno.c.get(
+            "/reportes/ventas-resumido.pdf?desde=2026-11-14&hasta=2026-11-14" + extra,
+            headers=entorno.admin,
+        )
+        assert r.status_code == 200, r.text[:300]
+        assert r.headers["content-type"].startswith("application/pdf")
+        assert r.headers["content-disposition"].startswith("inline;")
+        doc = _pdf(r.content)
+        texto = "\n".join(_texto(doc))
+        assert "BANCA SIN VENTAS" in texto
+        assert "14/11/2026" in texto
+        assert formato_monto("0.00") in texto
+        assert "Promedio de Ventas por Banca" in texto
+
+
 def test_el_boton_pdf_no_usa_el_dialogo_de_windows():
     raiz = Path(__file__).resolve().parent.parent
     js = (raiz / "apps" / "web" / "app.js").read_text(encoding="utf-8")
@@ -305,8 +323,19 @@ def test_el_boton_pdf_no_usa_el_dialogo_de_windows():
     assert "abrirDocumentoVentasResumido" not in js
     assert "Guardar como PDF" not in js
     assert "a.download" in js
+    assert "navigator.share" in js
+    assert "esTelefonoApple" in js
     assert "size: A4 landscape" in css
     assert "table-header-group" in css
+    html = (raiz / "apps" / "web" / "index.html").read_text(encoding="utf-8")
+    ventas = html.split('id="rvr-zoom"', 1)[1].split("</select>", 1)[0]
+    assert ventas.index('value="25"') < ventas.index('value="50"') < ventas.index('value="75"')
+    assert ventas.index('value="75"') < ventas.index('value="100" selected') < ventas.index('value="125"')
+    tickets = html.split('id="rtk-zoom"', 1)[1].split("</select>", 1)[0]
+    assert 'value="25"' not in tickets and 'value="50"' not in tickets
+    assert '#rvr-hoja[data-zoom="25"]{transform:scale(.25)}' in css
+    assert '#rvr-hoja[data-zoom="50"]{transform:scale(.5)}' in css
+    assert "rvrAjustarMarcoZoom" in js
 
 
 def _super(entorno):

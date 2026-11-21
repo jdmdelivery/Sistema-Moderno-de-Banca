@@ -11,7 +11,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
-<link rel="stylesheet" href="/static/style.css?v=resultado-fechas-1">
+<link rel="stylesheet" href="/static/style.css?v=menu-admin-1">
 </head>
 <body class="sin-sesion">
 <div id="login" class="login-overlay" role="dialog" aria-modal="true" aria-labelledby="login-titulo">
@@ -45,6 +45,26 @@
     <div class="sidebar-brand-sub" id="sidebar-contexto">Administración</div>
   </div>
 
+  <div class="nav-admin" hidden>
+    <button type="button" class="navbtn" data-sec="inicio"><span class="nav-ico">🏠</span> Dashboard</button>
+    <button type="button" class="navbtn" data-sec="tickets"><span class="nav-ico">🎫</span> Tickets</button>
+    <button type="button" class="navbtn" data-sec="usuarios"><span class="nav-ico">👤</span> Usuarios</button>
+    <button type="button" class="navbtn" data-sec="control-cajeros"><span class="nav-ico">⚖</span> Control de cajeros</button>
+    <button type="button" class="navbtn" data-sec="ventas-cajeros"><span class="nav-ico">📊</span> Ventas por cajero</button>
+    <button type="button" class="navbtn" data-sec="ventas-resumido"><span class="nav-ico">📋</span> Lotería · Ventas resumido</button>
+    <button type="button" class="navbtn" data-sec="reporte-tickets"><span class="nav-ico">🧾</span> Reporte de Tickets</button>
+    <div class="nav-grupo abierto" data-grupo="config-admin">
+      <button type="button" class="nav-grupo-titulo" aria-expanded="true">Configuración</button>
+      <div class="nav-grupo-items">
+        <button type="button" class="navbtn" data-sec="tabla"><span class="nav-ico">＃</span> Tabla de pagos</button>
+        <button type="button" class="navbtn" data-sec="limites"><span class="nav-ico">⚙</span> Límites</button>
+        <button type="button" class="navbtn" data-sec="comisiones"><span class="nav-ico">%</span> Comisiones</button>
+        <button type="button" class="navbtn" data-sec="diseno-ticket" data-solo-admin><span class="nav-ico">🖨</span> Diseño de ticket</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="nav-clasico">
   <div class="nav-grupo abierto" data-grupo="inicio">
     <button type="button" class="nav-grupo-titulo" aria-expanded="true">Inicio</button>
     <div class="nav-grupo-items">
@@ -107,6 +127,7 @@
       <button type="button" class="navbtn" data-sec="fuente" data-solo-super><span class="nav-ico">↻</span> Resultados automáticos</button>
       <button type="button" class="navbtn" data-sec="auditoria" data-solo-super><span class="nav-ico">⌕</span> Auditoría</button>
     </div>
+  </div>
   </div>
 </nav>
 
@@ -750,6 +771,8 @@
       <span class="rvr-tool-sep"></span>
       <label class="rvr-zoom-lbl">Zoom
         <select id="rvr-zoom">
+          <option value="25">25%</option>
+          <option value="50">50%</option>
           <option value="75">75%</option>
           <option value="100" selected>100%</option>
           <option value="125">125%</option>
@@ -765,7 +788,9 @@
     </div>
     <div id="rvr-resultado" class="rvr-resultado" hidden></div>
     <div class="rvr-scroll">
-      <div id="rvr-hoja" class="rvr-hoja" data-zoom="100"></div>
+      <div id="rvr-marco">
+        <div id="rvr-hoja" class="rvr-hoja" data-zoom="100"></div>
+      </div>
     </div>
   </div>
 </section>
@@ -923,6 +948,6 @@
 </section>
 </main>
 
-<script src="/static/app.js?v=resultado-fechas-1"></script>
+<script src="/static/app.js?v=menu-admin-1"></script>
 </body>
 </html>
