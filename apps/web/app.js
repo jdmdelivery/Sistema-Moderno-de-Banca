@@ -3024,6 +3024,25 @@ function montoDesdeCentavos(cent) {
   return fmt(cent / 100);
 }
 
+function abrirPdfEnVisor(blob, nombre) {
+  const archivo = new Blob([blob], { type: "application/pdf" });
+  const url = URL.createObjectURL(archivo);
+  const w = window.open(url, "_blank");
+  if (!w) {
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.type = "application/pdf";
+    if (nombre) a.download = nombre;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 180000);
+  return w ? "open" : "link";
+}
+
 async function entregarPdf(blob, nombre, selectorMsg, textoOk) {
   const archivo = new File([blob], nombre, { type: "application/pdf" });
   if (esTelefonoApple() && navigator.canShare && navigator.canShare({ files: [archivo] })) {
@@ -3033,10 +3052,16 @@ async function entregarPdf(blob, nombre, selectorMsg, textoOk) {
       return "share";
     } catch (e) {
       if (e && e.name === "AbortError") {
-        msg(selectorMsg, "Compartir cancelado. El PDF no se guardó.", false);
+        msg(selectorMsg, "Compartir cancelado. Use ABRIR PDF y luego Compartir → Guardar en Archivos.", false);
         return "cancel";
       }
+      // Lockdown / Safari a veces rechaza share de archivos: abrir en pestaña.
     }
+  }
+  if (esTelefonoApple()) {
+    abrirPdfEnVisor(blob, nombre);
+    msg(selectorMsg, "PDF abierto. En Safari: Compartir → Guardar en Archivos.", true);
+    return "open";
   }
   const url = URL.createObjectURL(archivo);
   const a = document.createElement("a");
@@ -3094,6 +3119,23 @@ async function descargarPdfVentasResumido() {
   }
 }
 
+async function abrirPdfVentasResumido() {
+  try {
+    const blob = await rvrObtenerPdf();
+    if (!blob) return;
+    abrirPdfEnVisor(blob, rvrNombrePdf());
+    msg(
+      "#rvr-msg",
+      esTelefonoApple()
+        ? "PDF abierto. En Safari (Lockdown OK): Compartir → Guardar en Archivos."
+        : "PDF abierto en una pestaña. Puede guardarlo desde el visor.",
+      true,
+    );
+  } catch (e) {
+    msg("#rvr-msg", e.message, false);
+  }
+}
+
 async function imprimirVentasResumido() {
   try {
     const blob = await rvrObtenerPdf();
@@ -3105,7 +3147,7 @@ async function imprimirVentasResumido() {
     const url = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
     const w = window.open(url, "_blank");
     if (!w) {
-      msg("#rvr-msg", "El navegador bloqueó la ventana. Use DESCARGAR PDF: el archivo ya es A4 horizontal.", false);
+      msg("#rvr-msg", "El navegador bloqueó la ventana. Use DESCARGAR PDF o ABRIR PDF.", false);
       return;
     }
     const lanzar = () => {
@@ -3899,6 +3941,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("#btn-rvr-imprimir")) $("#btn-rvr-imprimir").addEventListener("click", imprimirVentasResumido);
   if ($("#btn-rvr-print2")) $("#btn-rvr-print2").addEventListener("click", imprimirVentasResumido);
   if ($("#btn-rvr-pdf")) $("#btn-rvr-pdf").addEventListener("click", descargarPdfVentasResumido);
+  if ($("#btn-rvr-abrir-pdf")) $("#btn-rvr-abrir-pdf").addEventListener("click", abrirPdfVentasResumido);
+  if ($("#btn-rvr-abrir-pdf-filtro")) $("#btn-rvr-abrir-pdf-filtro").addEventListener("click", abrirPdfVentasResumido);
   if ($("#btn-rvr-resultado")) $("#btn-rvr-resultado").addEventListener("click", alternarResultadoVentas);
   window.addEventListener("beforeprint", rvrPrepararImpresionPanel);
   window.addEventListener("afterprint", () => { if (RVR.datos) renderVentasResumido(); });

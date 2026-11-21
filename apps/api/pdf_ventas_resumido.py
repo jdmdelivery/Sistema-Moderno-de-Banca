@@ -23,8 +23,9 @@ FUENTE_CAB_PT = 8
 ALTO_FILA = 16
 ALTO_CAB_TABLA = 15
 PAD_X = 3
-# Anchos fijos que cubren encabezados y montos de hasta 7 cifras, sin recortar.
-ANCHOS = (193, 66, 62, 66, 66, 70, 62, 62, 62, 76)
+# Anchos para DejaVu Bold en Render (más ancha que Arial). Cubren montos
+# tipo $167,245.00 y hasta $-1,234,567.89 sin recortar ni tumbar el PDF.
+ANCHOS = (150, 70, 68, 70, 70, 84, 62, 62, 62, 84)
 COLS_NUM = (
     ("loteria", "venta"),
     ("loteria", "comision"),
@@ -96,6 +97,14 @@ def _xs():
 
 def _cabe_en_celda(texto, fuente, tam, ancho) -> bool:
     return pdfmetrics.stringWidth(texto, fuente, tam) <= (ancho - 2 * PAD_X)
+
+
+def _tam_monto(texto, fuente, ancho, preferido=FUENTE_PT):
+    """Usa 9 pt si cabe; baja a 8/7 antes de rechazar el PDF por un monto largo."""
+    for tam in (preferido, 8, 7):
+        if tam <= preferido and _cabe_en_celda(texto, fuente, tam, ancho):
+            return tam
+    return None
 
 
 def _partir(texto, fuente, tam, ancho):
@@ -208,7 +217,7 @@ def _montos(bloque):
 def _exigir_valores(valores, anchos, fuente):
     for ancho, valor in zip(anchos, valores):
         texto = formato_monto(valor)
-        if not _cabe_en_celda(texto, fuente, FUENTE_PT, ancho):
+        if _tam_monto(texto, fuente, ancho) is None:
             raise RuntimeError(f"El importe {texto} no cabe en la columna ({ancho} pt)")
 
 
@@ -217,14 +226,15 @@ def _dibujar_valores(c, valores, y, alto, fuente, inicio=1):
     for i, valor in enumerate(valores, start=inicio):
         texto = formato_monto(valor)
         color = ROJO if D(valor) < 0 else NEGRO
-        _texto(c, texto, xs[i], y, ANCHOS[i], alto, fuente, FUENTE_PT, color, "right")
+        tam = _tam_monto(texto, fuente, ANCHOS[i]) or FUENTE_PT
+        _texto(c, texto, xs[i], y, ANCHOS[i], alto, fuente, tam, color, "right")
 
 
 def _exigir_montos(bloque, fuente):
-    """El monto se dibuja completo. Si no cabe, se rechaza el ancho, no se recorta."""
+    """El monto se dibuja completo. Si no cabe ni a 7 pt, se rechaza; no se recorta."""
     for ancho, valor in zip(ANCHOS[1:], _montos(bloque)):
         texto = formato_monto(valor)
-        if not _cabe_en_celda(texto, fuente, FUENTE_PT, ancho):
+        if _tam_monto(texto, fuente, ancho) is None:
             raise RuntimeError(f"El importe {texto} no cabe en la columna ({ancho} pt)")
 
 
@@ -347,7 +357,8 @@ def _dibujar_montos(c, bloque, y, alto, fuente, negrita=False):
     for i, valor in enumerate(_montos(bloque), start=1):
         texto = formato_monto(valor)
         color = ROJO if valor < 0 else NEGRO
-        _texto(c, texto, xs[i], y, ANCHOS[i], alto, fnt, FUENTE_PT, color, "right")
+        tam = _tam_monto(texto, fnt, ANCHOS[i]) or FUENTE_PT
+        _texto(c, texto, xs[i], y, ANCHOS[i], alto, fnt, tam, color, "right")
 
 
 def _dibujar_fila(c, fila, top, fuentes):

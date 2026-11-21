@@ -1541,7 +1541,10 @@ def reporte_ventas_resumido_pdf(
         sucursal_id=sucursal_id, grupo_id=grupo_id, ruta_id=ruta_id,
     )
     datos["desglose_cajeros"] = (desglose or "").strip().lower() in {"cajeros", "1", "true", "si"}
-    pdf = pdf_ventas_resumido.construir(datos)
+    try:
+        pdf = pdf_ventas_resumido.construir(datos)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     nombre = f"Resumen-de-Ventas-{datos['desde']}-al-{datos['hasta']}.pdf"
     return Response(
         content=pdf,

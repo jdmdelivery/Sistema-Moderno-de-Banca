@@ -334,7 +334,59 @@ def test_pdf_cabe_aunque_la_fuente_sea_mas_ancha(entorno, monkeypatch):
     doc = _pdf(r.content)
     texto = "\n".join(_texto(doc))
     assert "Resultado" in texto and "Total" in texto
-    assert "BANCA FUENTE ANCHA" in texto
+    assert "BANCA FUENTE" in texto and "ANCHA" in texto
+
+
+def test_pdf_castillo_rango_con_montos_anchos_como_en_render(monkeypatch):
+    """Reproduce el 500 de producción: $167,245.00 no cabía en 66 pt (DejaVu Bold)."""
+    from reportlab.pdfbase import pdfmetrics
+    import apps.api.pdf_ventas_resumido as pdfmod
+
+    original = pdfmetrics.stringWidth
+
+    def como_dejavu_bold(texto, fuente, tam, *args, **kwargs):
+        # DejaVu Bold ≈ 1.26× Arial en montos con $ y comas.
+        return original(texto, fuente, tam, *args, **kwargs) * 1.26
+
+    monkeypatch.setattr(pdfmetrics, "stringWidth", como_dejavu_bold)
+    monkeypatch.setattr(pdfmod, "_FUENTES", ("Helvetica", "Helvetica-Bold"))
+
+    bloque = _bloque("167245.00", "16724.50", "150520.50", "80000.00", "70520.50", "70520.50")
+    datos = {
+        "empresa": "BANCA CASTILLO",
+        "desde": "2026-11-19",
+        "hasta": "2026-11-21",
+        "impreso": "21/11/2026 02:56 AM",
+        "desglose_cajeros": True,
+        "grupos": [{
+            "grupo_nombre": "GRUPO PRINCIPAL",
+            "bancas": [{
+                "codigo": "BC",
+                "banca": "BANCA CASTILLO",
+                **bloque,
+                "cajeros": [{
+                    "nombre": "Wanda",
+                    "venta": "167245.00",
+                    "comision": "16724.50",
+                    "neto": "150520.50",
+                    "premios": "80000.00",
+                    "resultado": "70520.50",
+                }],
+                "total_comision_cajeras": "16724.50",
+            }],
+            "subtotal": {**bloque, "bancas": 1},
+        }],
+        "total": {**bloque, "bancas": 1, "promedio_venta": "167245.00"},
+    }
+    assert como_dejavu_bold("$167,245.00", "Helvetica-Bold", 9) > (66 - 6)
+    pdf = construir(datos)
+    assert pdf.startswith(b"%PDF")
+    doc = _pdf(pdf)
+    texto = "\n".join(_texto(doc))
+    assert "BANCA CASTILLO" in texto
+    assert "19/11/2026" in texto and "21/11/2026" in texto
+    assert formato_monto("167245.00") in texto
+    assert "Cajero: Wanda" in texto
 
 
 def test_el_boton_pdf_no_usa_el_dialogo_de_windows():
@@ -347,9 +399,14 @@ def test_el_boton_pdf_no_usa_el_dialogo_de_windows():
     assert "a.download" in js
     assert "navigator.share" in js
     assert "esTelefonoApple" in js
+    assert "abrirPdfVentasResumido" in js
+    assert "abrirPdfEnVisor" in js
     assert "size: A4 landscape" in css
     assert "table-header-group" in css
     html = (raiz / "apps" / "web" / "index.html").read_text(encoding="utf-8")
+    assert 'id="btn-rvr-abrir-pdf"' in html
+    assert 'id="btn-rvr-abrir-pdf-filtro"' in html
+    assert "ABRIR PDF" in html
     ventas = html.split('id="rvr-zoom"', 1)[1].split("</select>", 1)[0]
     assert ventas.index('value="25"') < ventas.index('value="50"') < ventas.index('value="75"')
     assert ventas.index('value="75"') < ventas.index('value="100" selected') < ventas.index('value="125"')

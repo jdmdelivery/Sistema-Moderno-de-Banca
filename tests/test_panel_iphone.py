@@ -86,7 +86,7 @@ def test_usuarios_tarjetas_movil_y_tabla_escritorio(entorno):
     sw = entorno.c.get("/sw.js").text
     assert 'id="sec-usuarios"' in html
     assert "usu-hero" in html
-    assert "menu-admin-1" in html  # cache-bust CSS/JS
+    assert "pdf-iphone-1" in html  # cache-bust CSS/JS
     assert "tarjetaUsuarioHtml" in js
     assert "pintarUsuarios" in js and "esUsuariosMovil" in js
     assert "usu-lista-movil" in js and "usu-tabla-escritorio" in js
