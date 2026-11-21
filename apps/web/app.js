@@ -565,6 +565,12 @@ function ir(sec, opts) {
   }
   const yDestino = opts.desdeHistorial ? (opts.y || 0) : 0;
   const llevar = () => fijarScroll(yDestino);
+  if (sec === "ventas-resumido") {
+    const visorVentas = document.getElementById("rvr-visor");
+    if (visorVentas && !visorVentas.hidden) rvrMarcarVisor(true);
+  } else {
+    rvrMarcarVisor(false);
+  }
   window.requestAnimationFrame(llevar);
   if (cargar) cargar().then(llevar).catch((e) => console.error(e));
   actualizarBarraVolver();
@@ -2714,6 +2720,7 @@ function renderVentasResumido() {
   const visor = $("#rvr-visor");
   if (!hoja || !visor || !RVR.datos) return;
   visor.hidden = false;
+  rvrMarcarVisor(true);
   const d = RVR.datos;
   const planas = rvrFilasPlanas(d).filter((f) => rvrCoincideBusqueda(f, RVR.buscar));
   const cuerpo = planas.filter((f) => ["grupo", "banca", "cajero", "comision_cajeras", "subtotal"].includes(f.tipo));
@@ -2884,8 +2891,28 @@ function rvrPrepararImpresionPanel() {
   $("#rvr-hoja").dataset.zoom = "100";
 }
 
+function rvrEsMovil() {
+  return window.matchMedia("(max-width: 900px)").matches;
+}
+
+function rvrMarcarVisor(abierto) {
+  const on = !!abierto && rvrEsMovil();
+  const sec = document.getElementById("sec-ventas-resumido");
+  if (sec) sec.classList.toggle("rvr-movil-abierto", on);
+  document.documentElement.classList.toggle("rvr-movil-abierto", on);
+  document.body.classList.toggle("rvr-movil-abierto", on);
+}
+
+function volverFiltrosVentasResumido() {
+  const visor = $("#rvr-visor");
+  if (visor) visor.hidden = true;
+  rvrMarcarVisor(false);
+  const filtros = document.getElementById("rvr-filtros");
+  if (filtros) filtros.scrollIntoView({ block: "start" });
+}
+
 function regresarVentasResumido() {
-  $("#rvr-visor").hidden = true;
+  volverFiltrosVentasResumido();
   RVR.datos = null;
   ir("reportes");
 }
@@ -3616,6 +3643,11 @@ document.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("beforeprint", rvrPrepararImpresionPanel);
   window.addEventListener("afterprint", () => { if (RVR.datos) renderVentasResumido(); });
   if ($("#btn-rvr-regresar")) $("#btn-rvr-regresar").addEventListener("click", regresarVentasResumido);
+  if ($("#btn-rvr-visor-regresar")) $("#btn-rvr-visor-regresar").addEventListener("click", volverFiltrosVentasResumido);
+  window.addEventListener("resize", () => {
+    const visor = document.getElementById("rvr-visor");
+    if (visor && !visor.hidden) rvrMarcarVisor(true);
+  });
   if ($("#btn-rvr-actualizar")) $("#btn-rvr-actualizar").addEventListener("click", () => verVentasResumido());
   if ($("#btn-rvr-prev")) $("#btn-rvr-prev").addEventListener("click", () => { RVR.pagina -= 1; renderVentasResumido(); });
   if ($("#btn-rvr-next")) $("#btn-rvr-next").addEventListener("click", () => { RVR.pagina += 1; renderVentasResumido(); });

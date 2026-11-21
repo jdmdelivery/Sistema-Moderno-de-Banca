@@ -171,36 +171,101 @@ def test_el_papel_no_corta_nombre_largo_ni_monto_grande():
     _margenes_blancos(png)
 
 
-def test_la_prueba_no_se_repite_en_el_papel():
-    oficial = [
-        {"concepto": "Ventas", "monto": "RD$10.00", "destacar": False},
-        {"concepto": "Total", "monto": "RD$10.00", "destacar": True},
+def _lineas(montos):
+    conceptos = ("Ventas", "Premios", "Comisión", "Balance", "Recargas", "Total")
+    return [
+        {"concepto": concepto, "monto": monto, "destacar": concepto == "Total"}
+        for concepto, monto in zip(conceptos, montos)
     ]
-    prueba = [
-        {"concepto": "Ventas", "monto": "RD$50.00", "destacar": False},
-        {"concepto": "Total", "monto": "RD$50.00", "destacar": True},
-    ]
-    base = {
+
+
+def test_el_papel_imprime_el_bloque_de_abajo_sin_ceros_ni_rotulo():
+    """Isaury, mes completo: el oficial está en cero y el período trae los importes."""
+    from apps.api.recibos_imagen import seleccion_recibo
+    from apps.api.servicios import _texto_resumen
+
+    oficial = {
+        "ventas": "0.00", "premios_pagados": "0.00", "comision": "0.00",
+        "balance": "0.00", "recargas": "0.00", "total": "0.00",
+        "lineas": _lineas(["RD$0.00", "RD$0.00", "RD$0.00", "RD$0.00", "RD$0.00", "RD$0.00"]),
+    }
+    prueba = {
+        "ventas": "28465.00", "premios_pagados": "17290.00", "comision": "4269.75",
+        "balance": "6905.25", "recargas": "0.00", "total": "6905.25",
+        "lineas": _lineas([
+            "RD$28,465.00", "RD$17,290.00", "RD$4,269.75",
+            "RD$6,905.25", "RD$0.00", "RD$6,905.25",
+        ]),
+    }
+    assert seleccion_recibo(oficial, prueba) is prueba
+    assert prueba["lineas"][1]["concepto"] == "Premios"
+    datos = {
+        "impreso": "21-11-2026 12:23 AM",
+        "informe": {
+            "banca": "BANCA CASTILLO",
+            "codigo": "1301",
+            "cajera": "Isaury",
+            "terminal": "SUNMI",
+            "periodo": "01/11/2026 al 30/11/2026",
+            "oficial": oficial,
+            "prueba": prueba,
+        },
+    }
+    texto = _texto_resumen(datos)
+    assert texto.count("RESUMEN DE CAJA") == 1
+    assert "RESUMEN FINAL" not in texto
+    assert "PRUEBA" not in texto
+    assert "Premios pagados" in texto
+    assert texto.count("Ventas") == 1
+    assert texto.count("Total") == 1
+    assert "Cajera: Isaury" in texto
+    assert "Período: 01/11/2026 al 30/11/2026" in texto
+    assert "Impreso: 21-11-2026 12:23 AM" in texto
+    assert "RD$28,465.00" in texto
+    assert "RD$17,290.00" in texto
+    assert "RD$4,269.75" in texto
+    assert texto.count("RD$6,905.25") == 2
+    png = render_resumen_png(datos)
+    _margenes_blancos(png)
+    destino = os.environ.get("RESUMEN_VISTA_DIR")
+    if destino:
+        carpeta = Path(destino)
+        carpeta.mkdir(parents=True, exist_ok=True)
+        (carpeta / "recibo-isaury-ejemplo-mes.png").write_bytes(png)
+
+
+def test_los_dos_grupos_con_movimiento_avisan_y_no_eligen():
+    from apps.api.recibos_imagen import seleccion_recibo
+    from apps.api.servicios import _texto_resumen
+
+    oficial = {"lineas": _lineas(["RD$10.00", "RD$0.00", "RD$0.00", "RD$10.00", "RD$0.00", "RD$10.00"]), "ventas": "10.00"}
+    prueba = {"lineas": _lineas(["RD$50.00", "RD$0.00", "RD$0.00", "RD$50.00", "RD$0.00", "RD$50.00"]), "ventas": "50.00"}
+    assert seleccion_recibo(oficial, prueba) is None
+    datos = {
         "impreso": "14-11-2026 10:00 AM",
         "informe": {
-            "banca": "BANCA",
-            "codigo": "1",
+            "banca": "BANCA CASTILLO",
+            "codigo": "1301",
             "cajera": "Ana",
             "terminal": "APP-1",
             "periodo": "14/11/2026",
-            "oficial": {"lineas": oficial},
-            "prueba": None,
+            "oficial": oficial,
+            "prueba": prueba,
         },
     }
-    solo = render_resumen_png(base)
-    con_prueba = render_resumen_png({
-        **base,
-        "informe": {**base["informe"], "prueba": {"lineas": prueba}},
-    })
-    alto_solo = _margenes_blancos(solo).size[1]
-    alto_ambos = _margenes_blancos(con_prueba).size[1]
-    assert alto_ambos > alto_solo
-    assert alto_ambos < alto_solo * 2
+    texto = _texto_resumen(datos)
+    assert "NO SE IMPRIMIÓ EL TOTAL" in texto
+    assert "RD$10.00" not in texto
+    assert "RD$50.00" not in texto
+    assert "Ventas" not in texto
+    assert "PRUEBA — NO OFICIAL" not in texto
+    png = render_resumen_png(datos)
+    _margenes_blancos(png)
+    destino = os.environ.get("RESUMEN_VISTA_DIR")
+    if destino:
+        carpeta = Path(destino)
+        carpeta.mkdir(parents=True, exist_ok=True)
+        (carpeta / "recibo-aviso-dos-grupos.png").write_bytes(png)
 
 
 def test_mil_noventa_y_tres_al_quince_porciento_sale_una_sola_vez(entorno):
@@ -266,6 +331,80 @@ def test_mil_noventa_y_tres_al_quince_porciento_sale_una_sola_vez(entorno):
         (carpeta / "papel-caja-1093.png").write_bytes(papel.content)
         (carpeta / "papel-caja-mes.png").write_bytes(papel_mes.content)
         _vista(datos, carpeta / "pantalla-caja-1093.png")
+
+
+def test_dos_cajeras_fecha_y_mes_usan_la_misma_plantilla(entorno):
+    """ELEGIR FECHA y MES COMPLETO, cada cajera con sus datos de consulta."""
+    castillo = entorno.banca(
+        saldo=50000, codigo="1301", nombre="BANCA CASTILLO", usuario="isaury", clave="1234",
+    )
+    peguero = entorno.banca(
+        saldo=50000, codigo="2200", nombre="BANCA PEGUERO", usuario="wanda", clave="1234",
+    )
+    for usuario, porcentaje in (("isaury", 15), ("wanda", 10)):
+        alta = entorno.c.post("/comisiones", json={
+            "usuario_id": _usuario(entorno, usuario), "porcentaje": porcentaje,
+        }, headers=entorno.admin)
+        assert alta.status_code == 201, alta.text
+    sorteo = entorno.sorteo_id("La Primera 12")
+    entorno.vender_ok(castillo["headers"], [{"tipo": "QN", "sorteos": [sorteo], "numeros": "07", "monto": 200}])
+    entorno.vender_ok(peguero["headers"], [{"tipo": "QN", "sorteos": [sorteo], "numeros": "08", "monto": 80}])
+
+    def papel(headers, dia):
+        ruta = (
+            "/terminal/reportes/dia?desde=2026-11-14&hasta=2026-11-14"
+            if dia else "/terminal/reportes/mes?anio=2026&mes=11"
+        )
+        datos = entorno.c.get(ruta, headers=headers)
+        assert datos.status_code == 200, datos.text
+        cuerpo = datos.json()
+        imagen = entorno.c.get(cuerpo["impresion"]["url"], headers=headers)
+        assert imagen.status_code == 200, imagen.text
+        assert imagen.content.startswith(b"\x89PNG")
+        _margenes_blancos(imagen.content)
+        return cuerpo, imagen.content
+
+    esperados = (
+        (castillo, "BANCA CASTILLO", "1301", "Operador isaury", "200.00", "30.00", "170.00"),
+        (peguero, "BANCA PEGUERO", "2200", "Operador wanda", "80.00", "8.00", "72.00"),
+    )
+    destino = os.environ.get("RESUMEN_VISTA_DIR")
+    carpeta = Path(destino) if destino else None
+    if carpeta:
+        carpeta.mkdir(parents=True, exist_ok=True)
+    for banca, nombre, codigo, cajera, ventas, comision, total in esperados:
+        for dia, marca in ((True, "fecha"), (False, "mes")):
+            datos, png = papel(banca["headers"], dia)
+            texto = datos["texto"]
+            inf = datos["informe"]
+            assert inf["banca"] == nombre
+            assert inf["codigo"] == codigo
+            assert inf["cajera"] == cajera
+            assert inf["terminal"].startswith("APP-")
+            assert texto.count("RESUMEN DE CAJA") == 1
+            assert "RESUMEN FINAL" not in texto
+            assert "PRUEBA" not in texto
+            assert "Premios pagados" in texto
+            assert texto.count("Ventas") == 1
+            assert texto.count("Total") == 1
+            assert f"Código: {codigo}" in texto
+            assert f"Cajera: {cajera}" in texto
+            assert f"Terminal: {inf['terminal']}" in texto
+            assert "Impreso:" in texto
+            periodo = "14/11/2026" if dia else "01/11/2026 al 30/11/2026"
+            assert inf["periodo"] == periodo
+            assert f"Período: {periodo}" in texto
+            oficial = inf["oficial"]
+            assert oficial["ventas"] == ventas
+            assert oficial["premios_pagados"] == "0.00"
+            assert oficial["comision"] == comision
+            assert oficial["balance"] == total
+            assert oficial["recargas"] == "0.00"
+            assert oficial["total"] == total
+            assert oficial["lineas"][1]["concepto"] == "Premios"
+            assert inf["prueba"] is None
+            if carpeta:
+                (carpeta / f"recibo-{cajera.split()[-1]}-{marca}.png").write_bytes(png)
 
 
 def _vista(datos, ruta: Path):

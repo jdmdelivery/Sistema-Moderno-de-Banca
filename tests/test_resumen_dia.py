@@ -82,7 +82,11 @@ def test_resumen_de_la_cajera_no_mueve_la_caja_ni_mezcla_pruebas(entorno, monkey
     assert mixto["prueba"]["ventas"] == "50.00"
     assert mixto["informe"]["oficial"]["ventas"] == "20.00"
     assert mixto["informe"]["prueba"]["ventas"] == "50.00"
-    assert mixto["texto"].count("PRUEBA — NO OFICIAL") == 1
+    assert "PRUEBA — NO OFICIAL" not in mixto["texto"]
+    assert "NO SE IMPRIMIÓ EL TOTAL" in mixto["texto"]
+    assert "RD$20.00" not in mixto["texto"]
+    assert "RD$50.00" not in mixto["texto"]
+    assert "Ventas" not in mixto["texto"]
     assert entorno.saldo(b1["sucursal"]["id"]) == antes
 
     db = dbmod.nueva_sesion()

@@ -226,8 +226,62 @@ def _cabecera(c: _Lienzo, banca: str, titulo: str):
     c.sep()
 
 
+def _importe_de_bloque(bloque: dict | None) -> Decimal:
+    """Suma absoluta de los importes. Cero significa bloque vacío."""
+    if not bloque:
+        return Decimal("0")
+    total = Decimal("0")
+    for clave in ("ventas", "premios_pagados", "comision", "balance", "recargas", "total"):
+        if clave not in bloque:
+            continue
+        try:
+            total += abs(Decimal(str(bloque.get(clave) or "0")))
+        except Exception:
+            continue
+    if total != 0:
+        return total
+    for fila in bloque.get("lineas") or []:
+        texto = str((fila or {}).get("monto") or "")
+        negativo = texto.strip().startswith("-")
+        limpio = texto.replace("RD$", "").replace(",", "").replace("-", "").strip()
+        try:
+            n = Decimal(limpio or "0")
+        except Exception:
+            n = Decimal("0")
+        total += abs(n if not negativo else n)
+    return total
+
+
+AVISO_RECIBO_DOS_GRUPOS = (
+    "NO SE IMPRIMIÓ EL TOTAL. Este período tiene movimientos oficiales "
+    "y de prueba. La consulta no indica cuál imprimir. No se elige uno ni se suman."
+)
+
+
+def concepto_papel(concepto: str) -> str:
+    """Etiqueta del papel. La pantalla conserva la suya."""
+    if concepto == "Premios":
+        return "Premios pagados"
+    return concepto
+
+
+def seleccion_recibo(oficial: dict | None, prueba: dict | None) -> dict | None:
+    """Un grupo para el papel. None avisa y no imprime montos.
+
+    El grupo en cero se omite. Si los dos tienen movimiento, la consulta
+    no identifica cuál se pidió: no se elige uno ni se suman.
+    """
+    if _importe_de_bloque(oficial) != 0 and _importe_de_bloque(prueba) != 0:
+        return None
+    if _importe_de_bloque(prueba) != 0:
+        return prueba or {}
+    if oficial is not None:
+        return oficial
+    return prueba or {}
+
+
 def render_resumen_png(datos: dict[str, Any]) -> bytes:
-    """PNG 384 px del resumen de caja. Mismos montos y período que la pantalla."""
+    """PNG 384 px del resumen de caja. Un solo bloque, sin rótulo de prueba."""
     c = _Lienzo()
     f_c = _fuente(16, negrita=True)
     f_m = _fuente(18, negrita=True)
@@ -251,31 +305,20 @@ def render_resumen_png(datos: dict[str, Any]) -> bytes:
         c.texto_completo(f"Impreso: {datos['impreso']}", f_c)
     c.sep()
 
-    def bloque(titulo: str | None, b: dict | None):
-        if not b:
-            return
-        if titulo:
-            c.texto_completo(titulo, f_m, centrado=True, extra=4)
-        else:
-            c.texto_completo("RESUMEN FINAL", f_m, centrado=True, extra=4)
-        lineas = b.get("lineas") or []
-        if not lineas:
-            return
-        for fila in lineas:
-            destacar = bool(fila.get("destacar"))
-            if destacar:
-                c.sep()
-            c.fila_completa(
-                str(fila.get("concepto") or ""),
-                str(fila.get("monto") or ""),
-                f_tot if destacar else f_c,
-                f_tot if destacar else f_m,
-            )
-
-    bloque(None, inf.get("oficial"))
-    if inf.get("prueba") is not None:
-        c.sep()
-        bloque("PRUEBA — NO OFICIAL", inf.get("prueba"))
+    bloque = seleccion_recibo(inf.get("oficial"), inf.get("prueba"))
+    if bloque is None:
+        c.texto_completo(AVISO_RECIBO_DOS_GRUPOS, f_c, centrado=True, extra=4)
+        return c.png()
+    for fila in bloque.get("lineas") or []:
+        destacar = bool(fila.get("destacar"))
+        if destacar:
+            c.sep()
+        c.fila_completa(
+            concepto_papel(str(fila.get("concepto") or "")),
+            str(fila.get("monto") or ""),
+            f_tot if destacar else f_c,
+            f_tot if destacar else f_m,
+        )
     return c.png()
 
 

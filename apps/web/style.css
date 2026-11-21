@@ -700,6 +700,7 @@ body.modal-abierto{position:fixed;width:100%;left:0;right:0}
   margin-top:12px;background:#ffffff;border:1px solid #c0c0c0;
   border-radius:2px;padding:0;overflow:hidden;
 }
+.reporte-panel .rvr-regresar-fijo{display:none}
 .reporte-panel .rvr-toolbar{
   display:flex;flex-wrap:wrap;gap:6px;align-items:center;
   padding:5px 8px;background:linear-gradient(180deg,#f3f3f3,#dcdcdc);
@@ -845,6 +846,44 @@ body.modal-abierto{position:fixed;width:100%;left:0;right:0}
 .reporte-panel .rvr-mark{background:#ffe082 !important;color:#000 !important;padding:0 1px}
 .reporte-panel .rvr-vacio{
   padding:20px;text-align:center;color:#444 !important;background:#fff !important;
+}
+@media(max-width:900px){
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-visor{
+    position:fixed;inset:0;z-index:80;margin:0;border:0;border-radius:0;
+    display:flex;flex-direction:column;height:100dvh;max-height:100dvh;
+    background:#fff;overflow:hidden;
+    padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);
+    padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);
+  }
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-regresar-fijo{
+    display:flex;align-items:center;justify-content:center;flex:0 0 auto;
+    width:100%;min-height:56px;margin:0;border:0;border-radius:0;
+    background:#3270ff;color:#fff !important;font-size:20px;font-weight:800;
+    letter-spacing:.02em;cursor:pointer;
+  }
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-toolbar{flex:0 0 auto;position:static;top:auto}
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-scroll{
+    flex:1 1 auto;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;
+    overscroll-behavior:contain;
+  }
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-hoja{
+    font-size:16px;min-width:1100px;width:max-content;padding:12px;
+  }
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-tabla{width:max-content;min-width:1100px}
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-tabla th,
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-tabla td{
+    font-size:16px;padding:8px 10px;
+  }
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-tabla thead th{font-size:14px}
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-tabla td.izq,
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-tabla th.izq{
+    font-size:17px;font-weight:700;
+  }
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-doc-cab .emp{font-size:22px}
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-doc-cab .tit{font-size:18px}
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-doc-cab .meta,
+  #sec-ventas-resumido.rvr-movil-abierto .rvr-doc-cab .hora{font-size:15px}
+  html.rvr-movil-abierto,body.rvr-movil-abierto{overflow:hidden}
 }
 @media(max-width:640px){
   .reporte-panel .rvr-acciones-filtro .btn{flex:1;min-height:40px}

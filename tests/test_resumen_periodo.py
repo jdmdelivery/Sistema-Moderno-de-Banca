@@ -108,7 +108,9 @@ def test_el_rango_no_mezcla_la_prueba_con_lo_real(entorno, monkeypatch):
     hoy = _resumen(entorno, b["headers"], "2026-11-14", "2026-11-14")
     assert hoy["real"]["ventas"] == "0.00"
     assert hoy["prueba"]["ventas"] == "50.00"
-    assert "PRUEBA — NO OFICIAL" in hoy["texto"]
+    assert "PRUEBA — NO OFICIAL" not in hoy["texto"]
+    assert "RD$50.00" in hoy["texto"]
+    assert hoy["texto"].count("Ventas") == 1
     ayer = _resumen(entorno, b["headers"], "2026-11-13", "2026-11-13")
     assert ayer["prueba"]["ventas"] == "0.00"
     assert entorno.saldo(b["sucursal"]["id"]) == 5764
@@ -151,7 +153,9 @@ def test_mes_completo_incluye_todos_los_dias_y_totales(entorno, monkeypatch):
     assert datos["informe"]["oficial"]["balance"] == "-285.00"
     assert datos["informe"]["oficial"]["recargas"] == "0.00"
     assert datos["informe"]["oficial"]["total"] == "-285.00"
-    assert "RESUMEN FINAL" in datos["texto"]
+    assert "RESUMEN DE CAJA" in datos["texto"]
+    assert "RESUMEN FINAL" not in datos["texto"]
+    assert "PRUEBA — NO OFICIAL" not in datos["texto"]
     assert "-RD$285.00" in datos["texto"]
     assert "anio=2026" in datos["impresion"]["url"] and "mes=11" in datos["impresion"]["url"]
     assert entorno.saldo(b["sucursal"]["id"]) == antes

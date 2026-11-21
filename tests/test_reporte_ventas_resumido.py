@@ -331,6 +331,7 @@ def test_desglose_cajeros_dos_bancas_y_admin_de_sucursal(entorno):
     assert 'id="btn-rvr-ver"' in html
     assert 'id="btn-rvr-cajeros"' in html
     assert 'id="btn-rvr-todos"' in html
+    assert 'id="btn-rvr-visor-regresar"' in html
     js = (Path(__file__).resolve().parent.parent / "apps" / "web" / "app.js").read_text(encoding="utf-8")
     assert "mostrarCajeros" in js
     assert 'id="btn-rvr-todos"' in js or "btn-rvr-todos" in js

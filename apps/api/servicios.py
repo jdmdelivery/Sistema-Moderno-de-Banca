@@ -5811,13 +5811,14 @@ def _texto_resumen(datos):
     ]
     if datos.get("impreso"):
         lineas.append(f"Impreso: {datos['impreso']}")
-    lineas.extend(["", "RESUMEN FINAL"])
-    for fila in inf["oficial"]["lineas"]:
-        lineas.append(_fila_texto_58(fila["concepto"], fila["monto"]))
-    if inf.get("prueba") is not None:
-        lineas.extend(["", "PRUEBA — NO OFICIAL", ""])
-        for fila in inf["prueba"]["lineas"]:
-            lineas.append(_fila_texto_58(fila["concepto"], fila["monto"]))
+    from .recibos_imagen import AVISO_RECIBO_DOS_GRUPOS, concepto_papel, seleccion_recibo
+
+    bloque = seleccion_recibo(inf.get("oficial"), inf.get("prueba"))
+    if bloque is None:
+        lineas.extend(["", AVISO_RECIBO_DOS_GRUPOS])
+        return "\n".join(lineas)
+    for fila in bloque.get("lineas") or []:
+        lineas.append(_fila_texto_58(concepto_papel(fila["concepto"]), fila["monto"]))
     return "\n".join(lineas)
 
 
