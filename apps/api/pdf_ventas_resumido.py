@@ -330,7 +330,10 @@ def _dibujar_cabecera_tabla(c, top, fuentes):
     for x in xs[2:9]:
         _linea(c, x, y0, x, y1)
     _texto(c, "Banca", xs[0], y0, ANCHOS[0], alto * 2, negrita, FUENTE_CAB_PT, NEGRO, "center")
-    _texto(c, "Resultado Total", xs[9], y0, ANCHOS[9], alto * 2, negrita, FUENTE_CAB_PT, NEGRO, "center")
+    # La celda ya ocupa dos filas. En DejaVu (Render) las dos palabras no
+    # caben en una sola línea; cada una sí.
+    _texto(c, "Resultado", xs[9], y0 + alto, ANCHOS[9], alto, negrita, FUENTE_CAB_PT, NEGRO, "center")
+    _texto(c, "Total", xs[9], y0, ANCHOS[9], alto, negrita, FUENTE_CAB_PT, NEGRO, "center")
     _texto(c, "LOTERÍA", xs[1], y1, sum(ANCHOS[1:6]), alto, negrita, FUENTE_CAB_PT, NEGRO, "center")
     _texto(c, "RECARGAS", xs[6], y1, sum(ANCHOS[6:9]), alto, negrita, FUENTE_CAB_PT, white, "center")
     for i, titulo in enumerate(CAB_NUM, start=1):
@@ -411,9 +414,12 @@ def _dibujar_pagina(c, datos, filas, numero, total, fuentes):
 def construir(datos: dict) -> bytes:
     """Devuelve el PDF (bytes) en A4 horizontal, una o más páginas."""
     regular, negrita = _fuentes()
-    for titulo, ancho in zip(("Banca",) + CAB_NUM + ("Resultado Total",), ANCHOS):
+    for titulo, ancho in zip(("Banca",) + CAB_NUM, ANCHOS[:-1]):
         if not _cabe_en_celda(titulo, negrita, FUENTE_CAB_PT, ancho):
             raise RuntimeError(f"El encabezado {titulo} no cabe en su columna")
+    for linea in ("Resultado", "Total"):
+        if not _cabe_en_celda(linea, negrita, FUENTE_CAB_PT, ANCHOS[9]):
+            raise RuntimeError(f"El encabezado {linea} no cabe en su columna")
     if not _cabe_en_celda("LOTERÍA", negrita, FUENTE_CAB_PT, sum(ANCHOS[1:6])):
         raise RuntimeError("El encabezado LOTERÍA no cabe")
     if not _cabe_en_celda("RECARGAS", negrita, FUENTE_CAB_PT, sum(ANCHOS[6:9])):

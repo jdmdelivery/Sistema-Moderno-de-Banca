@@ -315,6 +315,28 @@ def test_pdf_con_totales_en_cero_se_descarga_en_a4(entorno):
         assert "Promedio de Ventas por Banca" in texto
 
 
+def test_pdf_cabe_aunque_la_fuente_sea_mas_ancha(entorno, monkeypatch):
+    """DejaVu en Render es más ancha que Arial. El encabezado no puede tumbar el PDF."""
+    from reportlab.pdfbase import pdfmetrics
+
+    original = pdfmetrics.stringWidth
+
+    def mas_ancho(texto, fuente, tam, *args, **kwargs):
+        return original(texto, fuente, tam, *args, **kwargs) * 1.2
+
+    monkeypatch.setattr(pdfmetrics, "stringWidth", mas_ancho)
+    entorno.banca(saldo=1000, codigo="VRW", nombre="BANCA FUENTE ANCHA", usuario="vrw")
+    r = entorno.c.get(
+        "/reportes/ventas-resumido.pdf?desde=2026-11-14&hasta=2026-11-14",
+        headers=entorno.admin,
+    )
+    assert r.status_code == 200, r.text[:300]
+    doc = _pdf(r.content)
+    texto = "\n".join(_texto(doc))
+    assert "Resultado" in texto and "Total" in texto
+    assert "BANCA FUENTE ANCHA" in texto
+
+
 def test_el_boton_pdf_no_usa_el_dialogo_de_windows():
     raiz = Path(__file__).resolve().parent.parent
     js = (raiz / "apps" / "web" / "app.js").read_text(encoding="utf-8")
