@@ -138,6 +138,28 @@ def _filas(datos, fuente, negrita):
                 "banca": banca,
                 "alto": alto,
             })
+            if datos.get("desglose_cajeros"):
+                for cajero in banca.get("cajeros") or []:
+                    etiqueta = f"Cajero: {cajero.get('nombre', '')}"
+                    lineas_c = _partir(etiqueta, fuente, FUENTE_PT, ANCHOS[0] - 10)
+                    valores = [
+                        cajero.get("venta", 0), cajero.get("comision", 0),
+                        cajero.get("neto", 0), cajero.get("premios", 0),
+                        cajero.get("resultado", 0),
+                    ]
+                    filas.append({
+                        "tipo": "cajero",
+                        "lineas": lineas_c,
+                        "valores": valores,
+                        "alto": max(ALTO_FILA, len(lineas_c) * 11 + 5),
+                    })
+                if banca.get("cajeros"):
+                    filas.append({
+                        "tipo": "comision_cajeras",
+                        "texto": "Total comisión de cajeras",
+                        "monto": banca.get("total_comision_cajeras") or 0,
+                        "alto": ALTO_FILA,
+                    })
         if grupo.get("subtotal"):
             filas.append({
                 "tipo": "subtotal",
@@ -160,6 +182,10 @@ def _filas(datos, fuente, negrita):
     for fila in filas:
         if fila["tipo"] == "banca":
             _exigir_montos(fila["banca"], fuente)
+        elif fila["tipo"] == "cajero":
+            _exigir_valores(fila["valores"], ANCHOS[1:6], fuente)
+        elif fila["tipo"] == "comision_cajeras":
+            _exigir_valores([fila["monto"]], [ANCHOS[2]], fuente)
         elif fila["tipo"] in ("subtotal", "total"):
             _exigir_montos(fila["bloque"], negrita)
     return filas
@@ -177,6 +203,21 @@ def _montos(bloque):
         else:
             valores.append(D(origen.get(campo, 0)))
     return valores
+
+
+def _exigir_valores(valores, anchos, fuente):
+    for ancho, valor in zip(anchos, valores):
+        texto = formato_monto(valor)
+        if not _cabe_en_celda(texto, fuente, FUENTE_PT, ancho):
+            raise RuntimeError(f"El importe {texto} no cabe en la columna ({ancho} pt)")
+
+
+def _dibujar_valores(c, valores, y, alto, fuente, inicio=1):
+    xs = _xs()
+    for i, valor in enumerate(valores, start=inicio):
+        texto = formato_monto(valor)
+        color = ROJO if D(valor) < 0 else NEGRO
+        _texto(c, texto, xs[i], y, ANCHOS[i], alto, fuente, FUENTE_PT, color, "right")
 
 
 def _exigir_montos(bloque, fuente):
@@ -334,6 +375,18 @@ def _dibujar_fila(c, fila, top, fuentes):
         for i, linea in enumerate(lineas):
             c.drawString(xs[0] + PAD_X, y_txt + (len(lineas) - 1 - i) * 11 + 1, linea)
         _dibujar_montos(c, fila["banca"], y, alto, regular)
+    elif fila["tipo"] == "cajero":
+        lineas = fila["lineas"]
+        bloque_h = len(lineas) * 11
+        y_txt = y + (alto - bloque_h) / 2
+        c.setFillColor(NEGRO)
+        c.setFont(regular, FUENTE_PT)
+        for i, linea in enumerate(lineas):
+            c.drawString(xs[0] + PAD_X + 8, y_txt + (len(lineas) - 1 - i) * 11 + 1, linea)
+        _dibujar_valores(c, fila["valores"], y, alto, regular)
+    elif fila["tipo"] == "comision_cajeras":
+        _texto(c, fila["texto"], xs[0], y, ANCHOS[0], alto, negrita, FUENTE_PT, NEGRO, "left")
+        _dibujar_valores(c, [fila["monto"]], y, alto, negrita, inicio=2)
     elif fila["tipo"] in ("subtotal", "total"):
         _texto(c, fila["texto"], xs[0], y, ANCHOS[0], alto, negrita, FUENTE_PT, NEGRO, "left")
         _dibujar_montos(c, fila["bloque"], y, alto, negrita, negrita=negrita)

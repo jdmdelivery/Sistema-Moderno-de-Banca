@@ -884,7 +884,10 @@ body.modal-abierto{position:fixed;width:100%;left:0;right:0}
   }
 }
 .reporte-panel #rtk-hoja{min-width:1180px}
-.reporte-panel #rtk-hoja.rtk-detalle{min-width:0;max-width:760px}
+.reporte-panel #rtk-hoja.rtk-detalle{min-width:0;max-width:420px;margin:0 auto}
+.reporte-panel .rtk-vendedor{display:block;margin-top:2px;font-size:10px;font-weight:700;color:#222 !important}
+.reporte-panel .rtk-recibo{display:flex;justify-content:center;background:#fff;padding:8px 0 16px}
+.reporte-panel .rtk-recibo img{width:320px;max-width:100%;height:auto;background:#fff;border:1px solid #111}
 .reporte-panel .rtk-cierre{margin-top:8px;width:auto;min-width:280px}
 .reporte-panel .rtk-cierre td.rtk-monto{text-align:right;width:7.5rem;font-weight:700}
 .reporte-panel .rvr-tool.rtk-volver{font-weight:700;padding:0 10px}

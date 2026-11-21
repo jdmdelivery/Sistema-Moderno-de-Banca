@@ -257,3 +257,81 @@ def test_reporte_tickets_hora_loteria_pago_y_grupos(entorno, monkeypatch):
     assert "BANCA TICKET C" in texto
     assert str(pagado["id"]) in texto
     assert "14/11/2026" in texto
+    assert "Operador tkc" in texto
+    assert "Usuario que pagó" in texto
+
+
+def test_cajero_en_todos_los_estados_y_dos_recibos(entorno):
+    import io
+
+    from PIL import Image
+
+    from apps.api import db as dbmod
+    from apps.api.models import Ticket
+
+    b = entorno.banca(saldo=8000, codigo="TKR1", nombre="BANCA CASTILLO", usuario="vendrecibo")
+    sid = b["sucursal"]["id"]
+    primera = entorno.sorteo_id("La Primera 12")
+    vendido = entorno.vender_ok(b["headers"], [
+        {"tipo": "QN", "sorteos": [primera], "numeros": "07", "monto": 10},
+    ])
+    otro = entorno.vender_ok(b["headers"], [
+        {"tipo": "QN", "sorteos": [primera], "numeros": "08", "monto": 20},
+    ])
+    anulado = entorno.c.post("/panel/tickets/anular", json={
+        "id": vendido["id"], "serial": vendido["serial"], "motivo": "sigue mostrando al cajero",
+    }, headers=entorno.admin)
+    assert anulado.status_code == 200, anulado.text
+    sesion = dbmod.nueva_sesion()
+    try:
+        fila = sesion.get(Ticket, otro["id"])
+        fila.usuario_id = None
+        sesion.commit()
+    finally:
+        sesion.close()
+
+    q = f"desde=2026-11-14&hasta=2026-11-14&sucursal_id={sid}"
+    r = entorno.c.get(f"/reportes/tickets?{q}", headers=entorno.admin)
+    assert r.status_code == 200, r.text
+    por_id = {t["id"]: t for t in r.json()["tickets"]}
+    assert por_id[vendido["id"]]["estado"] == "anulado"
+    assert por_id[vendido["id"]]["cajera"] == "Operador vendrecibo"
+    assert por_id[vendido["id"]]["usuario_pago"] == ""
+    assert por_id[otro["id"]]["estado"] == "vendido"
+    assert por_id[otro["id"]]["cajera"] == "Cajero sin registrar"
+
+    pdf = entorno.c.get(f"/reportes/tickets.pdf?{q}", headers=entorno.admin)
+    assert pdf.status_code == 200, pdf.text
+    doc = pdfium.PdfDocument(pdf.content)
+    texto = "\n".join(p.get_textpage().get_text_bounded() for p in doc)
+    assert "Operador vendrecibo" in texto
+    assert "Cajero sin registrar" in texto
+    assert "Usuario que pagó" in texto
+    assert "BANCA CASTILLO" in texto
+
+    def png(ticket_id):
+        img = entorno.c.get(f"/reportes/tickets/{ticket_id}/imagen", headers=entorno.admin)
+        assert img.status_code == 200, img.text
+        assert img.headers["content-type"] == "image/png"
+        assert img.content.startswith(b"\x89PNG")
+        im = Image.open(io.BytesIO(img.content))
+        assert im.width == 384
+        assert im.height > 200
+        return img.content
+
+    assert png(vendido["id"]) != png(otro["id"])
+    assert entorno.c.get(f"/reportes/tickets/{vendido['id']}/imagen").status_code == 401
+    recibo = entorno.c.get(
+        f"/reportes/tickets/{vendido['id']}/recibo.pdf", headers=entorno.admin,
+    )
+    assert recibo.status_code == 200, recibo.text
+    assert recibo.content.startswith(b"%PDF-")
+    hoja = pdfium.PdfDocument(recibo.content)
+    ancho, alto = hoja[0].get_size()
+    assert alto > ancho
+    assert "Cajero sin registrar" in JS
+    assert "rtk-recibo" in JS
+    assert "rtk-vendedor" in JS
+    assert "/imagen" in JS
+    assert "recibo.pdf" in JS
+    assert "volverListadoTickets" in JS

@@ -2586,6 +2586,9 @@ function rvrFilasPlanas(datos) {
       filas.push({ tipo: "banca", banca: b, grupo: g });
       if (RVR.mostrarCajeros) {
         for (const cajero of (b.cajeros || [])) filas.push({ tipo: "cajero", cajero, banca: b });
+        if ((b.cajeros || []).length) {
+          filas.push({ tipo: "comision_cajeras", monto: b.total_comision_cajeras, banca: b });
+        }
       }
     }
     filas.push({ tipo: "subtotal", grupo: g });
@@ -2641,10 +2644,22 @@ function rvrHtmlDocumento(datos, filas, buscar) {
         ${rvrCeldasRecargas(b.recargas || vacioRec, b.resultado_total)}
       </tr>`;
     } else if (f.tipo === "cajero") {
+      const c = f.cajero;
       cuerpo += `<tr class="banca">
-        <td class="izq">&nbsp;&nbsp;Cajero: ${esc(f.cajero.nombre)}</td>
-        <td>${rvrMonto(f.cajero.venta)}</td>
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        <td class="izq">&nbsp;&nbsp;Cajero: ${esc(c.nombre)}</td>
+        <td>${rvrMonto(c.venta)}</td>
+        <td>${rvrMonto(c.comision)}</td>
+        <td>${rvrMonto(c.neto)}</td>
+        <td>${rvrMonto(c.premios)}</td>
+        <td>${rvrMonto(c.resultado)}</td>
+        <td></td><td></td><td></td><td></td>
+      </tr>`;
+    } else if (f.tipo === "comision_cajeras") {
+      cuerpo += `<tr class="banca">
+        <td class="izq">&nbsp;&nbsp;Total comisión de cajeras</td>
+        <td></td>
+        <td>${rvrMonto(f.monto)}</td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>`;
     } else if (f.tipo === "subtotal") {
       const s = f.grupo.subtotal;
@@ -2701,7 +2716,7 @@ function renderVentasResumido() {
   visor.hidden = false;
   const d = RVR.datos;
   const planas = rvrFilasPlanas(d).filter((f) => rvrCoincideBusqueda(f, RVR.buscar));
-  const cuerpo = planas.filter((f) => ["grupo", "banca", "cajero", "subtotal"].includes(f.tipo));
+  const cuerpo = planas.filter((f) => ["grupo", "banca", "cajero", "comision_cajeras", "subtotal"].includes(f.tipo));
   const cierre = planas.filter((f) => ["total", "total_bancas", "promedio"].includes(f.tipo));
   const totalPag = Math.max(1, Math.ceil(Math.max(cuerpo.length, 1) / RVR.porPagina));
   if (RVR.pagina > totalPag) RVR.pagina = totalPag;
@@ -2800,7 +2815,9 @@ async function rvrObtenerPdf() {
     msg("#rvr-msg", "Indique el rango de fechas", false);
     return null;
   }
-  const r = await fetch("/reportes/ventas-resumido.pdf?" + rvrParametros().toString(), {
+  const q = rvrParametros();
+  if (RVR.mostrarCajeros) q.set("desglose", "cajeros");
+  const r = await fetch("/reportes/ventas-resumido.pdf?" + q.toString(), {
     headers: TOKEN ? { Authorization: "Bearer " + TOKEN } : {},
   });
   if (!r.ok) {
@@ -2880,6 +2897,7 @@ const RTK = {
   datos: null,
   consulta: null,
   detalle: null,
+  reciboUrl: "",
   vista: null,
   pagina: 1,
   porPagina: 12,
@@ -2990,6 +3008,7 @@ function rtkFilasVisibles() {
   return todas.filter((t) => {
     const txt = [
       t.id, t.serial, t.sucursal, t.sucursal_codigo, t.cajera, t.cajera_usuario,
+      t.cajera ? "" : "Cajero sin registrar",
       t.estado, t.etiqueta_estado, t.usuario_pago, t.usuario_anulo,
     ].join(" ").toLowerCase();
     return txt.includes(q);
@@ -3030,11 +3049,12 @@ function rtkHtmlDocumento(datos, filas, resumen, conDetalle) {
     }
     const t = linea.t;
     const ganado = Number(t.premio_total || 0) > 0 ? fmt(t.premio_total) : "";
+    const vendedor = String(t.cajera || "").trim() || "Cajero sin registrar";
     const numeroCelda = detalle
       ? `<button type="button" class="rtk-num" data-rtk-ver="${esc(t.id)}">${esc(t.id)}</button>`
       : esc(t.id);
     return `<tr>
-      <td class="izq">${esc(t.sucursal_codigo)} ${esc(t.sucursal)}</td>
+      <td class="izq"><div>${esc(t.sucursal_codigo)} ${esc(t.sucursal)}</div><div class="rtk-vendedor">${esc(vendedor)}</div></td>
       <td class="corto">${esc(rtkCuando(t.vendido_en))}</td>
       <td class="corto">${numeroCelda}</td>
       <td>${esc(fmt(t.total))}</td>
@@ -3196,7 +3216,8 @@ function renderReporteTickets() {
 function pintarDetalleReporteTicket() {
   const hoja = $("#rtk-hoja");
   if (!hoja || !RTK.detalle) return;
-  hoja.innerHTML = rtkHtmlDetalle(RTK.detalle);
+  const src = RTK.reciboUrl || "";
+  hoja.innerHTML = `<div class="rtk-recibo"><img alt="Recibo del ticket ${esc(RTK.detalle.id)}" src="${src}"></div>`;
   hoja.dataset.zoom = String(RTK.zoom);
   rtkMarcarDetalle(true);
   const pag = $("#rtk-pagina");
@@ -3210,7 +3231,7 @@ function pintarDetalleReporteTicket() {
 function rtkPrepararImpresion() {
   if (!$("#rtk-hoja")) return;
   if (RTK.detalle) {
-    $("#rtk-hoja").innerHTML = rtkHtmlDetalle(RTK.detalle);
+    pintarDetalleReporteTicket();
     $("#rtk-hoja").dataset.zoom = "100";
     return;
   }
@@ -3273,7 +3294,7 @@ async function verReporteTickets() {
 
 async function rtkObtenerPdf() {
   const ruta = RTK.detalle
-    ? `/reportes/tickets/${RTK.detalle.id}/pdf`
+    ? `/reportes/tickets/${RTK.detalle.id}/recibo.pdf`
     : (RTK.consulta ? "/reportes/tickets.pdf?" + rtkParametros(RTK.consulta).toString() : "");
   if (!ruta) {
     msg("#rtk-msg", "Pulse VER para consultar antes de imprimir o descargar.", false);
@@ -3296,7 +3317,7 @@ async function rtkObtenerPdf() {
 }
 
 function rtkNombrePdf() {
-  if (RTK.detalle) return `Ticket-${RTK.detalle.id}.pdf`;
+  if (RTK.detalle) return `Recibo-${RTK.detalle.id}.pdf`;
   const f = RTK.consulta || {};
   return `Reporte-de-Tickets-${f.desde || "desde"}-al-${f.hasta || "hasta"}.pdf`;
 }
@@ -3342,6 +3363,10 @@ async function imprimirReporteTickets() {
 
 function regresarReporteTickets() {
   RTK.detalle = null;
+  if (RTK.reciboUrl) {
+    URL.revokeObjectURL(RTK.reciboUrl);
+    RTK.reciboUrl = "";
+  }
   RTK.vista = null;
   $("#rtk-visor").hidden = true;
   ir("reportes");
@@ -3351,6 +3376,10 @@ function volverListadoTickets(desdeHistorial) {
   if (!RTK.datos) return;
   const vista = RTK.vista || {};
   RTK.detalle = null;
+  if (RTK.reciboUrl) {
+    URL.revokeObjectURL(RTK.reciboUrl);
+    RTK.reciboUrl = "";
+  }
   RTK.pagina = vista.pagina || RTK.pagina;
   RTK.buscar = vista.buscar || "";
   if ($("#rtk-buscar")) $("#rtk-buscar").value = RTK.buscar;
@@ -3380,14 +3409,23 @@ async function verDetalleReporteTicket(id) {
         paginaTop: raiz ? raiz.scrollTop : 0,
       };
     }
-    RTK.detalle = await api(`/reportes/tickets/${id}`);
+    const detalle = await api(`/reportes/tickets/${id}`);
+    const respuesta = await fetch(`/reportes/tickets/${id}/imagen`, {
+      headers: TOKEN ? { Authorization: "Bearer " + TOKEN } : {},
+    });
+    if (!respuesta.ok) throw new Error("No se pudo abrir el recibo");
+    const blob = await respuesta.blob();
+    if (!blob || !blob.size) throw new Error("El recibo llegó vacío");
+    if (RTK.reciboUrl) URL.revokeObjectURL(RTK.reciboUrl);
+    RTK.reciboUrl = URL.createObjectURL(blob);
+    RTK.detalle = detalle;
     pintarDetalleReporteTicket();
     const scroll = rtkScroll();
     if (scroll) {
       scroll.scrollTop = 0;
       scroll.scrollLeft = 0;
     }
-    msg("#rtk-msg", `Detalle del ticket #${RTK.detalle.id}.`, true);
+    msg("#rtk-msg", `Recibo del ticket #${RTK.detalle.id}.`, true);
     if (!(history.state && history.state.detalle)) {
       const prof = (history.state && history.state.prof) || 0;
       history.pushState({

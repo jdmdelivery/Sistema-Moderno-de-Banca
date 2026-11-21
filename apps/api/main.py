@@ -1529,6 +1529,7 @@ def reporte_ventas_resumido_pdf(
     sucursal_id: int | None = None,
     grupo_id: str | None = None,
     ruta_id: str | None = None,
+    desglose: str | None = None,
     db=Depends(get_db),
     usuario=Depends(panel_actual),
 ):
@@ -1539,6 +1540,7 @@ def reporte_ventas_resumido_pdf(
         db, usuario, _fecha(desde), _fecha(hasta),
         sucursal_id=sucursal_id, grupo_id=grupo_id, ruta_id=ruta_id,
     )
+    datos["desglose_cajeros"] = (desglose or "").strip().lower() in {"cajeros", "1", "true", "si"}
     pdf = pdf_ventas_resumido.construir(datos)
     nombre = f"Resumen-de-Ventas-{datos['desde']}-al-{datos['hasta']}.pdf"
     return Response(
@@ -1604,7 +1606,7 @@ def reporte_ticket_detalle_pdf(
     db=Depends(get_db),
     usuario=Depends(requiere_rol("admin", "supervisor")),
 ):
-    """PDF del detalle consultado. No usa el recibo de venta ni la impresora térmica."""
+    """PDF del detalle consultado. No usa la impresora térmica."""
     from . import pdf_reporte_tickets
 
     datos = servicios.consulta_ticket_reporte(db, usuario, ticket_id)
@@ -1615,6 +1617,55 @@ def reporte_ticket_detalle_pdf(
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'attachment; filename="{nombre}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+def _png_recibo_ticket(db, usuario, ticket_id: int) -> bytes:
+    """Recibo vertical del ticket. Solo lee; no vende, no paga y no imprime."""
+    from .impresion_servidor import obtener_diseno, tr_habilitado
+    from .ticket_imagen import render_ticket_png
+
+    ticket = db.get(Ticket, int(ticket_id))
+    permisos.assert_ticket_en_alcance(db, usuario, ticket)
+    datos = servicios.ticket_a_dict(db, ticket)
+    return render_ticket_png(
+        datos,
+        obtener_diseno(db, ticket.sucursal_vendedora_id),
+        tr_habilitado=tr_habilitado(db),
+    )
+
+
+@app.get("/reportes/tickets/{ticket_id}/imagen")
+def reporte_ticket_imagen(
+    ticket_id: int,
+    db=Depends(get_db),
+    usuario=Depends(requiere_rol("admin", "supervisor")),
+):
+    png = _png_recibo_ticket(db, usuario, ticket_id)
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/reportes/tickets/{ticket_id}/recibo.pdf")
+def reporte_ticket_recibo_pdf(
+    ticket_id: int,
+    db=Depends(get_db),
+    usuario=Depends(requiere_rol("admin", "supervisor")),
+):
+    from . import pdf_reporte_tickets
+
+    png = _png_recibo_ticket(db, usuario, ticket_id)
+    pdf = pdf_reporte_tickets.construir_recibo(png)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="Recibo-{int(ticket_id)}.pdf"',
             "Cache-Control": "no-store",
         },
     )

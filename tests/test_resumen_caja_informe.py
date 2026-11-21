@@ -203,6 +203,71 @@ def test_la_prueba_no_se_repite_en_el_papel():
     assert alto_ambos < alto_solo * 2
 
 
+def test_mil_noventa_y_tres_al_quince_porciento_sale_una_sola_vez(entorno):
+    """RD$1,093.00 válidos al 15% = RD$163.95. El anulado no entra. La comisión no se resta dos veces."""
+    b = entorno.banca(
+        saldo=50000, codigo="RC15", nombre="BANCA CASTILLO", usuario="isaury15", clave="1234",
+    )
+    uid = _usuario(entorno, "isaury15")
+    alta = entorno.c.post(
+        "/comisiones", json={"usuario_id": uid, "porcentaje": 15}, headers=entorno.admin,
+    )
+    assert alta.status_code == 201, alta.text
+    sorteo = entorno.sorteo_id("La Primera 12")
+    entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [sorteo], "numeros": "01", "monto": 1093}])
+    anulado = entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [sorteo], "numeros": "02", "monto": 100}])
+    baja = entorno.c.post("/panel/tickets/anular", json={
+        "id": anulado["id"], "serial": anulado["serial"], "motivo": "no entra en la comisión",
+    }, headers=entorno.admin)
+    assert baja.status_code == 200, baja.text
+
+    dia = entorno.c.get(
+        "/terminal/reportes/dia?desde=2026-11-14&hasta=2026-11-14",
+        headers=b["headers"],
+    )
+    assert dia.status_code == 200, dia.text
+    datos = dia.json()
+    oficial = datos["informe"]["oficial"]
+    assert oficial["ventas"] == "1093.00"
+    assert oficial["premios_pagados"] == "0.00"
+    assert oficial["comision"] == "163.95"
+    assert oficial["recargas"] == "0.00"
+    assert oficial["balance"] == "929.05"
+    assert oficial["total"] == "929.05"
+    assert datos["real"]["neto"] == "1093.00"
+    assert datos["real"]["quedo"] == "1093.00"
+    assert datos["informe"]["cajera"] == "Operador isaury15"
+    assert datos["informe"]["periodo"] == "14/11/2026"
+    assert "Cajera: Operador isaury15" in datos["texto"]
+    assert datos["informe"]["prueba"] is None
+    assert "PRUEBA — NO OFICIAL" not in datos["texto"]
+    papel = entorno.c.get(datos["impresion"]["url"], headers=b["headers"])
+    assert papel.status_code == 200, papel.text
+    assert papel.content.startswith(b"\x89PNG")
+    _margenes_blancos(papel.content)
+
+    mes = entorno.c.get("/terminal/reportes/mes?anio=2026&mes=11", headers=b["headers"])
+    assert mes.status_code == 200, mes.text
+    mes_inf = mes.json()["informe"]
+    assert mes_inf["periodo"] == "01/11/2026 al 30/11/2026"
+    assert mes_inf["cajera"] == "Operador isaury15"
+    assert mes_inf["oficial"]["ventas"] == "1093.00"
+    assert mes_inf["oficial"]["comision"] == "163.95"
+    assert mes_inf["oficial"]["balance"] == "929.05"
+    assert "Cajera: Operador isaury15" in mes.json()["texto"]
+    papel_mes = entorno.c.get(mes.json()["impresion"]["url"], headers=b["headers"])
+    assert papel_mes.status_code == 200
+    assert papel_mes.content.startswith(b"\x89PNG")
+
+    destino = os.environ.get("RESUMEN_VISTA_DIR")
+    if destino:
+        carpeta = Path(destino)
+        carpeta.mkdir(parents=True, exist_ok=True)
+        (carpeta / "papel-caja-1093.png").write_bytes(papel.content)
+        (carpeta / "papel-caja-mes.png").write_bytes(papel_mes.content)
+        _vista(datos, carpeta / "pantalla-caja-1093.png")
+
+
 def _vista(datos, ruta: Path):
     inf = datos["informe"]
     ancho, alto = 480, 860

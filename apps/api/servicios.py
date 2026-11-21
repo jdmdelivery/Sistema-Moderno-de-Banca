@@ -4051,7 +4051,7 @@ def _fila_reporte_ticket(db, ticket):
         "serial": ticket.serial,
         "vendido_en": ticket.vendido_en.isoformat(sep=" ") if ticket.vendido_en else "",
         "fecha": ticket.fecha.isoformat() if ticket.fecha else "",
-        "cajera": vendedor.nombre if vendedor else "",
+        "cajera": ((vendedor.nombre or "").strip() if vendedor else "") or "Cajero sin registrar",
         "cajera_usuario": vendedor.usuario if vendedor else "",
         "usuario_id": ticket.usuario_id,
         "sucursal_id": ticket.sucursal_vendedora_id,
@@ -6919,6 +6919,126 @@ def filtros_ventas_resumido(db, admin):
     }
 
 
+def _desglose_cajeros_resumido(db, sucursal, desde, hasta, prueba):
+    """Cajeros bajo una banca. No entra en el subtotal de la banca.
+
+    Venta y comisión: tickets no anulados del rango, con el % del perfil
+    vigente al momento de cada venta. Premios: lo que esa cajera confirmó
+    en el rango, por fecha de pago, incluidos los abonos parciales y quien
+    pagó sin vender. Los premios pendientes no entran.
+    """
+    inicio = datetime.combine(desde, time.min)
+    fin = datetime.combine(hasta, time.min) + timedelta(days=1)
+    ventas = {}
+    tickets = (
+        db.query(Ticket)
+        .filter(
+            Ticket.sucursal_vendedora_id == sucursal.id,
+            Ticket.fecha >= desde,
+            Ticket.fecha <= hasta,
+            Ticket.es_prueba.is_(prueba),
+            Ticket.estado != "anulado",
+        )
+        .all()
+    )
+    for ticket in tickets:
+        uid = ticket.usuario_id
+        usuario = db.get(Usuario, uid) if uid else None
+        item = ventas.setdefault(uid, {
+            "nombre": usuario.nombre if usuario else None,
+            "venta": D(0),
+            "grupos": {},
+        })
+        item["venta"] += D(ticket.total)
+        momento = ticket.vendido_en or datetime.combine(ticket.fecha, datetime.min.time())
+        pct = _porcentaje_vigente(db, uid, momento) if uid else D(0)
+        clave = str(pct)
+        item["grupos"][clave] = item["grupos"].get(clave, D(0)) + D(ticket.total)
+
+    premios = {}
+
+    def _sumar_premio(uid, monto):
+        if not uid or D(monto) == 0:
+            return
+        usuario = db.get(Usuario, uid)
+        if usuario is None or usuario.sucursal_id != sucursal.id:
+            return
+        fila = premios.setdefault(uid, {"nombre": usuario.nombre, "monto": D(0)})
+        fila["monto"] += D(monto)
+
+    jugadas = (
+        db.query(Jugada, Ticket)
+        .join(Ticket, Jugada.ticket_id == Ticket.id)
+        .filter(
+            Ticket.es_prueba.is_(prueba),
+            Jugada.pagada.is_(True),
+            Jugada.pagado_por_usuario_id.isnot(None),
+            Jugada.pagado_en.isnot(None),
+            Jugada.pagado_en >= inicio,
+            Jugada.pagado_en < fin,
+        )
+        .all()
+    )
+    tickets_con_abono = set()
+    for jugada, ticket in jugadas:
+        pagador = db.get(Usuario, jugada.pagado_por_usuario_id)
+        if pagador is None or pagador.sucursal_id != sucursal.id:
+            continue
+        tickets_con_abono.add(ticket.id)
+        _sumar_premio(pagador.id, jugada.premio or 0)
+
+    historicos = (
+        db.query(Ticket)
+        .filter(
+            Ticket.es_prueba.is_(prueba),
+            Ticket.estado == "pagado",
+            Ticket.pagado_por_usuario_id.isnot(None),
+            Ticket.pagado_en.isnot(None),
+            Ticket.pagado_en >= inicio,
+            Ticket.pagado_en < fin,
+        )
+        .all()
+    )
+    for ticket in historicos:
+        if ticket.id in tickets_con_abono:
+            continue
+        if any(j.pagada for j in ticket.jugadas):
+            continue
+        _sumar_premio(ticket.pagado_por_usuario_id, ticket.premio_total or 0)
+
+    salida = []
+    total_comision = D(0)
+    for uid in set(ventas) | set(premios):
+        venta_fila = ventas.get(uid)
+        premio_fila = premios.get(uid)
+        venta = venta_fila["venta"] if venta_fila else D(0)
+        comision = D(0)
+        if venta_fila:
+            for clave, monto in venta_fila["grupos"].items():
+                comision += D(D(monto) * D(clave) / D(100))
+        premio = premio_fila["monto"] if premio_fila else D(0)
+        if venta == 0 and premio == 0:
+            continue
+        nombre = (
+            (venta_fila or {}).get("nombre")
+            or (premio_fila or {}).get("nombre")
+            or "Sin cajero asignado"
+        )
+        neto = D(venta - comision)
+        total_comision += comision
+        salida.append({
+            "usuario_id": uid,
+            "nombre": nombre,
+            "venta": str(D(venta)),
+            "comision": str(D(comision)),
+            "neto": str(neto),
+            "premios": str(D(premio)),
+            "resultado": str(D(neto - premio)),
+        })
+    salida.sort(key=lambda fila: ((fila["nombre"] or "").lower(), fila["usuario_id"] or 0))
+    return salida, D(total_comision)
+
+
 def _fila_banca_resumido(db, sucursal, desde, hasta, prueba):
     """Una fila contable por banca. Fórmulas LotoBet / panel aprobado:
 
@@ -6939,20 +7059,8 @@ def _fila_banca_resumido(db, sucursal, desde, hasta, prueba):
     neto_rec = D(0)
     resultado_total = D(resultado_lot + neto_rec)
     gid, gnom = _grupo_de_sucursal(sucursal)
-    ventas_cajeros = (
-        db.query(Ticket.usuario_id, Usuario.nombre, func.sum(Ticket.total))
-        .select_from(Ticket)
-        .outerjoin(Usuario, Usuario.id == Ticket.usuario_id)
-        .filter(
-            Ticket.sucursal_vendedora_id == sucursal.id,
-            Ticket.fecha >= desde,
-            Ticket.fecha <= hasta,
-            Ticket.es_prueba.is_(prueba),
-            Ticket.estado != "anulado",
-        )
-        .group_by(Ticket.usuario_id, Usuario.nombre)
-        .order_by(Usuario.nombre, Ticket.usuario_id)
-        .all()
+    cajeros, total_comision_cajeras = _desglose_cajeros_resumido(
+        db, sucursal, desde, hasta, prueba,
     )
     return {
         "sucursal_id": sucursal.id,
@@ -6963,10 +7071,8 @@ def _fila_banca_resumido(db, sucursal, desde, hasta, prueba):
         "ruta_id": _ruta_de_sucursal(sucursal),
         "comision_porcentaje": str(pct),
         "tickets": int(bloque["tickets"]),
-        "cajeros": [
-            {"usuario_id": uid, "nombre": nombre or "Sin cajero asignado", "venta": str(D(monto))}
-            for uid, nombre, monto in ventas_cajeros
-        ],
+        "cajeros": cajeros,
+        "total_comision_cajeras": str(total_comision_cajeras),
         "loteria": {
             "venta": str(venta),
             "comision": str(comision),

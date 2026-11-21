@@ -11,6 +11,7 @@ PAGE_W, PAGE_H = landscape(A4)
 MARGIN = 28
 FUENTE_PT = 7
 ALTO = 15
+ALTO_TICKET = 26
 PAD = 2
 ANCHOS = (148, 78, 46, 68, 68, 108, 78, 108, 78)
 CAB = (
@@ -132,21 +133,32 @@ def _cabecera_tabla(c, y, fuentes):
     return y1
 
 
-def _fila(c, y, valores, fuentes, fondo=white, negrita=False):
+def _fila(c, y, valores, fuentes, fondo=white, negrita=False, sub=None):
     fuente = fuentes[1] if negrita else fuentes[0]
+    alto = ALTO_TICKET if sub else ALTO
     xs = _xs()
-    y1 = y - ALTO
+    y1 = y - alto
     if fondo != white:
         c.setFillColor(fondo)
-        c.rect(xs[0], y1, xs[-1] - xs[0], ALTO, stroke=0, fill=1)
+        c.rect(xs[0], y1, xs[-1] - xs[0], alto, stroke=0, fill=1)
     c.setStrokeColor(LINEA)
     c.setLineWidth(0.3)
-    c.rect(xs[0], y1, xs[-1] - xs[0], ALTO, stroke=1, fill=0)
+    c.rect(xs[0], y1, xs[-1] - xs[0], alto, stroke=1, fill=0)
     for x in xs[1:-1]:
         c.line(x, y1, x, y)
+    if sub:
+        banca = _recortar(valores[0], fuente, FUENTE_PT, ANCHOS[0])
+        cajero = _recortar(sub, fuentes[0], 6.5, ANCHOS[0])
+        c.setFillColor(NEGRO)
+        c.setFont(fuente, FUENTE_PT)
+        c.drawString(xs[0] + PAD, y1 + 13, banca)
+        c.setFont(fuentes[0], 6.5)
+        c.drawString(xs[0] + PAD, y1 + 3, cajero)
     for i, valor in enumerate(valores):
+        if sub and i == 0:
+            continue
         align = "right" if i in DINERO else "left"
-        _texto(c, valor, xs[i], y1, ANCHOS[i], ALTO, fuente, FUENTE_PT, NEGRO, align)
+        _texto(c, valor, xs[i], y1, ANCHOS[i], alto, fuente, FUENTE_PT, NEGRO, align)
     return y1
 
 
@@ -161,6 +173,11 @@ def _grupo(c, y, texto, fuentes):
     c.rect(xs[0], y1, xs[-1] - xs[0], ALTO, stroke=1, fill=0)
     _texto(c, texto, xs[0], y1, xs[-1] - xs[0], ALTO, negrita, 8, NEGRO, "left")
     return y1
+
+
+def _cajero(t):
+    nombre = str(t.get("cajera") or "").strip()
+    return nombre or "Cajero sin registrar"
 
 
 def _valores(t):
@@ -223,13 +240,13 @@ def construir(datos) -> bytes:
             n = conteos.get(t.get("estado"), 0)
             y = _grupo(c, y, f"{etiqueta} · {n} ticket{'s' if n != 1 else ''}", fuentes)
             previo = t.get("estado")
-        if y - ALTO < MARGIN + 28:
+        if y - ALTO_TICKET < MARGIN + 28:
             nueva()
             if agrupar and previo:
                 etiqueta = t.get("etiqueta_estado") or previo
                 n = conteos.get(previo, 0)
                 y = _grupo(c, y, f"{etiqueta} · {n} ticket{'s' if n != 1 else ''}", fuentes)
-        y = _fila(c, y, _valores(t), fuentes)
+        y = _fila(c, y, _valores(t), fuentes, sub=_cajero(t))
     if y - ALTO < MARGIN + 28:
         nueva()
     premio = datos.get("suma_premio")
@@ -263,6 +280,25 @@ def _titulo_grupo(sorteos) -> str:
         if nombre:
             partes.append(nombre)
     return " + ".join(partes) or "Sin lotería"
+
+
+def construir_recibo(png: bytes) -> bytes:
+    """PDF vertical con el mismo recibo que se ve al abrir el ticket."""
+    from PIL import Image
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+
+    im = Image.open(BytesIO(png))
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    ancho, alto = A4
+    max_w, max_h = 300, alto - 72
+    escala = min(max_w / im.width, max_h / im.height)
+    dw, dh = im.width * escala, im.height * escala
+    c.drawImage(ImageReader(im), (ancho - dw) / 2, alto - 36 - dh, dw, dh, mask="auto")
+    c.save()
+    return buf.getvalue()
 
 
 def construir_detalle(datos) -> bytes:
