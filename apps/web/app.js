@@ -2546,6 +2546,8 @@ function imprimirPendientes() {
 const RVR = {
   filtros: null,
   datos: null,
+  mostrarCajeros: false,
+  consulta: 0,
   pagina: 1,
   porPagina: 12,
   zoom: 100,
@@ -2580,7 +2582,12 @@ function rvrFilasPlanas(datos) {
   const filas = [];
   for (const g of (datos.grupos || [])) {
     filas.push({ tipo: "grupo", grupo: g });
-    for (const b of (g.bancas || [])) filas.push({ tipo: "banca", banca: b, grupo: g });
+    for (const b of (g.bancas || [])) {
+      filas.push({ tipo: "banca", banca: b, grupo: g });
+      if (RVR.mostrarCajeros) {
+        for (const cajero of (b.cajeros || [])) filas.push({ tipo: "cajero", cajero, banca: b });
+      }
+    }
     filas.push({ tipo: "subtotal", grupo: g });
   }
   filas.push({ tipo: "total", total: datos.total });
@@ -2593,9 +2600,9 @@ function rvrCoincideBusqueda(fila, q) {
   if (!q) return true;
   const t = q.toLowerCase();
   if (fila.tipo === "grupo") return (fila.grupo.grupo_nombre || "").toLowerCase().includes(t);
-  if (fila.tipo === "banca") {
+  if (fila.tipo === "cajero" || fila.tipo === "banca") {
     const b = fila.banca;
-    return `${b.banca} ${b.codigo}`.toLowerCase().includes(t);
+    return `${b.banca} ${b.codigo} ${fila.cajero?.nombre || ""}`.toLowerCase().includes(t);
   }
   if (fila.tipo === "subtotal") return "sub-total".includes(t) || "subtotal".includes(t) || (fila.grupo.grupo_nombre || "").toLowerCase().includes(t);
   if (fila.tipo === "total" || fila.tipo === "total_bancas" || fila.tipo === "promedio") {
@@ -2632,6 +2639,12 @@ function rvrHtmlDocumento(datos, filas, buscar) {
         <td class="izq">${esc(b.codigo)} ${esc(b.banca)}</td>
         ${rvrCeldasLoteria(b.loteria)}
         ${rvrCeldasRecargas(b.recargas || vacioRec, b.resultado_total)}
+      </tr>`;
+    } else if (f.tipo === "cajero") {
+      cuerpo += `<tr class="banca">
+        <td class="izq">&nbsp;&nbsp;Cajero: ${esc(f.cajero.nombre)}</td>
+        <td>${rvrMonto(f.cajero.venta)}</td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       </tr>`;
     } else if (f.tipo === "subtotal") {
       const s = f.grupo.subtotal;
@@ -2688,7 +2701,7 @@ function renderVentasResumido() {
   visor.hidden = false;
   const d = RVR.datos;
   const planas = rvrFilasPlanas(d).filter((f) => rvrCoincideBusqueda(f, RVR.buscar));
-  const cuerpo = planas.filter((f) => ["grupo", "banca", "subtotal"].includes(f.tipo));
+  const cuerpo = planas.filter((f) => ["grupo", "banca", "cajero", "subtotal"].includes(f.tipo));
   const cierre = planas.filter((f) => ["total", "total_bancas", "promedio"].includes(f.tipo));
   const totalPag = Math.max(1, Math.ceil(Math.max(cuerpo.length, 1) / RVR.porPagina));
   if (RVR.pagina > totalPag) RVR.pagina = totalPag;
@@ -2765,14 +2778,19 @@ async function cargarVentasResumido() {
   }
 }
 
-async function verVentasResumido() {
+async function verVentasResumido(mostrarCajeros = RVR.mostrarCajeros) {
+  const consulta = ++RVR.consulta;
   try {
     const q = rvrParametros();
-    RVR.datos = await api("/reportes/ventas-resumido?" + q.toString());
+    const datos = await api("/reportes/ventas-resumido?" + q.toString());
+    if (consulta !== RVR.consulta) return;
+    RVR.datos = datos;
+    RVR.mostrarCajeros = mostrarCajeros;
     RVR.pagina = 1;
     renderVentasResumido();
     msg("#rvr-msg", `Reporte listo · ${RVR.datos.total.bancas} banca(s)`, true);
   } catch (e) {
+    if (consulta !== RVR.consulta) return;
     msg("#rvr-msg", e.message, false);
   }
 }
@@ -3548,7 +3566,12 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-pen-ver").addEventListener("click", verPendientes);
   $("#btn-pen-texto").addEventListener("click", verPendientesTexto);
   $("#btn-pen-imprimir").addEventListener("click", imprimirPendientes);
-  if ($("#btn-rvr-ver")) $("#btn-rvr-ver").addEventListener("click", () => verVentasResumido());
+  if ($("#btn-rvr-ver")) $("#btn-rvr-ver").addEventListener("click", () => verVentasResumido(false));
+  if ($("#btn-rvr-cajeros")) $("#btn-rvr-cajeros").addEventListener("click", () => verVentasResumido(true));
+  if ($("#btn-rvr-todos")) $("#btn-rvr-todos").addEventListener("click", () => {
+    if ($("#rvr-banca")) $("#rvr-banca").value = "";
+    return verVentasResumido(true);
+  });
   if ($("#btn-rvr-imprimir")) $("#btn-rvr-imprimir").addEventListener("click", imprimirVentasResumido);
   if ($("#btn-rvr-print2")) $("#btn-rvr-print2").addEventListener("click", imprimirVentasResumido);
   if ($("#btn-rvr-pdf")) $("#btn-rvr-pdf").addEventListener("click", descargarPdfVentasResumido);

@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pypdfium2 as pdfium
 
+from apps.api import db as dbmod
+from apps.api.models import Usuario
 from apps.api.pdf_ventas_resumido import FUENTE_PT, construir, formato_monto
+from apps.api.security import hash_clave
 
 
 def _get(entorno, extra=""):
@@ -301,3 +304,77 @@ def test_el_boton_pdf_no_usa_el_dialogo_de_windows():
     assert "a.download" in js
     assert "size: A4 landscape" in css
     assert "table-header-group" in css
+
+
+def _super(entorno):
+    db = dbmod.nueva_sesion()
+    try:
+        existente = db.query(Usuario).filter_by(usuario="JDMCASHNOW").first()
+        if existente is None:
+            db.add(Usuario(
+                nombre="JDMCASHNOW", usuario="JDMCASHNOW", rol="super_admin",
+                sucursal_id=None, activo=True, eliminado=False, suspendido=False,
+                estado_aprobacion="aprobado", clave_hash=hash_clave("SuperTest123!"),
+            ))
+        db.commit()
+    finally:
+        db.close()
+    login = entorno.c.post("/auth/login", json={"usuario": "JDMCASHNOW", "clave": "SuperTest123!"})
+    assert login.status_code == 200, login.text
+    return {"Authorization": f"Bearer {login.json()['token']}"}
+
+
+def test_desglose_cajeros_dos_bancas_y_admin_de_sucursal(entorno):
+    html = entorno.c.get("/").text
+    assert 'id="btn-rvr-ver"' in html
+    assert 'id="btn-rvr-cajeros"' in html
+    assert 'id="btn-rvr-todos"' in html
+    js = (Path(__file__).resolve().parent.parent / "apps" / "web" / "app.js").read_text(encoding="utf-8")
+    assert "mostrarCajeros" in js
+    assert 'id="btn-rvr-todos"' in js or "btn-rvr-todos" in js
+
+    norte = entorno.banca(saldo=50000, codigo="VC01", nombre="BANCA NORTE CAJ", usuario="vcn1")
+    sur = entorno.banca(saldo=50000, codigo="VC02", nombre="BANCA SUR CAJ", usuario="vcs1")
+    entorno.operador("vcn2", "1234", norte["sucursal"]["id"])
+    h2 = entorno.login_terminal("vcn2", "1234")
+    s = entorno.sorteo_id("La Primera 12")
+    entorno.vender_ok(norte["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "07", "monto": 100}])
+    entorno.vender_ok(h2, [{"tipo": "QN", "sorteos": [s], "numeros": "08", "monto": 40}])
+    entorno.vender_ok(sur["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "09", "monto": 200}])
+
+    datos = _get(entorno)
+    fila_n = _fila(datos, "BANCA NORTE CAJ")
+    fila_s = _fila(datos, "BANCA SUR CAJ")
+    ventas_n = sorted(Decimal(c["venta"]) for c in fila_n["cajeros"])
+    assert ventas_n == [Decimal("40.00"), Decimal("100.00")]
+    assert sum(ventas_n, Decimal("0")) == Decimal(fila_n["loteria"]["venta"]) == Decimal("140.00")
+    assert Decimal(fila_n["loteria"]["comision"]) == Decimal("14.00")
+    assert Decimal(fila_n["loteria"]["premios"]) == Decimal("0")
+    assert [c["nombre"] for c in fila_s["cajeros"]] == ["Operador vcs1"]
+    assert Decimal(fila_s["cajeros"][0]["venta"]) == Decimal(fila_s["loteria"]["venta"]) == Decimal("200.00")
+    assert Decimal(fila_s["loteria"]["comision"]) == Decimal("20.00")
+
+    super_h = _super(entorno)
+    creado = entorno.c.post("/usuarios", json={
+        "nombre": "Admin Norte", "usuario": "admnorte", "rol": "admin",
+        "sucursal_id": norte["sucursal"]["id"], "clave": "AdminNorte123!", "activo": True,
+    }, headers=super_h)
+    assert creado.status_code in (200, 201), creado.text
+    login = entorno.c.post("/auth/login", json={"usuario": "admnorte", "clave": "AdminNorte123!"})
+    assert login.status_code == 200, login.text
+    propio = entorno.c.get(
+        "/reportes/ventas-resumido?desde=2026-11-14&hasta=2026-11-14",
+        headers={"Authorization": f"Bearer {login.json()['token']}"},
+    )
+    assert propio.status_code == 200, propio.text
+    cuerpo = propio.json()
+    nombres = [b["banca"] for g in cuerpo["grupos"] for b in g["bancas"]]
+    assert nombres == ["BANCA NORTE CAJ"]
+    cajeros = cuerpo["grupos"][0]["bancas"][0]["cajeros"]
+    assert sorted(c["nombre"] for c in cajeros) == ["Operador vcn1", "Operador vcn2"]
+    assert "BANCA SUR CAJ" not in nombres
+    ajena = entorno.c.get(
+        f"/reportes/ventas-resumido?desde=2026-11-14&hasta=2026-11-14&sucursal_id={sur['sucursal']['id']}",
+        headers={"Authorization": f"Bearer {login.json()['token']}"},
+    )
+    assert ajena.status_code == 403

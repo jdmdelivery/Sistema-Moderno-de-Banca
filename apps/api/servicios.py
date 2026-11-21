@@ -6939,6 +6939,21 @@ def _fila_banca_resumido(db, sucursal, desde, hasta, prueba):
     neto_rec = D(0)
     resultado_total = D(resultado_lot + neto_rec)
     gid, gnom = _grupo_de_sucursal(sucursal)
+    ventas_cajeros = (
+        db.query(Ticket.usuario_id, Usuario.nombre, func.sum(Ticket.total))
+        .select_from(Ticket)
+        .outerjoin(Usuario, Usuario.id == Ticket.usuario_id)
+        .filter(
+            Ticket.sucursal_vendedora_id == sucursal.id,
+            Ticket.fecha >= desde,
+            Ticket.fecha <= hasta,
+            Ticket.es_prueba.is_(prueba),
+            Ticket.estado != "anulado",
+        )
+        .group_by(Ticket.usuario_id, Usuario.nombre)
+        .order_by(Usuario.nombre, Ticket.usuario_id)
+        .all()
+    )
     return {
         "sucursal_id": sucursal.id,
         "codigo": sucursal.codigo,
@@ -6948,6 +6963,10 @@ def _fila_banca_resumido(db, sucursal, desde, hasta, prueba):
         "ruta_id": _ruta_de_sucursal(sucursal),
         "comision_porcentaje": str(pct),
         "tickets": int(bloque["tickets"]),
+        "cajeros": [
+            {"usuario_id": uid, "nombre": nombre or "Sin cajero asignado", "venta": str(D(monto))}
+            for uid, nombre, monto in ventas_cajeros
+        ],
         "loteria": {
             "venta": str(venta),
             "comision": str(comision),
