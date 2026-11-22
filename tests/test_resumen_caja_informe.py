@@ -199,6 +199,7 @@ def test_el_papel_imprime_el_bloque_de_abajo_sin_ceros_ni_rotulo():
     }
     assert seleccion_recibo(oficial, prueba) is prueba
     assert prueba["lineas"][1]["concepto"] == "Premios"
+    # Pantalla: un solo RESUMEN FINAL con el bloque activo (sin rótulo PRUEBA).
     datos = {
         "impreso": "21-11-2026 12:23 AM",
         "informe": {
@@ -207,10 +208,11 @@ def test_el_papel_imprime_el_bloque_de_abajo_sin_ceros_ni_rotulo():
             "cajera": "Isaury",
             "terminal": "SUNMI",
             "periodo": "01/11/2026 al 30/11/2026",
-            "oficial": oficial,
-            "prueba": prueba,
+            "oficial": seleccion_recibo(oficial, prueba),
+            "prueba": None,
         },
     }
+    assert datos["informe"]["oficial"]["ventas"] == "28465.00"
     texto = _texto_resumen(datos)
     assert texto.count("RESUMEN DE CAJA") == 1
     assert "RESUMEN FINAL" not in texto
@@ -232,6 +234,52 @@ def test_el_papel_imprime_el_bloque_de_abajo_sin_ceros_ni_rotulo():
         carpeta = Path(destino)
         carpeta.mkdir(parents=True, exist_ok=True)
         (carpeta / "recibo-isaury-ejemplo-mes.png").write_bytes(png)
+
+
+def test_modo_desarrollo_pone_la_bolsa_activa_en_resumen_final(entorno, monkeypatch):
+    """Con MODO_DESARROLLO, las ventas es_prueba=True no dejan ceros en RESUMEN FINAL."""
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    b = entorno.banca(
+        saldo=100000, codigo="RCDEV", nombre="BANCA DEV RESUMEN", usuario="cajdev", clave="1234",
+    )
+    uid = _usuario(entorno, "cajdev")
+    alta = entorno.c.post(
+        "/comisiones", json={"usuario_id": uid, "porcentaje": 15}, headers=entorno.admin,
+    )
+    assert alta.status_code == 201, alta.text
+    sorteo = entorno.sorteo_id("La Primera 12")
+    ticket = entorno.vender_ok(b["headers"], [
+        {"tipo": "QN", "sorteos": [sorteo], "numeros": "44", "monto": 1000},
+    ])
+    assert ticket["es_prueba"] is True
+    dia = entorno.c.get(
+        "/terminal/reportes/dia?desde=2026-11-14&hasta=2026-11-14",
+        headers=b["headers"],
+    )
+    assert dia.status_code == 200, dia.text
+    datos = dia.json()
+    assert datos["real"]["ventas"] == "0.00"
+    assert datos["prueba"]["ventas"] == "1000.00"
+    oficial = datos["informe"]["oficial"]
+    assert oficial["ventas"] == "1000.00"
+    assert oficial["comision"] == "150.00"
+    assert oficial["premios_pagados"] == "0.00"
+    assert oficial["balance"] == "850.00"
+    assert oficial["recargas"] == "0.00"
+    assert oficial["total"] == "850.00"
+    assert [fila["concepto"] for fila in oficial["lineas"]] == [
+        "Ventas", "Premios", "Comisión", "Balance", "Recargas", "Total",
+    ]
+    assert datos["informe"]["prueba"] is None
+    assert "PRUEBA — NO OFICIAL" not in datos["texto"]
+    assert "RD$1,000.00" in datos["texto"]
+    papel = entorno.c.get(datos["impresion"]["url"], headers=b["headers"])
+    assert papel.status_code == 200, papel.text
+    assert papel.content.startswith(b"\x89PNG")
+    mes = entorno.c.get("/terminal/reportes/mes?anio=2026&mes=11", headers=b["headers"])
+    assert mes.status_code == 200, mes.text
+    assert mes.json()["informe"]["oficial"]["ventas"] == "1000.00"
+    assert mes.json()["informe"]["prueba"] is None
 
 
 def test_los_dos_grupos_con_movimiento_avisan_y_no_eligen():

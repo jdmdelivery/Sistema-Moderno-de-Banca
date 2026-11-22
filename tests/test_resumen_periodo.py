@@ -108,6 +108,10 @@ def test_el_rango_no_mezcla_la_prueba_con_lo_real(entorno, monkeypatch):
     hoy = _resumen(entorno, b["headers"], "2026-11-14", "2026-11-14")
     assert hoy["real"]["ventas"] == "0.00"
     assert hoy["prueba"]["ventas"] == "50.00"
+    # Solo la bolsa de desarrollo tiene movimiento: va a RESUMEN FINAL sin rótulo.
+    assert hoy["informe"]["oficial"]["ventas"] == "50.00"
+    assert hoy["informe"]["oficial"]["total"] == "50.00"
+    assert hoy["informe"]["prueba"] is None
     assert "PRUEBA — NO OFICIAL" not in hoy["texto"]
     assert "RD$50.00" in hoy["texto"]
     assert hoy["texto"].count("Ventas") == 1

@@ -5773,7 +5773,19 @@ def _fila_texto_58(concepto, monto, ancho=32) -> str:
 
 
 def _aplicar_documento_resumen(datos, desde, hasta, sucursal, real, prueba, comision):
-    """Arma el documento que comparten la pantalla y el papel."""
+    """Arma el documento que comparten la pantalla y el papel.
+
+    Origen de cada bolsa (sin mezclar ni inventar):
+    - oficial/real → tickets con es_prueba=False
+    - prueba → tickets con es_prueba=True (bolsa de MODO_DESARROLLO)
+
+    La pantalla muestra un solo RESUMEN FINAL. Si solo una bolsa tiene
+    movimiento, esa pasa a oficial (sin rótulo PRUEBA). Si las dos tienen
+    movimiento, no se elige ni se suman: se conservan ambas para no
+    presentar ceros como si fueran el total del período.
+    """
+    from .recibos_imagen import seleccion_recibo
+
     recargas = _recargas_informe()
     oficial = _resumen_final(
         real["ventas"], real["premios_pagados"], _comision_informe(comision, False), recargas,
@@ -5786,14 +5798,21 @@ def _aplicar_documento_resumen(datos, desde, hasta, sucursal, real, prueba, comi
             _comision_informe(comision, True),
             recargas,
         )
+    elegido = seleccion_recibo(oficial, prueba_final)
+    if elegido is not None:
+        # Una sola bolsa activa: pantalla e impresión usan ese bloque.
+        pantalla_oficial, pantalla_prueba = elegido, None
+    else:
+        # Dos bolsas con movimiento: no se asume cuál es el resumen del período.
+        pantalla_oficial, pantalla_prueba = oficial, prueba_final
     datos["informe"] = {
         "banca": sucursal.nombre if sucursal else "BANCA MODERNA",
         "codigo": sucursal.codigo if sucursal else "",
         "cajera": datos.get("cajero") or "",
         "terminal": datos.get("terminal") or "",
         "periodo": _periodo_informe(desde, hasta),
-        "oficial": oficial,
-        "prueba": prueba_final,
+        "oficial": pantalla_oficial,
+        "prueba": pantalla_prueba,
     }
     datos["texto"] = _texto_resumen(datos)
 
