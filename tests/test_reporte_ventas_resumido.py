@@ -45,7 +45,12 @@ def test_filtros_autorizados(entorno):
 
 def test_una_banca_y_formulas(entorno):
     b = entorno.banca(saldo=50000, codigo="VR10", nombre="BANCA FORMULA", usuario="vrf1")
-    # Comisión sucursal por defecto 10 %
+    usuarios = entorno.c.get("/usuarios", headers=entorno.admin).json()
+    uid = next(u["id"] for u in usuarios if u["usuario"] == "vrf1")
+    alta = entorno.c.post(
+        "/comisiones", json={"usuario_id": uid, "porcentaje": 10}, headers=entorno.admin,
+    )
+    assert alta.status_code in (200, 201), alta.text
     s = entorno.sorteo_id("La Primera 12")
     entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "11", "monto": 100}])
     entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "12", "monto": 50}])
@@ -54,11 +59,12 @@ def test_una_banca_y_formulas(entorno):
     assert datos["total"]["bancas"] == 1
     fila = _fila(datos, "BANCA FORMULA")
     assert Decimal(fila["loteria"]["venta"]) == Decimal("150.00")
-    assert Decimal(fila["loteria"]["comision"]) == Decimal("15.00")  # 10 %
+    assert Decimal(fila["loteria"]["comision"]) == Decimal("15.00")  # suma cajeras 10 %
     assert Decimal(fila["loteria"]["neto"]) == Decimal("135.00")  # venta - comisión
     assert Decimal(fila["loteria"]["premios"]) == Decimal("0")
     assert Decimal(fila["loteria"]["resultado"]) == Decimal("135.00")
     assert Decimal(fila["resultado_total"]) == Decimal("135.00")
+    assert Decimal(fila["total_comision_cajeras"]) == Decimal("15.00")
     assert Decimal(datos["total"]["promedio_venta"]) == Decimal("150.00")
 
 
@@ -98,6 +104,12 @@ def test_multiples_bancas_subtotales(entorno):
 
 def test_premios_superan_ventas_resultado_negativo(entorno):
     b = entorno.banca(saldo=100000, codigo="VR30", nombre="BANCA PREMIO", usuario="vrp1")
+    usuarios = entorno.c.get("/usuarios", headers=entorno.admin).json()
+    uid = next(u["id"] for u in usuarios if u["usuario"] == "vrp1")
+    alta = entorno.c.post(
+        "/comisiones", json={"usuario_id": uid, "porcentaje": 10}, headers=entorno.admin,
+    )
+    assert alta.status_code in (200, 201), alta.text
     s = entorno.sorteo_id("La Primera 12")
     t = entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "19", "monto": 10}])
     entorno.liquidar(s, 19, 3, 45)  # premio 10×60 = 600
@@ -381,6 +393,12 @@ def test_pdf_muchas_bancas_repite_encabezado_sin_cortar_filas():
 
 def test_endpoint_pdf_local_a4_sin_impresora(entorno):
     b = entorno.banca(saldo=100000, codigo="VR30", nombre="BANCA PREMIO", usuario="vrpdf")
+    usuarios = entorno.c.get("/usuarios", headers=entorno.admin).json()
+    uid = next(u["id"] for u in usuarios if u["usuario"] == "vrpdf")
+    alta = entorno.c.post(
+        "/comisiones", json={"usuario_id": uid, "porcentaje": 10}, headers=entorno.admin,
+    )
+    assert alta.status_code in (200, 201), alta.text
     s = entorno.sorteo_id("La Primera 12")
     t = entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "19", "monto": 10}])
     entorno.liquidar(s, 19, 3, 45)
@@ -403,6 +421,7 @@ def test_endpoint_pdf_local_a4_sin_impresora(entorno):
     texto = _texto(doc)[0]
     assert "BANCA PREMIO" in texto
     assert formato_monto("-591.00") in texto
+    assert formato_monto("1.00") in texto
     anon = entorno.c.get("/reportes/ventas-resumido.pdf?desde=2026-11-14&hasta=2026-11-14")
     assert anon.status_code == 401
 
@@ -559,6 +578,13 @@ def test_desglose_cajeros_dos_bancas_y_admin_de_sucursal(entorno):
     sur = entorno.banca(saldo=50000, codigo="VC02", nombre="BANCA SUR CAJ", usuario="vcs1")
     entorno.operador("vcn2", "1234", norte["sucursal"]["id"])
     h2 = entorno.login_terminal("vcn2", "1234")
+    usuarios = entorno.c.get("/usuarios", headers=entorno.admin).json()
+    for usuario in ("vcn1", "vcn2", "vcs1"):
+        uid = next(u["id"] for u in usuarios if u["usuario"] == usuario)
+        alta = entorno.c.post(
+            "/comisiones", json={"usuario_id": uid, "porcentaje": 10}, headers=entorno.admin,
+        )
+        assert alta.status_code in (200, 201), alta.text
     s = entorno.sorteo_id("La Primera 12")
     entorno.vender_ok(norte["headers"], [{"tipo": "QN", "sorteos": [s], "numeros": "07", "monto": 100}])
     entorno.vender_ok(h2, [{"tipo": "QN", "sorteos": [s], "numeros": "08", "monto": 40}])
@@ -571,10 +597,12 @@ def test_desglose_cajeros_dos_bancas_y_admin_de_sucursal(entorno):
     assert ventas_n == [Decimal("40.00"), Decimal("100.00")]
     assert sum(ventas_n, Decimal("0")) == Decimal(fila_n["loteria"]["venta"]) == Decimal("140.00")
     assert Decimal(fila_n["loteria"]["comision"]) == Decimal("14.00")
+    assert Decimal(fila_n["total_comision_cajeras"]) == Decimal("14.00")
     assert Decimal(fila_n["loteria"]["premios"]) == Decimal("0")
     assert [c["nombre"] for c in fila_s["cajeros"]] == ["Operador vcs1"]
     assert Decimal(fila_s["cajeros"][0]["venta"]) == Decimal(fila_s["loteria"]["venta"]) == Decimal("200.00")
     assert Decimal(fila_s["loteria"]["comision"]) == Decimal("20.00")
+    assert Decimal(fila_s["total_comision_cajeras"]) == Decimal("20.00")
 
     super_h = _super(entorno)
     creado = entorno.c.post("/usuarios", json={
@@ -613,10 +641,10 @@ def _vender_montos(entorno, headers, montos):
 
 
 def test_columnas_cajero_comision_perfil_y_premios_pagados(entorno):
-    """18–19/11/2026: RD$34,633.00 al 15% dan RD$5,194.95.
+    """18–19/11/2026: RD$34,633.00 al 15% dan RD$5,194.95 en la fila de la banca.
 
-    Isaury pagó RD$12,040.00 y Wanda RD$17,400.00. El subtotal de la banca
-    no suma otra vez esas filas.
+    Isaury pagó RD$12,040.00 y Wanda RD$17,400.00. La banca usa la suma de
+    esas comisiones; el desglose no vuelve a sumar venta ni premios.
     """
     js = (Path(__file__).resolve().parent.parent / "apps" / "web" / "app.js").read_text(encoding="utf-8")
     assert "Total comisión de cajeras" in js
@@ -703,10 +731,10 @@ def test_columnas_cajero_comision_perfil_y_premios_pagados(entorno):
     datos = r.json()
     fila = _fila(datos, "BANCA CASTILLO ESPERADA")
     assert Decimal(fila["loteria"]["venta"]) == Decimal("34633.00")
-    assert Decimal(fila["loteria"]["comision"]) == Decimal("3463.30")
-    assert Decimal(fila["loteria"]["neto"]) == Decimal("31169.70")
+    assert Decimal(fila["loteria"]["comision"]) == Decimal("5194.95")
+    assert Decimal(fila["loteria"]["neto"]) == Decimal("29438.05")
     assert Decimal(fila["loteria"]["premios"]) == Decimal("29440.00")
-    assert Decimal(fila["loteria"]["resultado"]) == Decimal("1729.70")
+    assert Decimal(fila["loteria"]["resultado"]) == Decimal("-1.95")
     por_nombre = {c["nombre"]: c for c in fila["cajeros"]}
     assert set(por_nombre) == {"Isaury", "Wanda"}
     isa = por_nombre["Isaury"]
@@ -722,11 +750,12 @@ def test_columnas_cajero_comision_perfil_y_premios_pagados(entorno):
     assert Decimal(wan["premios"]) == Decimal("17400.00")
     assert Decimal(wan["resultado"]) == Decimal("-4961.95")
     assert Decimal(fila["total_comision_cajeras"]) == Decimal("5194.95")
+    assert Decimal(fila["loteria"]["comision"]) == Decimal(fila["total_comision_cajeras"])
     assert sum((Decimal(c["premios"]) for c in fila["cajeros"]), Decimal("0")) == Decimal("29440.00")
     assert Decimal(datos["total"]["loteria"]["venta"]) == Decimal("34633.00")
     assert Decimal(datos["total"]["loteria"]["comision"]) == Decimal(fila["loteria"]["comision"])
     assert Decimal(datos["total"]["loteria"]["premios"]) == Decimal(fila["loteria"]["premios"])
-    assert Decimal(datos["total"]["loteria"]["comision"]) != Decimal("5194.95")
+    assert Decimal(datos["total"]["loteria"]["resultado"]) == Decimal("-1.95")
 
     pdf = entorno.c.get(
         "/reportes/ventas-resumido.pdf?desde=2026-11-18&hasta=2026-11-19"
@@ -843,19 +872,18 @@ def test_pago_fuera_del_rango_de_venta_no_mueve_premios_del_resumido(entorno, mo
 
 
 def test_pdf_con_comision_de_cajeras_de_la_captura_no_revienta():
-    """132,697 − 71,630 − 19,904.55 cabe en el PDF. La fila de la banca sigue en 61,067."""
+    """132,697 − 19,904.55 − 71,630 = 41,162.45 en la fila de la banca y en el PDF."""
     ventas, premios, comision = 13269700, 7163000, 1990455
-    assert ventas - premios == 6106700
-    assert ventas - premios - comision == 4116245
+    assert ventas - comision - premios == 4116245
     banca = {
         "codigo": "1301",
         "banca": "BANCA CASTILLO",
         "loteria": {
-            "venta": "132697.00", "comision": "0.00", "neto": "132697.00",
-            "premios": "71630.00", "resultado": "61067.00",
+            "venta": "132697.00", "comision": "19904.55", "neto": "112792.45",
+            "premios": "71630.00", "resultado": "41162.45",
         },
         "recargas": {"venta": "0.00", "comision": "0.00", "neto": "0.00"},
-        "resultado_total": "61067.00",
+        "resultado_total": "41162.45",
         "cajeros": [{
             "nombre": "Wanda", "venta": "132697.00", "comision": "19904.55",
             "neto": "112792.45", "premios": "71630.00", "resultado": "41162.45",
@@ -864,7 +892,7 @@ def test_pdf_con_comision_de_cajeras_de_la_captura_no_revienta():
     }
     sub = {
         "loteria": banca["loteria"], "recargas": banca["recargas"],
-        "resultado_total": "61067.00", "bancas": 1,
+        "resultado_total": "41162.45", "bancas": 1,
     }
     pdf = construir({
         "empresa": "BANCA MODERNA",
@@ -878,8 +906,74 @@ def test_pdf_con_comision_de_cajeras_de_la_captura_no_revienta():
     assert pdf.startswith(b"%PDF")
     texto = _texto(_pdf(pdf))[0]
     assert formato_monto("19904.55") in texto
-    assert formato_monto("61067.00") in texto
+    assert formato_monto("41162.45") in texto
     assert formato_monto("132697.00") in texto
+
+
+def test_captura_castillo_19_21_comision_en_fila_subtotal_y_pdf():
+    """Captura Castillo 19–21/11/2026: la fila usa la suma de cajeras, no RD$0.
+
+    Neto = Venta − Comisión; Resultado = Neto − Premios; Resultado Total = Resultado
+    (+ neto de recargas). Subtotal y total conservan el signo.
+    """
+    venta = Decimal("287795.00")
+    comision = Decimal("43162.80")
+    neto = venta - comision
+    premios = Decimal("243160.00")
+    resultado = neto - premios
+    assert neto == Decimal("244632.20")
+    assert resultado == Decimal("1472.20")
+    banca = {
+        "codigo": "1301",
+        "banca": "BANCA CASTILLO",
+        "loteria": {
+            "venta": str(venta), "comision": str(comision), "neto": str(neto),
+            "premios": str(premios), "resultado": str(resultado),
+        },
+        "recargas": {"venta": "0.00", "comision": "0.00", "neto": "0.00"},
+        "resultado_total": str(resultado),
+        "cajeros": [
+            {
+                "nombre": "Cajera A", "venta": "150000.00", "comision": "22500.00",
+                "neto": "127500.00", "premios": "120000.00", "resultado": "7500.00",
+            },
+            {
+                "nombre": "Cajera B", "venta": "137795.00", "comision": "20662.80",
+                "neto": "117132.20", "premios": "123160.00", "resultado": "-6027.80",
+            },
+        ],
+        "total_comision_cajeras": str(comision),
+    }
+    assert Decimal(banca["loteria"]["comision"]) == Decimal(banca["total_comision_cajeras"])
+    assert sum((Decimal(c["comision"]) for c in banca["cajeros"]), Decimal("0")) == comision
+    sub = {
+        "loteria": banca["loteria"], "recargas": banca["recargas"],
+        "resultado_total": str(resultado), "bancas": 1,
+    }
+    payload = {
+        "empresa": "BANCA MODERNA",
+        "desde": "2026-11-19",
+        "hasta": "2026-11-21",
+        "impreso": "21/11/2026 08:00 PM",
+        "desglose_cajeros": False,
+        "grupos": [{"grupo_nombre": "GRUPO", "bancas": [banca], "subtotal": sub}],
+        "total": {**sub, "bancas": 1, "promedio_venta": str(venta)},
+    }
+    for con_desglose in (False, True):
+        payload["desglose_cajeros"] = con_desglose
+        pdf = construir(payload)
+        assert pdf.startswith(b"%PDF")
+        texto = _texto(_pdf(pdf))[0]
+        assert formato_monto(str(venta)) in texto
+        assert formato_monto(str(comision)) in texto
+        assert formato_monto(str(neto)) in texto
+        assert formato_monto(str(premios)) in texto
+        assert formato_monto(str(resultado)) in texto
+        if con_desglose:
+            assert "Total comisión de cajeras" in texto
+            assert "Cajero: Cajera A" in texto
+        else:
+            assert "Total comisión de cajeras" not in texto
 
 
 def test_el_boton_resultado_no_cambia_la_fila_ni_mi_caja():
@@ -966,8 +1060,11 @@ def test_resultado_resta_la_comision_ganada_una_vez_antes_y_despues_de_pagarla(e
     com = detalle["comision"]
     resumen = detalle["resumen"]
     assert Decimal(banca["loteria"]["venta"]) == Decimal("132697.00")
+    assert Decimal(banca["loteria"]["comision"]) == Decimal("19904.55")
+    assert Decimal(banca["loteria"]["neto"]) == Decimal("112792.45")
     assert Decimal(banca["loteria"]["premios"]) == Decimal("71630.00")
-    assert Decimal(banca["loteria"]["resultado"]) == Decimal("61067.00")
+    assert Decimal(banca["loteria"]["resultado"]) == Decimal("41162.45")
+    assert Decimal(banca["resultado_total"]) == Decimal("41162.45")
     assert Decimal(banca["total_comision_cajeras"]) == Decimal("19904.55")
     assert _resultado_ui(
         banca["loteria"]["venta"], banca["loteria"]["premios"], banca["total_comision_cajeras"],
@@ -994,8 +1091,11 @@ def test_resultado_resta_la_comision_ganada_una_vez_antes_y_despues_de_pagarla(e
     com2 = detalle2["comision"]
     resumen2 = detalle2["resumen"]
     assert Decimal(banca2["loteria"]["venta"]) == Decimal("132697.00")
+    assert Decimal(banca2["loteria"]["comision"]) == Decimal("19904.55")
+    assert Decimal(banca2["loteria"]["neto"]) == Decimal("112792.45")
     assert Decimal(banca2["loteria"]["premios"]) == Decimal("71630.00")
-    assert Decimal(banca2["loteria"]["resultado"]) == Decimal("61067.00")
+    assert Decimal(banca2["loteria"]["resultado"]) == Decimal("41162.45")
+    assert Decimal(banca2["resultado_total"]) == Decimal("41162.45")
     assert Decimal(banca2["total_comision_cajeras"]) == Decimal("19904.55")
     assert _resultado_ui(
         banca2["loteria"]["venta"], banca2["loteria"]["premios"], banca2["total_comision_cajeras"],

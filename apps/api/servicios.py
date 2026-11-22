@@ -7017,7 +7017,7 @@ def _premios_ganadores_resumido(db, desde, hasta, prueba, sucursal_id=None, usua
 
 
 def _desglose_cajeros_resumido(db, sucursal, desde, hasta, prueba):
-    """Cajeros bajo una banca. No entra en el subtotal de la banca.
+    """Cajeros bajo una banca. Su comisión suma a la fila de la banca.
 
     Venta y comisión: tickets no anulados del rango, con el % del perfil
     vigente al momento de cada venta. Premios: importe completo de cada
@@ -7103,29 +7103,30 @@ def _desglose_cajeros_resumido(db, sucursal, desde, hasta, prueba):
 def _fila_banca_resumido(db, sucursal, desde, hasta, prueba):
     """Una fila contable por banca. Fórmulas del reporte Ventas Resumido:
 
-    Neto = Venta − Comisión (comisión = % de la sucursal × venta)
+    Comisión = suma de comisiones de sus cajeras en el rango (también sin desglose)
+    Neto = Venta − Comisión
     Premios = importe completo de cada premio ganador válido del rango (una vez)
     Resultado lotería = Neto − Premios
     Recargas: no hay producto; columnas en 0 / omitidas en UI si incluye_recargas=false
-    Resultado total = resultado lotería (+ recargas si existieran)
+    Resultado total = resultado lotería + neto de recargas
     """
     bloque = _bloque_periodo(db, desde, hasta, prueba, sucursal_id=sucursal.id)
     venta = D(bloque["ventas"])
     pct = D(sucursal.comision_porcentaje)
-    comision = D(venta * pct / D(100))
     premios = _premios_ganadores_resumido(
         db, desde, hasta, prueba, sucursal_id=sucursal.id,
     )
+    gid, gnom = _grupo_de_sucursal(sucursal)
+    cajeros, total_comision_cajeras = _desglose_cajeros_resumido(
+        db, sucursal, desde, hasta, prueba,
+    )
+    comision = D(total_comision_cajeras)
     neto = D(venta - comision)
     resultado_lot = D(neto - premios)
     venta_rec = D(0)
     comision_rec = D(0)
     neto_rec = D(0)
     resultado_total = D(resultado_lot + neto_rec)
-    gid, gnom = _grupo_de_sucursal(sucursal)
-    cajeros, total_comision_cajeras = _desglose_cajeros_resumido(
-        db, sucursal, desde, hasta, prueba,
-    )
     return {
         "sucursal_id": sucursal.id,
         "codigo": sucursal.codigo,
@@ -7162,7 +7163,7 @@ def reporte_ventas_resumido(
     - Ventas: tickets no anulados por fecha de venta.
     - Premios: importe completo de cada premio ganador válido del rango (una vez),
       pagado, parcial o pendiente; Resultado = Neto − Premios.
-    - Comisión: % vigente de la sucursal × venta (igual que reporte_resumen final).
+    - Comisión de la banca: suma de comisiones de sus cajeras en el rango (una vez).
     - Anulados no suman venta.
     """
     from . import permisos as perm
