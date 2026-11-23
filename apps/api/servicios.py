@@ -5607,10 +5607,24 @@ def resumen_dia(db, desde, hasta, operador, sucursal, terminal, alcance="cajero"
 
 def _premios_pagados_sucursal(db, sucursal_id, desde, hasta, prueba):
     """Premios cobrados en la sucursal por fecha de pago (no por fecha de venta)."""
+    total, _anteriores = _desglose_premios_pagados(
+        db, desde, hasta, prueba, sucursal_id=sucursal_id, usuario_id=None,
+    )
+    return total
+
+
+def _desglose_premios_pagados(db, desde, hasta, prueba, sucursal_id=None, usuario_id=None):
+    """Pagos del rango por fecha de cobro. Cada pago cuenta una sola vez.
+
+    Devuelve (total_pagado, anteriores_pagados) donde «anteriores» son pagos
+    cuyo sorteo/ticket es anterior a ``desde``. ``total_pagado`` conserva el
+    significado histórico de premios_pagados.
+    """
     inicio = datetime.combine(desde, time.min)
     fin = datetime.combine(hasta, time.min) + timedelta(days=1)
     total = D(0)
-    jugadas = (
+    anteriores = D(0)
+    q_jugadas = (
         db.query(Jugada)
         .join(Ticket, Jugada.ticket_id == Ticket.id)
         .filter(
@@ -5619,35 +5633,49 @@ def _premios_pagados_sucursal(db, sucursal_id, desde, hasta, prueba):
             Jugada.pagado_en.isnot(None),
             Jugada.pagado_en >= inicio,
             Jugada.pagado_en < fin,
-            Ticket.pagado_en_sucursal_id == sucursal_id,
         )
-        .all()
     )
+    if usuario_id is not None:
+        q_jugadas = q_jugadas.filter(Jugada.pagado_por_usuario_id == usuario_id)
+    else:
+        q_jugadas = q_jugadas.filter(Ticket.pagado_en_sucursal_id == sucursal_id)
     vistos = set()
-    for jugada in jugadas:
+    for jugada in q_jugadas.all():
         vistos.add(jugada.id)
-        total += D(jugada.premio or 0)
-    tickets = (
-        db.query(Ticket)
-        .filter(
-            Ticket.es_prueba.is_(prueba),
-            Ticket.estado == "pagado",
-            Ticket.pagado_en_sucursal_id == sucursal_id,
-            Ticket.pagado_en.isnot(None),
-            Ticket.pagado_en >= inicio,
-            Ticket.pagado_en < fin,
-        )
-        .all()
+        monto = D(jugada.premio or 0)
+        total += monto
+        ticket = jugada.ticket
+        fecha_sorteo = jugada.fecha or (ticket.fecha if ticket else None)
+        if fecha_sorteo is not None and fecha_sorteo < desde:
+            anteriores += monto
+    q_tickets = db.query(Ticket).filter(
+        Ticket.es_prueba.is_(prueba),
+        Ticket.estado == "pagado",
+        Ticket.pagado_en.isnot(None),
+        Ticket.pagado_en >= inicio,
+        Ticket.pagado_en < fin,
     )
-    for ticket in tickets:
+    if usuario_id is not None:
+        q_tickets = q_tickets.filter(Ticket.pagado_por_usuario_id == usuario_id)
+    else:
+        q_tickets = q_tickets.filter(Ticket.pagado_en_sucursal_id == sucursal_id)
+    for ticket in q_tickets.all():
         if any(j.id in vistos for j in ticket.jugadas if j.pagada):
             continue
-        total += D(ticket.premio_total or 0)
-    return total
+        monto = D(ticket.premio_total or 0)
+        total += monto
+        if ticket.fecha is not None and ticket.fecha < desde:
+            anteriores += monto
+    return total, anteriores
 
 
 def _bloque_resumen(db, desde, hasta, sucursal_id, usuario_id, prueba):
-    """Ventas por fecha de venta; premios por fecha de pago efectivo."""
+    """Ventas por fecha de venta; premios pagados por fecha de cobro.
+
+    Además separa premios de sorteos del período (fecha de sorteo/venta del
+    ticket, incl. pendientes) y premios de sorteos anteriores pagados en el
+    rango, para Resultado de ventas vs Efectivo de caja.
+    """
     q = db.query(Ticket).filter(
         Ticket.fecha >= desde,
         Ticket.fecha <= hasta,
@@ -5668,9 +5696,16 @@ def _bloque_resumen(db, desde, hasta, sucursal_id, usuario_id, prueba):
     ]
     ventas = sum((D(t.total) for t in vigentes), D(0))
     if usuario_id is not None:
-        premios_pagados = _premios_pagados_por_cajero(db, usuario_id, desde, hasta, prueba)
+        premios_pagados, premios_anteriores = _desglose_premios_pagados(
+            db, desde, hasta, prueba, usuario_id=usuario_id,
+        )
     else:
-        premios_pagados = _premios_pagados_sucursal(db, sucursal_id, desde, hasta, prueba)
+        premios_pagados, premios_anteriores = _desglose_premios_pagados(
+            db, desde, hasta, prueba, sucursal_id=sucursal_id,
+        )
+    premios_sorteos = _premios_ganadores_resumido(
+        db, desde, hasta, prueba, sucursal_id=sucursal_id, usuario_id=usuario_id,
+    )
     monto_pendiente = sum((_importe_sin_cobrar(t) for t in pendientes), D(0))
     pagado_otra = sum((D(t.premio_total) for t in otra), D(0))
     neto = D(ventas) - D(premios_pagados)
@@ -5678,6 +5713,8 @@ def _bloque_resumen(db, desde, hasta, sucursal_id, usuario_id, prueba):
         "ventas": str(D(ventas)),
         "anulados_monto": str(D(sum((D(t.total) for t in nulos), D(0)))),
         "premios_pagados": str(D(premios_pagados)),
+        "premios_sorteos_periodo": str(D(premios_sorteos)),
+        "premios_anteriores_pagados": str(D(premios_anteriores)),
         "premios_pendientes": str(D(monto_pendiente)),
         "pagado_en_otra": str(D(pagado_otra)),
         "total_pagado": str(D(premios_pagados)),
@@ -5709,29 +5746,55 @@ def _recargas_informe():
     return D(0)
 
 
-def _resumen_final(ventas, premios, comision, recargas):
-    """Balance del informe = Ventas − Premios pagados − Comisión.
+def _etiqueta_premios_anteriores(desde, hasta) -> str:
+    if desde == hasta:
+        return "Premios de días anteriores pagados hoy"
+    return "Premios de sorteos anteriores pagados en el período"
 
-    No reemplaza el quedó de la caja (ventas − premios). La comisión es la
-    ya registrada para el período, no una tasa nueva.
+
+def _resumen_final(
+    ventas,
+    premios_pagados,
+    comision,
+    recargas,
+    premios_sorteos_periodo=None,
+    premios_anteriores_pagados=None,
+    etiqueta_anteriores="Premios de días anteriores pagados hoy",
+):
+    """Arma el bloque del informe de caja de la terminal.
+
+    - premios_pagados: por fecha de cobro (API; significado histórico).
+    - Premios en pantalla/papel: premios de sorteos del período (afectan Balance).
+    - Un pago de sorteo anterior solo aparece como referencia; no resta Balance/Total.
+    - Balance = Total = Ventas − comisión − premios de sorteos del período (+ recargas en Total).
     """
     ventas = D(ventas)
-    premios = D(premios)
+    premios = D(premios_pagados)
     comision = D(comision)
     recargas = D(recargas)
-    balance = D(ventas - premios - comision)
+    premios_sorteos = D(premios_sorteos_periodo if premios_sorteos_periodo is not None else 0)
+    premios_anteriores = D(
+        premios_anteriores_pagados if premios_anteriores_pagados is not None else 0
+    )
+    balance = D(ventas - comision - premios_sorteos)
     total = D(balance + recargas)
     numeros = {
         "ventas": str(ventas),
         "premios_pagados": str(premios),
+        "premios_sorteos_periodo": str(premios_sorteos),
+        "premios_anteriores_pagados": str(premios_anteriores),
         "comision": str(comision),
+        "resultado_ventas": str(balance),
         "balance": str(balance),
         "recargas": str(recargas),
         "total": str(total),
     }
+    # Los pagos de sorteos anteriores se conservan en premios_anteriores_pagados
+    # (API) pero no se muestran en pantalla ni en el recibo.
+    _ = etiqueta_anteriores
     orden = (
         ("Ventas", "ventas", False),
-        ("Premios", "premios_pagados", False),
+        ("Premios", "premios_sorteos_periodo", False),
         ("Comisión", "comision", False),
         ("Balance", "balance", False),
         ("Recargas", "recargas", False),
@@ -5787,8 +5850,15 @@ def _aplicar_documento_resumen(datos, desde, hasta, sucursal, real, prueba, comi
     from .recibos_imagen import seleccion_recibo
 
     recargas = _recargas_informe()
+    etiqueta_ant = _etiqueta_premios_anteriores(desde, hasta)
     oficial = _resumen_final(
-        real["ventas"], real["premios_pagados"], _comision_informe(comision, False), recargas,
+        real["ventas"],
+        real["premios_pagados"],
+        _comision_informe(comision, False),
+        recargas,
+        premios_sorteos_periodo=real.get("premios_sorteos_periodo"),
+        premios_anteriores_pagados=real.get("premios_anteriores_pagados"),
+        etiqueta_anteriores=etiqueta_ant,
     )
     prueba_final = None
     if prueba is not None:
@@ -5797,6 +5867,9 @@ def _aplicar_documento_resumen(datos, desde, hasta, sucursal, real, prueba, comi
             prueba["premios_pagados"],
             _comision_informe(comision, True),
             recargas,
+            premios_sorteos_periodo=prueba.get("premios_sorteos_periodo"),
+            premios_anteriores_pagados=prueba.get("premios_anteriores_pagados"),
+            etiqueta_anteriores=etiqueta_ant,
         )
     elegido = seleccion_recibo(oficial, prueba_final)
     if elegido is not None:
@@ -6474,43 +6547,9 @@ def _estado_usuario_panel(u):
 
 def _premios_pagados_por_cajero(db, usuario_id, desde, hasta, prueba):
     """Premios cobrados por este cajero (no por el vendedor del ticket)."""
-    inicio = datetime.combine(desde, time.min)
-    fin = datetime.combine(hasta, time.min) + timedelta(days=1)
-    total = D(0)
-    jugadas = (
-        db.query(Jugada)
-        .join(Ticket, Jugada.ticket_id == Ticket.id)
-        .filter(
-            Ticket.es_prueba.is_(prueba),
-            Jugada.pagada.is_(True),
-            Jugada.pagado_por_usuario_id == usuario_id,
-            Jugada.pagado_en.isnot(None),
-            Jugada.pagado_en >= inicio,
-            Jugada.pagado_en < fin,
-        )
-        .all()
+    total, _anteriores = _desglose_premios_pagados(
+        db, desde, hasta, prueba, usuario_id=usuario_id,
     )
-    vistos = set()
-    for jugada in jugadas:
-        vistos.add(jugada.id)
-        total += D(jugada.premio or 0)
-    # Tickets pagados enteros sin marca por jugada (histórico).
-    tickets = (
-        db.query(Ticket)
-        .filter(
-            Ticket.es_prueba.is_(prueba),
-            Ticket.estado == "pagado",
-            Ticket.pagado_por_usuario_id == usuario_id,
-            Ticket.pagado_en.isnot(None),
-            Ticket.pagado_en >= inicio,
-            Ticket.pagado_en < fin,
-        )
-        .all()
-    )
-    for ticket in tickets:
-        if any(j.id in vistos for j in ticket.jugadas if j.pagada):
-            continue
-        total += D(ticket.premio_total or 0)
     return total
 
 

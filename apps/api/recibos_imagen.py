@@ -231,7 +231,18 @@ def _importe_de_bloque(bloque: dict | None) -> Decimal:
     if not bloque:
         return Decimal("0")
     total = Decimal("0")
-    for clave in ("ventas", "premios_pagados", "comision", "balance", "recargas", "total"):
+    for clave in (
+        "ventas",
+        "premios_pagados",
+        "premios_sorteos_periodo",
+        "premios_anteriores_pagados",
+        "comision",
+        "resultado_ventas",
+        "efectivo_caja",
+        "balance",
+        "recargas",
+        "total",
+    ):
         if clave not in bloque:
             continue
         try:

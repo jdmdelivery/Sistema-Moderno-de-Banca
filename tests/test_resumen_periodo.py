@@ -44,7 +44,9 @@ def test_hoy_ayer_y_rango_imprimen_el_periodo_sin_alterar_saldos(entorno, monkey
     assert "Impreso:" in hoy["texto"]
     assert "Sucursal:" not in hoy["texto"]
     assert hoy["informe"]["oficial"]["ventas"] == "10.00"
+    assert hoy["informe"]["oficial"]["resultado_ventas"] == "10.00"
     assert hoy["informe"]["oficial"]["balance"] == "10.00"
+    assert hoy["informe"]["oficial"]["total"] == "10.00"
     assert hoy["informe"]["oficial"]["total"] == "10.00"
     assert "TICKET" not in hoy["texto"]
     assert entorno.saldo(b["sucursal"]["id"]) == antes
@@ -54,7 +56,9 @@ def test_hoy_ayer_y_rango_imprimen_el_periodo_sin_alterar_saldos(entorno, monkey
     assert ayer["real"]["quedo"] == "0.00"
     assert "Período: 13/11/2026" in ayer["texto"]
     assert ayer["informe"]["oficial"]["ventas"] == "0.00"
+    assert ayer["informe"]["oficial"]["resultado_ventas"] == "0.00"
     assert ayer["informe"]["oficial"]["balance"] == "0.00"
+    assert ayer["informe"]["oficial"]["total"] == "0.00"
     assert ayer["informe"]["oficial"]["total"] == "0.00"
 
     rango = _resumen(entorno, b["headers"], "2026-11-13", "2026-11-14")
@@ -153,7 +157,10 @@ def test_mes_completo_incluye_todos_los_dias_y_totales(entorno, monkeypatch):
     assert datos["informe"]["periodo"] == "01/11/2026 al 30/11/2026"
     assert datos["informe"]["oficial"]["ventas"] == "15.00"
     assert datos["informe"]["oficial"]["premios_pagados"] == "300.00"
+    assert datos["informe"]["oficial"]["premios_anteriores_pagados"] == "0.00"
+    assert datos["informe"]["oficial"]["premios_sorteos_periodo"] == "300.00"
     assert datos["informe"]["oficial"]["comision"] == "0.00"
+    assert datos["informe"]["oficial"]["resultado_ventas"] == "-285.00"
     assert datos["informe"]["oficial"]["balance"] == "-285.00"
     assert datos["informe"]["oficial"]["recargas"] == "0.00"
     assert datos["informe"]["oficial"]["total"] == "-285.00"

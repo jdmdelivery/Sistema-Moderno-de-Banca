@@ -55,11 +55,14 @@ def test_resumen_de_la_cajera_no_mueve_la_caja_ni_mezcla_pruebas(entorno, monkey
     assert datos["informe"]["prueba"] is None
     assert "PRUEBA — NO OFICIAL" not in datos["texto"]
     assert datos["informe"]["oficial"]["ventas"] == "20.00"
+    # Cobrado en otra sucursal: no entra en premios_pagados de la cajera, pero el
+    # premio del sorteo de su venta sí afecta Balance (fecha de sorteo).
     assert datos["informe"]["oficial"]["premios_pagados"] == "0.00"
+    assert datos["informe"]["oficial"]["premios_sorteos_periodo"] == "600.00"
     assert datos["informe"]["oficial"]["comision"] == "0.00"
-    assert datos["informe"]["oficial"]["balance"] == "20.00"
-    assert datos["informe"]["oficial"]["total"] == "20.00"
-    assert "RD$20.00" in datos["texto"]
+    assert datos["informe"]["oficial"]["balance"] == "-580.00"
+    assert datos["informe"]["oficial"]["total"] == "-580.00"
+    assert "-RD$580.00" in datos["texto"]
     assert "PAGADO EN OTRA" not in datos["texto"]
     assert "TICKET" not in datos["texto"]
     assert entorno.saldo(b1["sucursal"]["id"]) == antes

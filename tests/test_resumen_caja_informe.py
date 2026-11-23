@@ -1,6 +1,7 @@
 """Informe de Resumen de caja: mismos montos en pantalla y papel, sin tocar la caja."""
 import io
 import os
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -89,7 +90,12 @@ def test_dia_vacio_balance_negativo_mes_y_papel(entorno):
     datos = dia.json()
     oficial = datos["informe"]["oficial"]
     assert [fila["concepto"] for fila in oficial["lineas"]] == [
-        "Ventas", "Premios", "Comisión", "Balance", "Recargas", "Total",
+        "Ventas",
+        "Premios",
+        "Comisión",
+        "Balance",
+        "Recargas",
+        "Total",
     ]
     assert [fila["monto"] for fila in oficial["lineas"]] == [
         "RD$13,875.00",
@@ -100,8 +106,11 @@ def test_dia_vacio_balance_negativo_mes_y_papel(entorno):
         "-RD$2,376.25",
     ]
     assert oficial["lineas"][-1]["destacar"] is True
+    assert oficial["resultado_ventas"] == "-2376.25"
     assert oficial["balance"] == "-2376.25"
     assert oficial["total"] == oficial["balance"]
+    assert oficial["premios_sorteos_periodo"] == "14170.00"
+    assert oficial["premios_anteriores_pagados"] == "0.00"
     # La caja operativa sigue siendo ventas − premios, sin restar la comisión.
     assert datos["real"]["neto"] == "-295.00"
     assert datos["real"]["quedo"] == "-295.00"
@@ -128,6 +137,7 @@ def test_dia_vacio_balance_negativo_mes_y_papel(entorno):
     assert mes_inf["ventas"] == "13875.00"
     assert mes_inf["premios_pagados"] == "14170.00"
     assert mes_inf["comision"] == "2081.25"
+    assert mes_inf["resultado_ventas"] == "-2376.25"
     assert mes_inf["balance"] == "-2376.25"
     assert mes_inf["total"] == "-2376.25"
     assert mes.json()["totales"]["quedo"] == "-295.00"
@@ -172,9 +182,20 @@ def test_el_papel_no_corta_nombre_largo_ni_monto_grande():
 
 
 def _lineas(montos):
-    conceptos = ("Ventas", "Premios", "Comisión", "Balance", "Recargas", "Total")
+    conceptos = (
+        "Ventas",
+        "Premios",
+        "Comisión",
+        "Balance",
+        "Recargas",
+        "Total",
+    )
     return [
-        {"concepto": concepto, "monto": monto, "destacar": concepto == "Total"}
+        {
+            "concepto": concepto,
+            "monto": monto,
+            "destacar": concepto == "Total",
+        }
         for concepto, monto in zip(conceptos, montos)
     ]
 
@@ -186,11 +207,15 @@ def test_el_papel_imprime_el_bloque_de_abajo_sin_ceros_ni_rotulo():
 
     oficial = {
         "ventas": "0.00", "premios_pagados": "0.00", "comision": "0.00",
+        "resultado_ventas": "0.00",
         "balance": "0.00", "recargas": "0.00", "total": "0.00",
-        "lineas": _lineas(["RD$0.00", "RD$0.00", "RD$0.00", "RD$0.00", "RD$0.00", "RD$0.00"]),
+        "lineas": _lineas([
+            "RD$0.00", "RD$0.00", "RD$0.00", "RD$0.00", "RD$0.00", "RD$0.00",
+        ]),
     }
     prueba = {
         "ventas": "28465.00", "premios_pagados": "17290.00", "comision": "4269.75",
+        "resultado_ventas": "6905.25",
         "balance": "6905.25", "recargas": "0.00", "total": "6905.25",
         "lineas": _lineas([
             "RD$28,465.00", "RD$17,290.00", "RD$4,269.75",
@@ -220,6 +245,7 @@ def test_el_papel_imprime_el_bloque_de_abajo_sin_ceros_ni_rotulo():
     assert "Premios pagados" in texto
     assert texto.count("Ventas") == 1
     assert texto.count("Total") == 1
+    assert "Balance" in texto
     assert "Cajera: Isaury" in texto
     assert "Período: 01/11/2026 al 30/11/2026" in texto
     assert "Impreso: 21-11-2026 12:23 AM" in texto
@@ -264,11 +290,17 @@ def test_modo_desarrollo_pone_la_bolsa_activa_en_resumen_final(entorno, monkeypa
     assert oficial["ventas"] == "1000.00"
     assert oficial["comision"] == "150.00"
     assert oficial["premios_pagados"] == "0.00"
+    assert oficial["resultado_ventas"] == "850.00"
     assert oficial["balance"] == "850.00"
     assert oficial["recargas"] == "0.00"
     assert oficial["total"] == "850.00"
     assert [fila["concepto"] for fila in oficial["lineas"]] == [
-        "Ventas", "Premios", "Comisión", "Balance", "Recargas", "Total",
+        "Ventas",
+        "Premios",
+        "Comisión",
+        "Balance",
+        "Recargas",
+        "Total",
     ]
     assert datos["informe"]["prueba"] is None
     assert "PRUEBA — NO OFICIAL" not in datos["texto"]
@@ -286,8 +318,18 @@ def test_los_dos_grupos_con_movimiento_avisan_y_no_eligen():
     from apps.api.recibos_imagen import seleccion_recibo
     from apps.api.servicios import _texto_resumen
 
-    oficial = {"lineas": _lineas(["RD$10.00", "RD$0.00", "RD$0.00", "RD$10.00", "RD$0.00", "RD$10.00"]), "ventas": "10.00"}
-    prueba = {"lineas": _lineas(["RD$50.00", "RD$0.00", "RD$0.00", "RD$50.00", "RD$0.00", "RD$50.00"]), "ventas": "50.00"}
+    oficial = {
+        "lineas": _lineas([
+            "RD$10.00", "RD$0.00", "RD$0.00", "RD$10.00", "RD$0.00", "RD$10.00",
+        ]),
+        "ventas": "10.00",
+    }
+    prueba = {
+        "lineas": _lineas([
+            "RD$50.00", "RD$0.00", "RD$0.00", "RD$50.00", "RD$0.00", "RD$50.00",
+        ]),
+        "ventas": "50.00",
+    }
     assert seleccion_recibo(oficial, prueba) is None
     datos = {
         "impreso": "14-11-2026 10:00 AM",
@@ -345,6 +387,7 @@ def test_mil_noventa_y_tres_al_quince_porciento_sale_una_sola_vez(entorno):
     assert oficial["premios_pagados"] == "0.00"
     assert oficial["comision"] == "163.95"
     assert oficial["recargas"] == "0.00"
+    assert oficial["resultado_ventas"] == "929.05"
     assert oficial["balance"] == "929.05"
     assert oficial["total"] == "929.05"
     assert datos["real"]["neto"] == "1093.00"
@@ -435,6 +478,7 @@ def test_dos_cajeras_fecha_y_mes_usan_la_misma_plantilla(entorno):
             assert "Premios pagados" in texto
             assert texto.count("Ventas") == 1
             assert texto.count("Total") == 1
+            assert "Balance" in texto
             assert f"Código: {codigo}" in texto
             assert f"Cajera: {cajera}" in texto
             assert f"Terminal: {inf['terminal']}" in texto
@@ -446,13 +490,254 @@ def test_dos_cajeras_fecha_y_mes_usan_la_misma_plantilla(entorno):
             assert oficial["ventas"] == ventas
             assert oficial["premios_pagados"] == "0.00"
             assert oficial["comision"] == comision
+            assert oficial["resultado_ventas"] == total
             assert oficial["balance"] == total
             assert oficial["recargas"] == "0.00"
             assert oficial["total"] == total
             assert oficial["lineas"][1]["concepto"] == "Premios"
+            assert oficial["lineas"][2]["concepto"] == "Comisión"
+            assert oficial["lineas"][-1]["concepto"] == "Total"
+            assert not any(
+                "anteriores" in str(fila.get("concepto") or "").lower()
+                for fila in oficial["lineas"]
+            )
             assert inf["prueba"] is None
             if carpeta:
                 (carpeta / f"recibo-{cajera.split()[-1]}-{marca}.png").write_bytes(png)
+
+
+def _fijar_premio_pagado(ticket_id, premio, fecha_sorteo=None, pagado_en=None):
+    db = nueva_sesion()
+    ticket = db.get(Ticket, ticket_id)
+    assert ticket is not None
+    if fecha_sorteo is not None:
+        ticket.fecha = fecha_sorteo
+    ticket.premio_total = Decimal(str(premio))
+    pagadas = [j for j in ticket.jugadas if j.pagada]
+    assert pagadas
+    for jugada in pagadas:
+        jugada.premio = Decimal(str(premio))
+        if fecha_sorteo is not None:
+            jugada.fecha = fecha_sorteo
+        if pagado_en is not None:
+            jugada.pagado_en = pagado_en
+    if pagado_en is not None:
+        ticket.pagado_en = pagado_en
+    db.commit()
+    db.close()
+
+
+def test_isaury_premio_dia_anterior_no_resta_balance_ni_total(entorno):
+    """Ventas 2985, comisión 447.75, premio 1870 del día anterior → Balance/Total 2537.25."""
+    b = entorno.banca(
+        saldo=200000,
+        codigo="C23",
+        nombre="BANCA CASTILLO",
+        usuario="isaury23",
+        clave="1234",
+    )
+    uid = _usuario(entorno, "isaury23")
+    alta = entorno.c.post(
+        "/comisiones", json={"usuario_id": uid, "porcentaje": 15}, headers=entorno.admin,
+    )
+    assert alta.status_code == 201, alta.text
+    sorteo = entorno.sorteo_id("La Primera 12")
+    entorno.vender_ok(
+        b["headers"],
+        [{"tipo": "QN", "sorteos": [sorteo], "numeros": "11", "monto": 2985}],
+    )
+    ganador = entorno.vender_ok(
+        b["headers"],
+        [{"tipo": "QN", "sorteos": [sorteo], "numeros": "19", "monto": 10}],
+    )
+    entorno.liquidar(sorteo, 19, 3, 45)
+    pago = entorno.c.post(
+        "/terminal/tickets/pagar",
+        json={"id": ganador["id"], "serial": ganador["serial"]},
+        headers=b["headers"],
+    )
+    assert pago.status_code == 200, pago.text
+    _fijar_premio_pagado(
+        ganador["id"],
+        "1870.00",
+        fecha_sorteo=date(2026, 11, 13),
+        pagado_en=datetime(2026, 11, 14, 12, 0, 0),
+    )
+
+    dia = entorno.c.get(
+        "/terminal/reportes/dia?desde=2026-11-14&hasta=2026-11-14",
+        headers=b["headers"],
+    )
+    assert dia.status_code == 200, dia.text
+    datos = dia.json()
+    oficial = datos["informe"]["oficial"]
+    assert oficial["ventas"] == "2985.00"
+    assert datos["real"]["ventas"] == "2985.00"
+    assert oficial["premios_pagados"] == "1870.00"
+    assert oficial["premios_anteriores_pagados"] == "1870.00"
+    assert oficial["premios_sorteos_periodo"] == "0.00"
+    assert oficial["comision"] == "447.75"
+    assert oficial["resultado_ventas"] == "2537.25"
+    assert oficial["balance"] == "2537.25"
+    assert oficial["total"] == "2537.25"
+    assert "667.25" not in oficial["total"]
+    assert oficial["lineas"][1]["concepto"] == "Premios"
+    assert oficial["lineas"][1]["monto"] == "RD$0.00"
+    assert oficial["lineas"][2]["concepto"] == "Comisión"
+    assert oficial["lineas"][3]["concepto"] == "Balance"
+    assert oficial["lineas"][3]["monto"] == "RD$2,537.25"
+    assert oficial["lineas"][-1]["concepto"] == "Total"
+    assert oficial["lineas"][-1]["monto"] == "RD$2,537.25"
+    assert not any(
+        "anteriores" in str(fila.get("concepto") or "").lower()
+        for fila in oficial["lineas"]
+    )
+    assert "RD$2,537.25" in datos["texto"]
+    assert "RD$667.25" not in datos["texto"]
+    assert "días anteriores" not in datos["texto"].lower()
+    assert "anteriores pagados" not in datos["texto"].lower()
+    papel = entorno.c.get(datos["impresion"]["url"], headers=b["headers"])
+    assert papel.status_code == 200, papel.text
+    assert papel.content.startswith(b"\x89PNG")
+
+
+def test_dia_con_premio_mismo_dia_y_anteriores(entorno):
+    """Mismo día resta al Balance; el pago anterior se registra sin mostrarse."""
+    b = entorno.banca(
+        saldo=200000, codigo="CMIX", nombre="BANCA MIXTA", usuario="cajmix", clave="1234",
+    )
+    uid = _usuario(entorno, "cajmix")
+    alta = entorno.c.post(
+        "/comisiones", json={"usuario_id": uid, "porcentaje": 10}, headers=entorno.admin,
+    )
+    assert alta.status_code == 201, alta.text
+    sorteo = entorno.sorteo_id("La Primera 12")
+    entorno.vender_ok(
+        b["headers"],
+        [{"tipo": "QN", "sorteos": [sorteo], "numeros": "21", "monto": 1000}],
+    )
+    mismo = entorno.vender_ok(
+        b["headers"],
+        [{"tipo": "QN", "sorteos": [sorteo], "numeros": "19", "monto": 5}],
+    )
+    anterior = entorno.vender_ok(
+        b["headers"],
+        [{"tipo": "QN", "sorteos": [sorteo], "numeros": "19", "monto": 5}],
+    )
+    entorno.liquidar(sorteo, 19, 3, 45)
+    for ticket in (mismo, anterior):
+        pago = entorno.c.post(
+            "/terminal/tickets/pagar",
+            json={"id": ticket["id"], "serial": ticket["serial"]},
+            headers=b["headers"],
+        )
+        assert pago.status_code == 200, pago.text
+    _fijar_premio_pagado(mismo["id"], "200.00", fecha_sorteo=date(2026, 11, 14))
+    _fijar_premio_pagado(
+        anterior["id"],
+        "500.00",
+        fecha_sorteo=date(2026, 11, 12),
+        pagado_en=datetime(2026, 11, 14, 15, 0, 0),
+    )
+
+    dia = entorno.c.get(
+        "/terminal/reportes/dia?desde=2026-11-14&hasta=2026-11-14",
+        headers=b["headers"],
+    )
+    assert dia.status_code == 200, dia.text
+    oficial = dia.json()["informe"]["oficial"]
+    # Ventas del 14: 1000 + 5 (mismo) = 1005; el anterior quedó fechado el 12.
+    assert oficial["ventas"] == "1005.00"
+    assert oficial["premios_pagados"] == "700.00"
+    assert oficial["premios_anteriores_pagados"] == "500.00"
+    assert oficial["premios_sorteos_periodo"] == "200.00"
+    assert oficial["comision"] == "100.50"
+    assert oficial["balance"] == "704.50"  # 1005 - 100.50 - 200
+    assert oficial["total"] == "704.50"
+    assert oficial["lineas"][1]["monto"] == "RD$200.00"
+    assert not any(
+        "anteriores" in str(fila.get("concepto") or "").lower()
+        for fila in oficial["lineas"]
+    )
+
+
+def test_mes_premio_fin_de_mes_pagado_al_mes_siguiente(entorno, fijar_hora):
+    """Noviembre resta el premio por sorteo; diciembre solo lo muestra como referencia."""
+    b = entorno.banca(
+        saldo=200000, codigo="CMES", nombre="BANCA MES", usuario="cajmes", clave="1234",
+    )
+    uid = _usuario(entorno, "cajmes")
+    alta = entorno.c.post(
+        "/comisiones", json={"usuario_id": uid, "porcentaje": 0}, headers=entorno.admin,
+    )
+    assert alta.status_code == 201, alta.text
+    sorteo = entorno.sorteo_id("La Primera 12")
+    ganador = entorno.vender_ok(
+        b["headers"],
+        [{"tipo": "QN", "sorteos": [sorteo], "numeros": "19", "monto": 5}],
+    )
+    entorno.liquidar(sorteo, 19, 3, 45)
+    db = nueva_sesion()
+    ticket = db.get(Ticket, ganador["id"])
+    premio = Decimal(str(ticket.premio_total or 0))
+    if premio <= 0:
+        premio = sum((Decimal(str(j.premio or 0)) for j in ticket.jugadas if j.evaluada), Decimal("0"))
+    db.close()
+    assert premio > 0
+    premio_txt = f"{premio:.2f}"
+    balance_nov = f"{(Decimal('5.00') - premio):.2f}"
+
+    nov = entorno.c.get("/terminal/reportes/mes?anio=2026&mes=11", headers=b["headers"])
+    assert nov.status_code == 200, nov.text
+    nov_inf = nov.json()["informe"]["oficial"]
+    assert nov_inf["ventas"] == "5.00"
+    assert nov_inf["premios_pagados"] == "0.00"
+    assert nov_inf["premios_sorteos_periodo"] == premio_txt
+    assert nov_inf["premios_anteriores_pagados"] == "0.00"
+    assert nov_inf["balance"] == balance_nov
+    assert nov_inf["total"] == balance_nov
+    assert not any(
+        "anteriores" in str(fila.get("concepto") or "").lower()
+        for fila in nov_inf["lineas"]
+    )
+
+    pago = entorno.c.post(
+        "/terminal/tickets/pagar",
+        json={"id": ganador["id"], "serial": ganador["serial"]},
+        headers=b["headers"],
+    )
+    assert pago.status_code == 200, pago.text
+    _fijar_premio_pagado(
+        ganador["id"],
+        premio_txt,
+        fecha_sorteo=date(2026, 11, 14),
+        pagado_en=datetime(2026, 12, 1, 11, 5, 0),
+    )
+    fijar_hora(datetime(2026, 12, 1, 11, 0, 0))
+    headers = entorno.login_terminal("cajmes", "1234")
+
+    nov2 = entorno.c.get("/terminal/reportes/mes?anio=2026&mes=11", headers=headers)
+    assert nov2.status_code == 200, nov2.text
+    nov2_inf = nov2.json()["informe"]["oficial"]
+    assert nov2_inf["premios_pagados"] == "0.00"
+    assert nov2_inf["premios_sorteos_periodo"] == premio_txt
+    assert nov2_inf["balance"] == balance_nov
+    assert nov2_inf["total"] == balance_nov
+
+    dic = entorno.c.get("/terminal/reportes/mes?anio=2026&mes=12", headers=headers)
+    assert dic.status_code == 200, dic.text
+    dic_inf = dic.json()["informe"]["oficial"]
+    assert dic_inf["ventas"] == "0.00"
+    assert dic_inf["premios_pagados"] == premio_txt
+    assert dic_inf["premios_anteriores_pagados"] == premio_txt
+    assert dic_inf["premios_sorteos_periodo"] == "0.00"
+    assert dic_inf["balance"] == "0.00"
+    assert dic_inf["total"] == "0.00"
+    assert dic_inf["lineas"][1]["monto"] == "RD$0.00"
+    assert not any(
+        "anteriores" in str(fila.get("concepto") or "").lower()
+        for fila in dic_inf["lineas"]
+    )
 
 
 def _vista(datos, ruta: Path):
