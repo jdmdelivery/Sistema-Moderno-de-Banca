@@ -453,6 +453,20 @@ def render_ticket_png(
 
     gap_nombre = int(esp.get("tras_nombre") or 3)
     enc = cfg.get("encabezado") or {}
+    # Solo reimpresiones: marca COPIA arriba. La venta original no la lleva.
+    if ticket.get("reimpresion") or (
+        ticket.get("leyenda") and "COPIA" in str(ticket.get("leyenda") or "").upper()
+    ):
+        f_copia = _fuente(max(18, int(tip.get("total") or 24)), negrita=True)
+        linea_texto(
+            str(ticket.get("leyenda") or "COPIA — REIMPRESIÓN"),
+            f_copia,
+            centrado=True,
+            extra=gap_sec,
+        )
+        n_reimp = ticket.get("reimpresiones")
+        if n_reimp is not None and int(n_reimp or 0) > 0:
+            linea_texto(f"REIMPRESIÓN N.º {int(n_reimp)}", f_cuerpo, centrado=True, extra=gap)
     if enc.get("mostrar_nombre_banca", True):
         # En papel no se imprime el sufijo de semilla "(PRUEBA)"; el nombre
         # en BD/admin se conserva intacto.
@@ -573,9 +587,6 @@ def render_ticket_png(
     msg = str(cfg.get("mensaje_inferior") or "").strip()
     if msg:
         linea_texto(msg, f_cuerpo, centrado=True)
-
-    if ticket.get("reimpresion") or ticket.get("leyenda"):
-        linea_texto(str(ticket.get("leyenda") or "COPIA — REIMPRESIÓN"), f_cuerpo, centrado=True)
 
     # es_prueba se conserva en BD/payload; no se imprime marca en el ticket.
 

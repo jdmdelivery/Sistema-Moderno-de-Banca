@@ -1429,6 +1429,13 @@ def reimprimir_ticket(
     datos = consultar_ticket(db, ticket_id, serial, exigir_vendedor_id=exigir_vendedor_id)
     datos["reimpresion"] = True
     datos["leyenda"] = "COPIA — REIMPRESIÓN"
+    # PNG de copia: misma URL con marca para que el papel lleve COPIA arriba.
+    try:
+        from .impresion_servidor import meta_impresion
+
+        datos["impresion"] = meta_impresion(ticket.id, ticket.serial, reimpresion=True)
+    except Exception:
+        pass
     return datos
 
 

@@ -88,11 +88,14 @@ def guardar_diseno(db, sucursal_id: int, config: dict, usuario_id: int | None, a
     return diseno_a_dict(db, sucursal_id)
 
 
-def meta_impresion(ticket_id: int, serial: str) -> dict:
+def meta_impresion(ticket_id: int, serial: str, *, reimpresion: bool = False) -> dict:
+    url = f"/terminal/tickets/{int(ticket_id)}/imagen?serial={serial}"
+    if reimpresion:
+        url += "&reimpresion=true"
     return {
         "modo": "imagen_servidor",
         "ancho_px": 384,
-        "url": f"/terminal/tickets/{int(ticket_id)}/imagen?serial={serial}",
+        "url": url,
         "qr": f"LOT:{int(ticket_id)}:{serial}",
         "fallback": "texto_local",
     }
@@ -114,11 +117,16 @@ def autorizar_imagen_terminal(db, ticket: Ticket, terminal, operador: Usuario):
         raise ErrorImpresion(403, "ESTE TICKET PERTENECE A OTRA CAJERA")
 
 
-def render_ticket_id(db, ticket_id: int, serial: str) -> tuple[bytes, Ticket]:
+def render_ticket_id(
+    db, ticket_id: int, serial: str, *, reimpresion: bool = False,
+) -> tuple[bytes, Ticket]:
     from .servicios import buscar_ticket, ticket_a_dict
 
     ticket = buscar_ticket(db, ticket_id, serial)
     datos = ticket_a_dict(db, ticket)
+    if reimpresion:
+        datos["reimpresion"] = True
+        datos["leyenda"] = "COPIA — REIMPRESIÓN"
     diseno = obtener_diseno(db, ticket.sucursal_vendedora_id)
     png = render_ticket_png(datos, diseno, tr_habilitado=tr_habilitado(db))
     return png, ticket
