@@ -885,6 +885,9 @@ function htmlAccionesUsuario(u, soyAdmin, clsBtn) {
   if (!u.eliminado) {
     acciones += `<button type="button" class="${clsBtn}" onclick="editarUsuario(${u.id})">EDITAR</button>`;
   }
+  if (soyAdmin && !u.eliminado && u.rol === "operador") {
+    acciones += `<button type="button" class="${clsBtn} ver-clave" onclick="verClaveUsuario(${u.id})">👁 VER CONTRASEÑA</button>`;
+  }
   if (soyAdmin && !u.eliminado && u.rol !== "super_admin") {
     if (u.activo) {
       acciones += `<button type="button" class="${clsBtn} peligro" onclick="bloquearUsuario(${u.id})">BLOQUEAR</button>`;
@@ -894,6 +897,36 @@ function htmlAccionesUsuario(u, soyAdmin, clsBtn) {
     acciones += `<button type="button" class="${clsBtn} peligro" onclick="eliminarUsuario(${u.id})">ELIMINAR</button>`;
   }
   return acciones;
+}
+
+async function verClaveUsuario(id) {
+  const u = USUARIOS.find((x) => x.id === id);
+  if (!u || u.rol !== "operador") {
+    alert("Solo se pueden consultar contraseñas de operadores.");
+    return;
+  }
+  const claveAdmin = prompt(
+    `VER CONTRASEÑA de ${u.nombre} (${u.usuario})\n\n` +
+    `Escriba SU contraseña de administrador para continuar:`
+  );
+  if (claveAdmin == null) return;
+  if (!String(claveAdmin).trim()) {
+    alert("Debe confirmar con su contraseña de administrador.");
+    return;
+  }
+  try {
+    const r = await api(`/usuarios/${id}/ver-clave`, {
+      method: "POST",
+      body: JSON.stringify({ clave_admin: String(claveAdmin) }),
+    });
+    alert(
+      `Operador: ${r.nombre}\nUsuario: ${r.usuario}\nContraseña: ${r.clave}\n\n` +
+      `No comparta esta pantalla. Cierre este aviso cuando termine.`
+    );
+  } catch (e) {
+    const msg = (e && e.message) ? e.message : String(e);
+    alert(msg);
+  }
 }
 function tarjetaUsuarioHtml(u, soyAdmin) {
   const suc = SUCURSALES.find((s) => s.id === u.sucursal_id);

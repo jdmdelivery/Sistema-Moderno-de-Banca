@@ -166,6 +166,10 @@ def _columnas_faltantes():
                     conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} {columna} TIMESTAMP"))
             if "motivo_rechazo" not in cols:
                 conn.execute(text(f"ALTER TABLE usuarios {_agregar_columna(eng)} motivo_rechazo VARCHAR(200)"))
+            if "clave_consulta_cifrada" not in cols:
+                conn.execute(text(
+                    f"ALTER TABLE usuarios {_agregar_columna(eng)} clave_consulta_cifrada TEXT"
+                ))
             # Sanea filas previas: nadie queda pendiente por añadir la columna.
             if eng.dialect.name == "postgresql":
                 conn.execute(text(

@@ -179,12 +179,17 @@ class Entorno:
         return r.json()
 
 
+# Clave AES de prueba (32 bytes) — solo tests locales, nunca producción.
+_CLAVE_CONSULTA_TEST = __import__("base64").b64encode(bytes(range(32))).decode("ascii")
+
+
 @pytest.fixture(autouse=True)
 def entorno(monkeypatch):
     fd, ruta = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     dbmod.configurar(f"sqlite:///{ruta}")
     dbmod.init_db()
+    monkeypatch.setenv("CLAVE_CONSULTA_USUARIOS", _CLAVE_CONSULTA_TEST)
     monkeypatch.setattr(servicios, "ahora_local", lambda: AHORA_FIJO)
     monkeypatch.setattr(comun, "ahora_local", lambda: AHORA_FIJO)
     client = TestClient(app)

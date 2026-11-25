@@ -167,6 +167,7 @@ input:focus,select:focus{outline:2px solid var(--verde-osc)}
 .btn{background:var(--panel2);color:var(--texto);border:1px solid var(--borde);border-radius:8px;padding:9px 16px;cursor:pointer;font-size:14px}
 .btn:hover{border-color:var(--verde)}
 .btn.primario{background:var(--verde-osc);border-color:var(--verde-osc);color:#fff;font-weight:600}
+.btn.ver-clave,.usu-accion.ver-clave{background:#1565C0;border-color:#1565C0;color:#fff;font-weight:600}
 .btn.peligro{background:#7a2b26;border-color:var(--rojo);color:#fff}
 .btn.chico{padding:5px 10px;font-size:13px}
 .btn.fila{padding:4px 10px;font-size:12.5px;margin-right:4px}

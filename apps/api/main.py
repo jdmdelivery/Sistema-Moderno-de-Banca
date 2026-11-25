@@ -32,6 +32,7 @@ from .models import (
     Cuadre,
     Importacion,
 )
+from . import clave_consulta
 from .security import hash_clave, hash_token, nuevo_token, verificar_clave
 
 configurar()
@@ -164,6 +165,7 @@ def usuario_dict(u, con_cajas=False):
         "estado_aprobacion": aprob,
         "estado": estado,
         "tiene_clave": bool(u.clave_hash), "tiene_pin": bool(u.pin_hash),
+        "tiene_clave_consulta": bool(getattr(u, "clave_consulta_cifrada", None)),
         "eliminado_en": u.eliminado_en.isoformat(sep=" ") if getattr(u, "eliminado_en", None) else None,
         "motivo_eliminacion": getattr(u, "motivo_eliminacion", None),
         "solicitado_en": u.solicitado_en.isoformat(sep=" ") if getattr(u, "solicitado_en", None) else None,
@@ -304,6 +306,8 @@ def login(datos: LoginIn, db=Depends(get_db)):
             or not usuario.clave_hash or not verificar_clave(datos.clave, usuario.clave_hash)):
         raise ErrorServicio(401, "Usuario o clave incorrectos")
     permisos.usuario_puede_iniciar_sesion(usuario)
+    # Captura cifrada best-effort (UPDATE condicionado al hash); no impide el acceso.
+    clave_consulta.capturar_tras_login(db, usuario, datos.clave)
     token = servicios.crear_sesion(db, usuario, tipo="panel")
     db.commit()
     datos_u = usuario_dict(usuario)
@@ -652,6 +656,9 @@ def crear_usuario(datos: UsuarioIn, db=Depends(get_db), usuario=Depends(requiere
         u.activo = True  # ficha activa; login bloqueado por pendiente
     db.add(u)
     db.flush()
+    if datos.clave:
+        # Tras flush hay id: UPDATE condicionado al hash recién creado.
+        clave_consulta.guardar_consulta_en_usuario(db, u, datos.clave, invalidar_si_falla=True)
     servicios.auditar(
         db, "usuario", u.id, "creacion", usuario_id=usuario.id,
         detalle={
@@ -694,11 +701,71 @@ def editar_usuario(usuario_id: int, datos: UsuarioIn, db=Depends(get_db),
     else:
         u.sucursal_id = nuevo_sucursal
     if datos.clave:
-        u.clave_hash = hash_clave(datos.clave)
+        nuevo_hash = hash_clave(datos.clave)
+        u.clave_hash = nuevo_hash
+        # UPDATE … WHERE clave_hash = nuevo; si falla el cifrado, invalida blob.
+        clave_consulta.sincronizar_consulta_si_hash_coincide(db, u, datos.clave, nuevo_hash)
     servicios.auditar(db, "usuario", u.id, "edicion", usuario_id=usuario.id, detalle={})
     db.commit()
     db.refresh(u)
     return usuario_dict(u, con_cajas=True)
+
+
+class VerClaveIn(BaseModel):
+    clave_admin: str
+
+
+@app.post("/usuarios/{usuario_id}/ver-clave")
+def ver_clave_operador(usuario_id: int, datos: VerClaveIn, db=Depends(get_db),
+                       usuario=Depends(requiere_rol("admin"))):
+    """Revela la clave recuperable de un operador tras reautenticar al admin.
+
+    COMPAT_GLOBAL_FORZADO no amplía el alcance: un admin solo ve operadores
+    de su propia sucursal. Nunca registra la contraseña en auditoría.
+    Rate-limit de reauth vía tabla auditoria (multi-proceso).
+    """
+    ahora = servicios.ahora_local()
+    if clave_consulta.exceso_intentos_ver_clave(db, usuario.id, ahora):
+        raise ErrorServicio(429, "Demasiados intentos. Espere unos minutos e intente de nuevo.")
+    if not datos.clave_admin or not verificar_clave(datos.clave_admin, usuario.clave_hash or ""):
+        clave_consulta.registrar_fallo_ver_clave(db, usuario.id, objetivo_id=usuario_id)
+        db.commit()
+        raise ErrorServicio(401, "Contraseña de administrador incorrecta")
+    clave_consulta.registrar_reauth_ok_ver_clave(db, usuario.id)
+
+    objetivo = db.get(Usuario, usuario_id)
+    permisos.assert_puede_consultar_clave(db, usuario, objetivo)
+    blob = getattr(objetivo, "clave_consulta_cifrada", None)
+    if not blob:
+        servicios.auditar(
+            db, "usuario", objetivo.id, "ver_clave_no_disponible",
+            usuario_id=usuario.id,
+            detalle={"objetivo_id": objetivo.id, "rol": objetivo.rol},
+        )
+        db.commit()
+        raise ErrorServicio(409, "Contraseña aún no disponible para consultar")
+    try:
+        revelada = clave_consulta.descifrar_clave_consulta(blob)
+    except Exception:
+        servicios.auditar(
+            db, "usuario", objetivo.id, "ver_clave_error",
+            usuario_id=usuario.id,
+            detalle={"objetivo_id": objetivo.id, "rol": objetivo.rol},
+        )
+        db.commit()
+        raise ErrorServicio(409, "Contraseña aún no disponible para consultar")
+    servicios.auditar(
+        db, "usuario", objetivo.id, "ver_clave",
+        usuario_id=usuario.id,
+        detalle={"objetivo_id": objetivo.id, "rol": objetivo.rol, "usuario": objetivo.usuario},
+    )
+    db.commit()
+    return {
+        "id": objetivo.id,
+        "nombre": objetivo.nombre,
+        "usuario": objetivo.usuario,
+        "clave": revelada,
+    }
 
 
 @app.post("/usuarios/{usuario_id}/bloquear")
@@ -1753,6 +1820,8 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
     ):
         raise ErrorServicio(401, "Usuario o contraseña incorrectos")
     permisos.usuario_puede_iniciar_sesion(usuario)
+    # Captura cifrada best-effort tras autenticación OK (UPDATE condicionado al hash).
+    clave_consulta.capturar_tras_login(db, usuario, datos.clave)
     if usuario.rol in ("admin", "super_admin"):
         token = servicios.crear_sesion(db, usuario, tipo="panel")
         servicios.auditar(
@@ -1809,6 +1878,11 @@ def terminal_login(datos: TerminalLoginIn, db=Depends(get_db)):
         "operador": usuario_dict(usuario),
         "sucursal": sucursal_dict(sucursal, con_saldo=False),
         "mi_caja": str(servicios.mi_caja_de(usuario)),
+        # Campo informativo; las APK actuales lo ignoran sin romper el login.
+        "aviso_consulta_clave": (
+            "Tras un acceso correcto, su administrador autorizado de esta banca "
+            "puede consultar su contraseña desde el panel USUARIOS."
+        ),
         **_entorno_publico(),
         "terminal": {
             "id": terminal.id,
@@ -2202,6 +2276,7 @@ def terminal_historial_ventas(
 def terminal_ticket_imagen(
     ticket_id: int,
     serial: str = Query(..., min_length=4),
+    reimpresion: bool = Query(False),
     db=Depends(get_db),
     terminal=Depends(terminal_actual),
     operador=Depends(operador_actual),
@@ -2212,7 +2287,9 @@ def terminal_ticket_imagen(
     try:
         ticket = servicios.buscar_ticket(db, ticket_id, serial.strip().upper())
         imp.autorizar_imagen_terminal(db, ticket, terminal, operador)
-        png, ticket = imp.render_ticket_id(db, ticket_id, serial.strip().upper())
+        png, ticket = imp.render_ticket_id(
+            db, ticket_id, serial.strip().upper(), reimpresion=reimpresion,
+        )
     except ErrorServicio as e:
         raise
     except imp.ErrorImpresion as e:

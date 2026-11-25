@@ -46,6 +46,8 @@ class Usuario(Base):
     usuario = Column(String(60), nullable=False, unique=True)
     clave_hash = Column(String(255))  # acceso al panel (admin / supervisor)
     pin_hash = Column(String(255))  # acceso a la app de terminal (operador)
+    # AES-256-GCM recuperable (consulta admin). NULL = aún no disponible. Auth = clave_hash.
+    clave_consulta_cifrada = Column(Text)
     # super_admin|admin|supervisor|operador
     rol = Column(String(20), nullable=False, default="operador")
     sucursal_id = Column(Integer, ForeignKey("sucursales.id"))

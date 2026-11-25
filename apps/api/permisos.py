@@ -177,6 +177,31 @@ def assert_usuario_en_alcance(db, actor, objetivo):
         raise ErrorServicio(403, "No puede gestionar usuarios de otra sucursal")
 
 
+def assert_puede_consultar_clave(db, actor, objetivo):
+    """Más estricto que el alcance general: COMPAT_GLOBAL no abre otras bancas.
+
+    - Solo admin/super_admin consultan.
+    - Solo objetivos con rol operador.
+    - Admin de sucursal: únicamente su propia sucursal_id (aunque compat_global
+      le permita listar el consorcio en otras pantallas).
+    - Super Admin: cualquier operador.
+    """
+    if objetivo is None:
+        raise ErrorServicio(404, "El usuario no existe")
+    if actor is None or not es_admin_panel(actor):
+        raise ErrorServicio(403, "Solo un administrador puede consultar contraseñas")
+    if getattr(objetivo, "eliminado", False):
+        raise ErrorServicio(404, "El usuario no existe")
+    if objetivo.rol != "operador":
+        raise ErrorServicio(403, "Solo se pueden consultar contraseñas de operadores")
+    if es_super_admin(actor):
+        return
+    if actor.sucursal_id is None:
+        raise ErrorServicio(403, "Su cuenta no tiene sucursal asignada")
+    if objetivo.sucursal_id is None or int(objetivo.sucursal_id) != int(actor.sucursal_id):
+        raise ErrorServicio(403, "No puede consultar contraseñas de otra banca")
+
+
 def filtrar_query_sucursal(q, columna, db, usuario):
     alcance = alcance_sucursal_ids(db, usuario)
     if alcance is None:
