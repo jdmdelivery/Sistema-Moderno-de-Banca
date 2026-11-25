@@ -1399,9 +1399,17 @@ def _error_no_pagable(db, ticket):
     raise ErrorServicio(409, "El ticket aún no es ganador: faltan resultados por liquidar")
 
 
-def reimprimir_ticket(db, ticket_id, serial, usuario_id, terminal_id=None):
+def reimprimir_ticket(
+    db, ticket_id, serial, usuario_id, terminal_id=None,
+    exigir_vendedor_id=None, sucursal_id=None,
+):
     """Registra una copia. No crea venta, no mueve la caja y no cambia el estado."""
     ticket = buscar_ticket(db, ticket_id, serial)
+    _exigir_vendedor_ticket(ticket, exigir_vendedor_id)
+    if sucursal_id is not None and int(ticket.sucursal_vendedora_id or 0) != int(sucursal_id):
+        raise ErrorServicio(403, "Este ticket pertenece a otra empresa")
+    if ticket.estado == "anulado":
+        raise ErrorServicio(409, "Ticket anulado: no se puede reimprimir como válido")
     saldo = None
     sucursal = db.get(Sucursal, ticket.sucursal_vendedora_id)
     if sucursal is not None:
@@ -1418,10 +1426,78 @@ def reimprimir_ticket(db, ticket_id, serial, usuario_id, terminal_id=None):
     db.refresh(ticket)
     if ticket.estado != estado or (sucursal is not None and D(sucursal.saldo_actual) != saldo):
         raise ErrorServicio(500, "La reimpresión no debe cambiar el ticket ni la caja")
-    datos = consultar_ticket(db, ticket_id, serial)
+    datos = consultar_ticket(db, ticket_id, serial, exigir_vendedor_id=exigir_vendedor_id)
     datos["reimpresion"] = True
     datos["leyenda"] = "COPIA — REIMPRESIÓN"
     return datos
+
+
+def listar_historial_ventas_terminal(
+    db,
+    operador,
+    terminal,
+    desde=None,
+    hasta=None,
+    ticket_id=None,
+    pagina=1,
+    por_pagina=20,
+):
+    """Tickets propios de la cajera en su empresa. Solo lectura. Más recientes primero."""
+    if operador is None or terminal is None:
+        raise ErrorServicio(401, "Sesión de terminal no válida")
+    if not getattr(terminal, "activa", False):
+        raise ErrorServicio(401, "Terminal no autorizada")
+    if operador.sucursal_id and int(operador.sucursal_id) != int(terminal.sucursal_id):
+        raise ErrorServicio(403, "Sesión de otra sucursal")
+    pagina = max(1, int(pagina or 1))
+    por_pagina = min(max(1, int(por_pagina or 20)), 50)
+    q = (
+        db.query(Ticket)
+        .filter(Ticket.usuario_id == int(operador.id))
+        .filter(Ticket.sucursal_vendedora_id == int(terminal.sucursal_id))
+    )
+    if ticket_id is not None and str(ticket_id).strip() != "":
+        if not str(ticket_id).isdigit():
+            raise ErrorServicio(400, "El número de ticket no es válido")
+        q = q.filter(Ticket.id == int(ticket_id))
+    else:
+        if desde is not None:
+            q = q.filter(Ticket.fecha >= desde)
+        if hasta is not None:
+            q = q.filter(Ticket.fecha <= hasta)
+        if desde is not None and hasta is not None and hasta < desde:
+            raise ErrorServicio(400, "La fecha hasta no puede ser anterior a la fecha desde")
+    total = q.count()
+    tickets = (
+        q.order_by(Ticket.id.desc())
+        .offset((pagina - 1) * por_pagina)
+        .limit(por_pagina)
+        .all()
+    )
+    filas = []
+    for t in tickets:
+        vendido = t.vendido_en
+        filas.append({
+            "id": t.id,
+            "serial": t.serial,
+            "fecha": t.fecha.isoformat() if t.fecha else None,
+            "fecha_hora": vendido.isoformat(sep=" ") if vendido else None,
+            "hora": vendido.strftime("%I:%M %p") if vendido else None,
+            "total": str(D(t.total)),
+            "estado": t.estado,
+            "es_prueba": bool(t.es_prueba),
+            "puede_reimprimir": t.estado != "anulado",
+        })
+    paginas = max(1, (total + por_pagina - 1) // por_pagina) if total else 1
+    return {
+        "tickets": filas,
+        "total": total,
+        "pagina": pagina,
+        "por_pagina": por_pagina,
+        "paginas": paginas,
+        "desde": desde.isoformat() if desde else None,
+        "hasta": hasta.isoformat() if hasta else None,
+    }
 
 
 def mi_caja_de(usuario):

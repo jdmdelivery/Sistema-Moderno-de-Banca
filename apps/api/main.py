@@ -2162,7 +2162,40 @@ def terminal_pagar(datos: LlaveIn, db=Depends(get_db), terminal=Depends(terminal
 @app.post("/terminal/tickets/reimprimir")
 def terminal_reimprimir(datos: LlaveIn, db=Depends(get_db), terminal=Depends(terminal_actual),
                         operador=Depends(operador_actual)):
-    return servicios.reimprimir_ticket(db, datos.id, datos.serial, operador.id, terminal_id=terminal.id)
+    # Solo la cajera dueña, dentro de su empresa. No crea venta ni mueve caja.
+    return servicios.reimprimir_ticket(
+        db, datos.id, datos.serial, operador.id,
+        terminal_id=terminal.id,
+        exigir_vendedor_id=operador.id,
+        sucursal_id=terminal.sucursal_id,
+    )
+
+
+@app.get("/terminal/tickets/historial")
+def terminal_historial_ventas(
+    desde: str | None = None,
+    hasta: str | None = None,
+    ticket_id: int | None = None,
+    pagina: int = 1,
+    por_pagina: int = 20,
+    db=Depends(get_db),
+    terminal=Depends(terminal_actual),
+    operador=Depends(operador_actual),
+):
+    """Historial de ventas propias. Solo lectura; paginado; no altera tickets."""
+    hoy = servicios.ahora_local().date()
+    inicio = _fecha(desde) if desde else hoy
+    fin = _fecha(hasta) if hasta else hoy
+    return servicios.listar_historial_ventas_terminal(
+        db,
+        operador=operador,
+        terminal=terminal,
+        desde=inicio,
+        hasta=fin,
+        ticket_id=ticket_id,
+        pagina=pagina,
+        por_pagina=por_pagina,
+    )
 
 
 @app.get("/terminal/tickets/{ticket_id}/imagen")

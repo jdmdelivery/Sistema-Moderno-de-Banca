@@ -99,7 +99,7 @@ def meta_impresion(ticket_id: int, serial: str) -> dict:
 
 
 def autorizar_imagen_terminal(db, ticket: Ticket, terminal, operador: Usuario):
-    """Aislamiento: solo la sucursal vendedora del ticket (misma empresa/terminal)."""
+    """Aislamiento: propia cajera + sucursal vendedora (misma empresa/terminal)."""
     if ticket is None:
         raise ErrorImpresion(404, "Ticket no encontrado")
     if terminal is None or not terminal.activa:
@@ -109,6 +109,9 @@ def autorizar_imagen_terminal(db, ticket: Ticket, terminal, operador: Usuario):
     # Operador de otra sucursal no debería llegar aquí; refuerzo por sesión.
     if operador is not None and operador.sucursal_id and int(operador.sucursal_id) != int(terminal.sucursal_id):
         raise ErrorImpresion(403, "Sesión de otra sucursal")
+    # Historial / reimpresión: solo la cajera que vendió el ticket.
+    if operador is not None and int(ticket.usuario_id or 0) != int(operador.id or -1):
+        raise ErrorImpresion(403, "ESTE TICKET PERTENECE A OTRA CAJERA")
 
 
 def render_ticket_id(db, ticket_id: int, serial: str) -> tuple[bytes, Ticket]:
