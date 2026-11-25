@@ -900,7 +900,7 @@ function htmlAccionesUsuario(u, soyAdmin, clsBtn) {
 }
 
 async function verClaveUsuario(id) {
-  const u = USUARIOS.find((x) => x.id === id);
+  const u = (window._usuarios || []).find((x) => x.id === id);
   if (!u || u.rol !== "operador") {
     alert("Solo se pueden consultar contraseñas de operadores.");
     return;
@@ -928,6 +928,7 @@ async function verClaveUsuario(id) {
     alert(msg);
   }
 }
+window.verClaveUsuario = verClaveUsuario;
 function tarjetaUsuarioHtml(u, soyAdmin) {
   const suc = SUCURSALES.find((s) => s.id === u.sucursal_id);
   const caja = u.saldo_caja == null ? "—" : fmt(u.saldo_caja);
