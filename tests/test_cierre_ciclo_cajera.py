@@ -94,19 +94,37 @@ def test_pago_parcial_no_cierra_y_cierre_exige_caja_cero(entorno, monkeypatch, f
 
     det3 = _detalle(entorno, uid)
     assert det3["resumen"]["ventas_ciclo"] == "0.00"
-    assert det3["resumen"]["premios_pagados"] == "0.00"
-    assert det3["resumen"]["tickets_vendidos"] == 0
+    # El período histórico (mismo día) sigue mostrando la venta; el ciclo nuevo va en 0.
+    assert det3["resumen"]["ventas_netas"] == "1000.00"
+    assert det3["resumen"]["tickets_vendidos"] == 1
+    assert len(det3["ventas"]) == 1
+    assert float(det3["ventas"][0]["total"]) == 1000
+    assert det3["ventas"][0]["estado"] != "anulado"
     assert det3["comision"]["comision_pendiente"] == "0.00"
     assert det3["comision"]["comision_acumulada"] == "0.00"
     assert len(det3["comision"]["historial_cierres"]) == 1
     assert float(det3["resumen"]["mi_caja"]) == 0
     assert entorno.saldo(b["sucursal"]["id"]) == general_antes
 
+    # Lista del panel: consultar la fecha del cierre sigue mostrando el histórico.
+    lista_hist = entorno.c.get(
+        f"/reportes/ventas-cajeros?desde=2026-11-14&hasta=2026-11-14&usuario_id={uid}",
+        headers=entorno.admin,
+    )
+    assert lista_hist.status_code == 200, lista_hist.text
+    fila_hist = lista_hist.json()["cajeros"][0]
+    assert float(fila_hist["ventas_netas"]) == 1000
+    assert fila_hist["tickets_vendidos"] == 1
+    assert float(fila_hist["ventas_ciclo"]) == 0
+
     # Nueva venta tras cierre acumula de nuevo.
     fijar_hora(datetime(2026, 11, 14, 11, 0, 0))
     entorno.vender_ok(b["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "42", "monto": 200}])
     det4 = _detalle(entorno, uid)
     assert det4["resumen"]["ventas_ciclo"] == "200.00"
+    # Período del día = histórico cerrado (1000) + venta nueva (200).
+    assert det4["resumen"]["ventas_netas"] == "1200.00"
+    assert det4["resumen"]["tickets_vendidos"] == 2
     assert det4["comision"]["comision_pendiente"] == "30.00"
     assert det4["comision"]["comision_acumulada"] == "30.00"
 

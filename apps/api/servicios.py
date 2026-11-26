@@ -6723,15 +6723,15 @@ def resumen_ventas_cajeros(db, admin, desde, hasta, sucursal_id=None, usuario_id
     prueba = modo_desarrollo()
     filas = []
     for cajero in cajeros:
+        periodo = _periodo_ventas_cajero(db, cajero, desde, hasta, prueba)
         if getattr(cajero, "eliminado", False):
-            periodo = _periodo_ventas_cajero(db, cajero, desde, hasta, prueba)
-            if float(periodo["tickets_vendidos"]) == 0 and float(periodo["premios_pagados"]) == 0:
+            if float(periodo["tickets_vigentes"]) == 0 and float(periodo["premios_pagados"]) == 0:
                 continue
-        else:
-            periodo = _periodo_ventas_cajero(db, cajero, desde, hasta, prueba)
         caja = indicadores_caja(db, cajero)
         ciclo = metricas_ciclo_perfil(db, cajero, prueba=prueba)
         suc = db.get(Sucursal, cajero.sucursal_id) if cajero.sucursal_id else None
+        # Ventas/tickets/premios = período DESDE/HASTA (anulados fuera del conteo).
+        # ventas_ciclo / MI CAJA / entregas siguen siendo del ciclo abierto (no se pisan).
         filas.append({
             "usuario_id": cajero.id,
             "nombre": cajero.nombre,
@@ -6742,13 +6742,8 @@ def resumen_ventas_cajeros(db, admin, desde, hasta, sucursal_id=None, usuario_id
             "activo": bool(cajero.activo),
             "eliminado": bool(getattr(cajero, "eliminado", False)),
             **periodo,
-            # Acumulado del ciclo abierto (no depende del filtro DESDE/HASTA).
+            "tickets_vendidos": int(periodo["tickets_vigentes"]),
             "ventas_ciclo": ciclo["ventas_ciclo"],
-            "ventas_netas": ciclo["ventas_ciclo"],
-            "premios_pagados": ciclo["premios_ciclo"],
-            "tickets_vendidos": ciclo["tickets_vendidos"],
-            "tickets_anulados": ciclo["tickets_anulados"],
-            "tickets_vigentes": ciclo["tickets_vigentes"],
             "ciclo_desde": ciclo["ciclo_desde"],
             "fondo_asignado": caja["fondo_asignado"],
             "entregas": caja["entregas_ciclo"],
@@ -6820,18 +6815,17 @@ def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
             "usuario_id": cajero.id, "nombre": cajero.nombre, "usuario": cajero.usuario,
             "sucursal_id": cajero.sucursal_id, "sucursal": suc.nombre if suc else "—",
             "estado": _estado_usuario_panel(cajero), **periodo,
+            "tickets_vendidos": int(periodo["tickets_vigentes"]),
+            "ventas_ciclo": ciclo["ventas_ciclo"],
+            "ciclo_desde": ciclo["ciclo_desde"],
             "fondo_asignado": caja["fondo_asignado"], "entregas": caja["entregas_ciclo"],
             "mi_caja": caja["mi_caja"], "recaudacion_ciclo": caja["recaudacion_ciclo"],
             "ultima_operacion": _ultima_operacion_cajero(db, cajero.id), "es_prueba": prueba,
         }
-    # Perfil: cifras principales del ciclo abierto (no del filtro de fechas).
+    # Período (DESDE/HASTA) manda en ventas/tickets/premios del módulo.
+    # MI CAJA, entregas, fondo y ventas_ciclo (ciclo abierto) no se alteran aquí.
     fila = dict(fila)
     fila["ventas_ciclo"] = ciclo["ventas_ciclo"]
-    fila["ventas_netas"] = ciclo["ventas_ciclo"]
-    fila["premios_pagados"] = ciclo["premios_ciclo"]
-    fila["tickets_vendidos"] = ciclo["tickets_vendidos"]
-    fila["tickets_anulados"] = ciclo["tickets_anulados"]
-    fila["tickets_vigentes"] = ciclo["tickets_vigentes"]
     fila["ciclo_desde"] = ciclo["ciclo_desde"]
     fila["fondo_asignado"] = caja["fondo_asignado"]
     fila["entregas"] = caja["entregas_ciclo"]
@@ -6840,17 +6834,16 @@ def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
     # Misma fuente que el bloqueo de cierre de ciclo (premios_pendientes_mios).
     fila["premios_pendientes"] = caja.get("premios_pendientes_mios") or "0.00"
 
-    inicio_ciclo = _inicio_ciclo_perfil(db, cajero, prueba)
+    # Historial de tickets/premios del rango de fechas (independiente del ciclo).
+    inicio_pagos = datetime.combine(desde, time.min)
+    fin_pagos = datetime.combine(hasta, time.min) + timedelta(days=1)
     q_tickets = db.query(Ticket).filter(
-        Ticket.usuario_id == cajero.id, Ticket.es_prueba.is_(prueba),
+        Ticket.usuario_id == cajero.id,
+        Ticket.es_prueba.is_(prueba),
+        Ticket.fecha >= desde,
+        Ticket.fecha <= hasta,
+        Ticket.estado != "anulado",
     )
-    if inicio_ciclo is not None:
-        q_tickets = q_tickets.filter(
-            or_(
-                Ticket.vendido_en > inicio_ciclo,
-                and_(Ticket.vendido_en.is_(None), Ticket.fecha > inicio_ciclo.date()),
-            )
-        )
     tickets = q_tickets.order_by(Ticket.id.desc()).limit(200).all()
     q_pagos = (
         db.query(Jugada)
@@ -6859,11 +6852,13 @@ def detalle_ventas_cajero(db, admin, usuario_id, desde, hasta):
             Ticket.es_prueba.is_(prueba),
             Jugada.pagada.is_(True),
             Jugada.pagado_por_usuario_id == cajero.id,
+            Jugada.pagado_en.isnot(None),
+            Jugada.pagado_en >= inicio_pagos,
+            Jugada.pagado_en < fin_pagos,
         )
     )
-    if inicio_ciclo is not None:
-        q_pagos = q_pagos.filter(Jugada.pagado_en > inicio_ciclo)
     pagos = q_pagos.order_by(Jugada.pagado_en.desc()).limit(200).all()
+    # Movimientos de caja: siguen el ciclo abierto (MI CAJA / entregas).
     q_movs = db.query(MovimientoCajera).filter(MovimientoCajera.usuario_id == cajero.id)
     marca = cajero.ciclo_caja_prueba_movimiento_id if prueba else cajero.ciclo_caja_movimiento_id
     if marca:

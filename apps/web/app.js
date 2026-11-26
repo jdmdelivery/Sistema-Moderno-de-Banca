@@ -1183,7 +1183,8 @@ let VC_DETALLE_SCROLL = 0;
 let VC_DETALLE_ORIGEN = "ventas-cajeros";
 
 function rangoVentasCajeros(tipo) {
-  const hoy = hoyISO();
+  // Zona oficial del servidor: America/Santo_Domingo (INICIO_HOY del dashboard).
+  const hoy = INICIO_HOY || hoyISO();
   if (tipo === "ayer") return [sumarDias(hoy, -1), sumarDias(hoy, -1)];
   if (tipo === "semana") return [sumarDias(hoy, -6), hoy];
   if (tipo === "mes") {
@@ -1192,7 +1193,7 @@ function rangoVentasCajeros(tipo) {
   }
   return [hoy, hoy];
 }
-/** Tarjeta élite de lista: mismos datos (nombre, tickets, ventas_netas). */
+/** Tarjeta élite de lista: ventas y tickets del período DESDE/HASTA. */
 function filaCajeroCompacta(c) {
   const n = Number(c.tickets_vendidos || 0);
   const ticketsTxt = n === 1 ? "1 ticket" : `${n} tickets`;
@@ -1206,8 +1207,8 @@ function filaCajeroCompacta(c) {
         <b>${esc(ticketsTxt)}</b>
       </div>
       <div class="vc-card-stat">
-        <span class="k">Ventas del ciclo</span>
-        <b class="vc-card-monto">${fmt(c.ventas_ciclo != null ? c.ventas_ciclo : c.ventas_netas)}</b>
+        <span class="k">Venta del período</span>
+        <b class="vc-card-monto">${fmt(c.ventas_netas)}</b>
       </div>
     </div>
     <button type="button" class="btn vc-card-btn" onclick="verDetalleCajero(${c.usuario_id})">VER DETALLE</button>
@@ -1338,8 +1339,8 @@ async function verDetalleCajero(id) {
         </div>
       </div>
       <div class="vc-detalle-montos">
-        <div class="vc-monto-dest"><span class="k">Ventas del ciclo</span><b class="vc-card-monto">${fmt(r.ventas_ciclo != null ? r.ventas_ciclo : r.ventas_netas)}</b></div>
-        <div class="vc-monto-dest"><span class="k">Premios del ciclo</span><b>${fmt(r.premios_pagados)}</b></div>
+        <div class="vc-monto-dest"><span class="k">Venta del período</span><b class="vc-card-monto">${fmt(r.ventas_netas)}</b></div>
+        <div class="vc-monto-dest"><span class="k">Premios del período</span><b>${fmt(r.premios_pagados)}</b></div>
         <div class="vc-monto-dest"><span class="k">MI CAJA</span><b class="${Number(r.mi_caja) < 0 ? "cc-neg" : "vc-card-monto"}">${fmt(r.mi_caja)}</b></div>
         <div><span class="k">Fondo asignado</span><b>${fmt(r.fondo_asignado)}</b></div>
         <div><span class="k">Entregas</span><b>${fmt(r.entregas)}</b></div>
@@ -1363,7 +1364,7 @@ async function verDetalleCajero(id) {
         </div>
         <div id="vc-resultado" class="vc-resultado" hidden></div>
       </section>
-      <p class="vc-detalle-tickets-meta">Tickets del ciclo: ${esc(r.tickets_vendidos)}</p>
+      <p class="vc-detalle-tickets-meta">Tickets del período: ${esc(r.tickets_vendidos)}</p>
       <section class="vc-hist">
         <h5>Historial de pagos de comisión</h5>
         <div class="vc-hist-lista">${histPagos}</div>

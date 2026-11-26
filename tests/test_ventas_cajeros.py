@@ -97,9 +97,10 @@ def test_panel_tiene_seccion_ventas_cajeros(entorno):
     assert "/comisiones/cierres" in js
     assert "vc-comision-card" in js
     assert "porcentaje_vigente" in js
-    assert "Ventas del ciclo" in js
-    assert "Premios del ciclo" in js
+    assert "Venta del período" in js
+    assert "Premios del período" in js
     assert "MI CAJA" in js
+    assert "Tickets del período" in js
     # Dashboard RESUMEN: sin tarjeta Comisión; el cálculo/API y el perfil siguen.
     assert "function tarjetasInicio" in js
     assert '[fmt(bloque.comision), "Comisión"]' not in js
@@ -231,11 +232,149 @@ def test_detalle_muestra_comision_ganada_por_periodo(entorno, monkeypatch, fijar
     assert ajena.json()["comision"]["comision"] == "80.00"  # 800 × 10%
     assert "800.00" not in det.json()["comision"]["ventas_validas"]
 
-    # El filtro DESDE/HASTA ya no reinicia la comisión del ciclo abierto.
+    # Comisión del ciclo abierto no se reinicia con DESDE/HASTA.
     vacio = entorno.c.get(
         f"/reportes/ventas-cajeros/{u1['id']}?desde=2026-11-13&hasta=2026-11-13",
         headers=entorno.admin,
     )
     assert vacio.json()["comision"]["comision_pendiente"] == "200.00"
-    # 100 (sin %) + 1000 + 500; anulado fuera del neto del ciclo.
+    # Día sin ventas: período en 0; el ciclo abierto sigue con el acumulado.
+    assert vacio.json()["resumen"]["ventas_netas"] == "0.00"
+    assert vacio.json()["resumen"]["tickets_vendidos"] == 0
     assert vacio.json()["resumen"]["ventas_ciclo"] == "1600.00"
+
+
+def test_ventas_cajero_respetan_periodo_no_ciclo(entorno, monkeypatch, fijar_hora):
+    """HOY/AYER/rango usan Ticket.fecha del período; anulados fuera; ciclo aparte."""
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    fijar_hora(datetime(2026, 11, 14, 10, 0, 0))
+    a = entorno.banca(saldo=8000, usuario="vcper1", clave="prueba123")
+    usuarios = entorno.c.get("/usuarios", headers=entorno.admin).json()
+    uid = next(u["id"] for u in usuarios if u["usuario"] == "vcper1")
+    lot = entorno.sorteo_id("LOTEDOM")
+    entorno.vender_ok(a["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "10", "monto": 100}])
+    anulado = entorno.vender_ok(a["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "11", "monto": 50}])
+    entorno.c.post("/terminal/tickets/anular", json={
+        "id": anulado["id"], "serial": anulado["serial"], "motivo": "error",
+    }, headers=a["headers"])
+
+    # Renovar sesiones: el salto de día supera la ventana de 12 h.
+    fijar_hora(datetime(2026, 11, 15, 9, 0, 0))
+    admin = entorno.c.post("/auth/login", json={"usuario": "admin", "clave": "admin123"})
+    assert admin.status_code == 200, admin.text
+    headers_admin = {"Authorization": f"Bearer {admin.json()['token']}"}
+    term = entorno.login_terminal("vcper1", "prueba123")
+    entorno.vender_ok(term, [{"tipo": "QN", "sorteos": [lot], "numeros": "12", "monto": 85}])
+
+    hoy = entorno.c.get(
+        f"/reportes/ventas-cajeros?desde=2026-11-15&hasta=2026-11-15&usuario_id={uid}",
+        headers=headers_admin,
+    )
+    assert hoy.status_code == 200, hoy.text
+    fila_hoy = hoy.json()["cajeros"][0]
+    assert float(fila_hoy["ventas_netas"]) == 85
+    assert fila_hoy["tickets_vendidos"] == 1
+    assert fila_hoy["tickets_anulados"] == 0
+    assert float(fila_hoy["ventas_ciclo"]) == 185  # 100+85; anulado fuera del ciclo neto
+
+    ayer = entorno.c.get(
+        f"/reportes/ventas-cajeros?desde=2026-11-14&hasta=2026-11-14&usuario_id={uid}",
+        headers=headers_admin,
+    )
+    fila_ayer = ayer.json()["cajeros"][0]
+    assert float(fila_ayer["ventas_netas"]) == 100
+    assert fila_ayer["tickets_vendidos"] == 1
+    assert fila_ayer["tickets_anulados"] == 1
+
+    rango = entorno.c.get(
+        f"/reportes/ventas-cajeros?desde=2026-11-14&hasta=2026-11-15&usuario_id={uid}",
+        headers=headers_admin,
+    )
+    fila_rango = rango.json()["cajeros"][0]
+    assert float(fila_rango["ventas_netas"]) == 185
+    assert fila_rango["tickets_vendidos"] == 2
+
+    det = entorno.c.get(
+        f"/reportes/ventas-cajeros/{uid}?desde=2026-11-15&hasta=2026-11-15",
+        headers=headers_admin,
+    )
+    assert det.status_code == 200, det.text
+    assert float(det.json()["resumen"]["ventas_netas"]) == 85
+    assert det.json()["resumen"]["tickets_vendidos"] == 1
+    assert len(det.json()["ventas"]) == 1
+    assert all(t["estado"] != "anulado" for t in det.json()["ventas"])
+
+
+def _rango_preset_panel(hoy_iso: str, tipo: str):
+    """Replica rangoVentasCajeros(app.js) con fechas America/Santo_Domingo del servidor."""
+    from datetime import date, timedelta
+
+    hoy = date.fromisoformat(hoy_iso)
+    if tipo == "ayer":
+        d = hoy - timedelta(days=1)
+        return d.isoformat(), d.isoformat()
+    if tipo == "semana":
+        return (hoy - timedelta(days=6)).isoformat(), hoy.isoformat()
+    if tipo == "mes":
+        return hoy.replace(day=1).isoformat(), hoy.isoformat()
+    return hoy.isoformat(), hoy.isoformat()
+
+
+def test_presets_hoy_ayer_semana_mes_y_desde_hasta(entorno, monkeypatch, fijar_hora):
+    """HOY / AYER / ESTA SEMANA / ESTE MES / DESDE-HASTA filtran solo el período."""
+    monkeypatch.setenv("MODO_DESARROLLO", "true")
+    # Lunes 16/11: mes y semana cubren ventas previas del mismo mes.
+    fijar_hora(datetime(2026, 11, 10, 10, 0, 0))
+    a = entorno.banca(saldo=20000, usuario="vcpre1", clave="prueba123")
+    uid = next(u["id"] for u in entorno.c.get("/usuarios", headers=entorno.admin).json()
+               if u["usuario"] == "vcpre1")
+    lot = entorno.sorteo_id("LOTEDOM")
+    entorno.vender_ok(a["headers"], [{"tipo": "QN", "sorteos": [lot], "numeros": "20", "monto": 40}])
+
+    fijar_hora(datetime(2026, 11, 15, 10, 0, 0))
+    admin = entorno.c.post("/auth/login", json={"usuario": "admin", "clave": "admin123"})
+    headers_admin = {"Authorization": f"Bearer {admin.json()['token']}"}
+    term = entorno.login_terminal("vcpre1", "prueba123")
+    entorno.vender_ok(term, [{"tipo": "QN", "sorteos": [lot], "numeros": "21", "monto": 60}])
+
+    fijar_hora(datetime(2026, 11, 16, 9, 0, 0))
+    admin = entorno.c.post("/auth/login", json={"usuario": "admin", "clave": "admin123"})
+    headers_admin = {"Authorization": f"Bearer {admin.json()['token']}"}
+    term = entorno.login_terminal("vcpre1", "prueba123")
+    entorno.vender_ok(term, [{"tipo": "QN", "sorteos": [lot], "numeros": "22", "monto": 85}])
+
+    hoy_iso = "2026-11-16"
+    casos = [
+        ("hoy", 85.0, 1),
+        ("ayer", 60.0, 1),
+        ("semana", 185.0, 3),   # 10+15+16 (desde 10 = hoy-6)
+        ("mes", 185.0, 3),      # 01–16 del mes
+    ]
+    for tipo, venta, tickets in casos:
+        desde, hasta = _rango_preset_panel(hoy_iso, tipo)
+        r = entorno.c.get(
+            f"/reportes/ventas-cajeros?desde={desde}&hasta={hasta}&usuario_id={uid}",
+            headers=headers_admin,
+        )
+        assert r.status_code == 200, f"{tipo}: {r.text}"
+        fila = r.json()["cajeros"][0]
+        assert r.json()["zona"] == "America/Santo_Domingo"
+        assert float(fila["ventas_netas"]) == venta, tipo
+        assert fila["tickets_vendidos"] == tickets, tipo
+
+    # DESDE/HASTA exacto: solo el 15.
+    r = entorno.c.get(
+        f"/reportes/ventas-cajeros?desde=2026-11-15&hasta=2026-11-15&usuario_id={uid}",
+        headers=headers_admin,
+    )
+    fila = r.json()["cajeros"][0]
+    assert float(fila["ventas_netas"]) == 60
+    assert fila["tickets_vendidos"] == 1
+
+    det = entorno.c.get(
+        f"/reportes/ventas-cajeros/{uid}?desde=2026-11-16&hasta=2026-11-16",
+        headers=headers_admin,
+    )
+    assert det.status_code == 200
+    assert float(det.json()["resumen"]["ventas_netas"]) == 85
+    assert len(det.json()["ventas"]) == 1
