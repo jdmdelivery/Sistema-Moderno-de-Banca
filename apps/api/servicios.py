@@ -6139,8 +6139,81 @@ def _premio_pendiente_valido(db, ticket):
     return True
 
 
+def _premios_dashboard_por_fecha_sorteo(db, desde, hasta, prueba, sucursal_id=None, usuario_id=None):
+    """Dashboard RESUMEN: premios por fecha de sorteo (jugada.fecha), no por pagado_en.
+
+    - pagados: jugadas cobradas con jugada.fecha en el rango (una sola vez).
+    - pendientes: jugadas ganadoras sin cobrar con jugada.fecha en el rango.
+    Multi-sorteo: cada jugada cae en su propia fecha. No escribe ni altera historial.
+    """
+    q = (
+        db.query(Jugada)
+        .join(Ticket, Jugada.ticket_id == Ticket.id)
+        .filter(
+            Ticket.es_prueba.is_(prueba),
+            Ticket.estado != "anulado",
+            Jugada.fecha >= desde,
+            Jugada.fecha <= hasta,
+            Jugada.premio.isnot(None),
+        )
+    )
+    if sucursal_id is not None:
+        # Pagados: caja que cobró. Pendientes: banca vendedora (mismo criterio previo).
+        q = q.filter(
+            or_(
+                and_(Jugada.pagada.is_(True), Ticket.pagado_en_sucursal_id == sucursal_id),
+                and_(Jugada.pagada.is_(False), Ticket.sucursal_vendedora_id == sucursal_id),
+            )
+        )
+    if usuario_id is not None:
+        q = q.filter(
+            or_(
+                and_(Jugada.pagada.is_(True), Jugada.pagado_por_usuario_id == usuario_id),
+                and_(Jugada.pagada.is_(False), Ticket.usuario_id == usuario_id),
+            )
+        )
+    pagados = D(0)
+    pendientes = D(0)
+    vistos = set()
+    for jugada in q.all():
+        if jugada.id in vistos:
+            continue
+        ticket = jugada.ticket
+        monto = D(jugada.premio or 0)
+        if monto <= 0:
+            continue
+        if jugada.pagada:
+            # Ya cobrada: cuenta en la fecha del sorteo; pagado_en solo queda en historial.
+            vistos.add(jugada.id)
+            pagados += monto
+            continue
+        if not _jugada_premio_completo_valido(db, ticket, jugada):
+            continue
+        vistos.add(jugada.id)
+        pendientes += monto
+    # Histórico: ticket pagado con premio en cabecera y sin jugadas marcadas pagadas.
+    q_cab = db.query(Ticket).filter(
+        Ticket.es_prueba.is_(prueba),
+        Ticket.estado == "pagado",
+        Ticket.fecha >= desde,
+        Ticket.fecha <= hasta,
+        Ticket.premio_total.isnot(None),
+    )
+    if sucursal_id is not None:
+        q_cab = q_cab.filter(Ticket.pagado_en_sucursal_id == sucursal_id)
+    if usuario_id is not None:
+        q_cab = q_cab.filter(Ticket.pagado_por_usuario_id == usuario_id)
+    for ticket in q_cab.all():
+        if any(j.id in vistos for j in ticket.jugadas):
+            continue
+        if D(ticket.premio_total or 0) <= 0:
+            continue
+        pagados += D(ticket.premio_total)
+    return pagados, pendientes
+
+
 def _bloque_periodo(db, desde, hasta, prueba, sucursal_id=None, usuario_id=None):
-    """Ventas por fecha de venta, premios pagados por fecha de pago, sin mezclar el otro grupo."""
+    """Ventas por fecha de venta; premios del Dashboard por fecha de sorteo."""
     vendidos = (
         db.query(Ticket)
         .filter(
@@ -6173,53 +6246,10 @@ def _bloque_periodo(db, desde, hasta, prueba, sucursal_id=None, usuario_id=None)
     comision = D(0)
     for (_, pct), ventas_grupo in grupos.items():
         comision += D(ventas_grupo * D(pct) / D(100))
-    # Premios pagados: por quien COBRÓ (caja), no por quien vendió.
-    # Pendientes/ventas siguen atribuidos al vendedor.
-    if usuario_id is not None:
-        premios_pagados = _premios_pagados_por_cajero(db, usuario_id, desde, hasta, prueba)
-    elif sucursal_id is not None:
-        premios_pagados = _premios_pagados_sucursal(db, sucursal_id, desde, hasta, prueba)
-    else:
-        pagados = (
-            db.query(Ticket)
-            .filter(
-                Ticket.estado == "pagado",
-                Ticket.es_prueba.is_(prueba),
-                Ticket.pagado_en.isnot(None),
-            )
-            .all()
-        )
-        premios_pagados = D(0)
-        pagados_vistos = set()
-        for ticket in pagados:
-            if ticket.id in pagados_vistos:
-                continue
-            pagados_vistos.add(ticket.id)
-            if desde <= _dia_guardado(ticket.pagado_en) <= hasta:
-                premios_pagados += D(ticket.premio_total)
-    candidatos = (
-        db.query(Ticket)
-        .filter(
-            Ticket.estado.in_(("ganador", "parcial", "vendido")),
-            Ticket.es_prueba.is_(prueba),
-            Ticket.fecha >= desde,
-            Ticket.fecha <= hasta,
-        )
-        .order_by(Ticket.id)
-        .all()
+    # Dashboard: premios por jugada.fecha (sorteo). pagado_en solo en historial/auditoría.
+    premios_pagados, premios_pendientes = _premios_dashboard_por_fecha_sorteo(
+        db, desde, hasta, prueba, sucursal_id=sucursal_id, usuario_id=usuario_id,
     )
-    premios_pendientes = D(0)
-    pendientes_vistos = set()
-    for ticket in candidatos:
-        if ticket.id in pendientes_vistos:
-            continue
-        if sucursal_id is not None and ticket.sucursal_vendedora_id != sucursal_id:
-            continue
-        if usuario_id is not None and ticket.usuario_id != usuario_id:
-            continue
-        pendientes_vistos.add(ticket.id)
-        if _premio_pendiente_valido(db, ticket):
-            premios_pendientes += _importe_sin_cobrar(ticket)
     return {
         "ventas": str(D(ventas)),
         "tickets": len(tickets),
