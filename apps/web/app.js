@@ -1193,22 +1193,24 @@ function rangoVentasCajeros(tipo) {
   }
   return [hoy, hoy];
 }
-/** Tarjeta élite de lista: ventas y tickets del período DESDE/HASTA. */
+/** Tarjeta élite de lista: ventas y tickets del período DESDE/HASTA (nunca el ciclo). */
 function filaCajeroCompacta(c) {
   const n = Number(c.tickets_vendidos || 0);
   const ticketsTxt = n === 1 ? "1 ticket" : `${n} tickets`;
+  // Siempre ventas_netas del filtro; no usar ventas_ciclo en esta tarjeta.
+  const ventaPeriodo = c.ventas_netas != null ? c.ventas_netas : "0.00";
   return `<article class="vc-card">
     <div class="vc-card-head">
       <div class="vc-card-nombre">${esc(c.nombre)}</div>
     </div>
     <div class="vc-card-body">
       <div class="vc-card-stat">
-        <span class="k">Tickets</span>
+        <span class="k">Tickets del período</span>
         <b>${esc(ticketsTxt)}</b>
       </div>
       <div class="vc-card-stat">
         <span class="k">Venta del período</span>
-        <b class="vc-card-monto">${fmt(c.ventas_netas)}</b>
+        <b class="vc-card-monto">${fmt(ventaPeriodo)}</b>
       </div>
     </div>
     <button type="button" class="btn vc-card-btn" onclick="verDetalleCajero(${c.usuario_id})">VER DETALLE</button>

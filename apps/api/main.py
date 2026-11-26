@@ -2537,7 +2537,10 @@ def lab_recibo_imagen(
 # ------------------------------------------------------------------ panel web
 @app.get("/")
 def raiz():
-    return FileResponse(WEB_DIR / "index.html")
+    return FileResponse(
+        WEB_DIR / "index.html",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/manifest.webmanifest")
@@ -2545,12 +2548,17 @@ def manifest_pwa():
     return FileResponse(
         WEB_DIR / "manifest.webmanifest",
         media_type="application/manifest+json",
+        headers={"Cache-Control": "no-store"},
     )
 
 
 @app.get("/sw.js")
 def service_worker():
-    return FileResponse(WEB_DIR / "sw.js", media_type="application/javascript")
+    return FileResponse(
+        WEB_DIR / "sw.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")

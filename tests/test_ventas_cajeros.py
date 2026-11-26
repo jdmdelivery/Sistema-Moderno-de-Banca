@@ -101,6 +101,8 @@ def test_panel_tiene_seccion_ventas_cajeros(entorno):
     assert "Premios del período" in js
     assert "MI CAJA" in js
     assert "Tickets del período" in js
+    assert "ventas-periodo-1" in entorno.c.get("/").text
+    assert "banca-admin-shell-v15-ventas-periodo" in entorno.c.get("/sw.js").text
     # Dashboard RESUMEN: sin tarjeta Comisión; el cálculo/API y el perfil siguen.
     assert "function tarjetasInicio" in js
     assert '[fmt(bloque.comision), "Comisión"]' not in js
